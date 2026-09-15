@@ -1,0 +1,49 @@
+AEC Client bundles the following open-source libraries:
+
+1.  SpeexDSP
+    Copyright (C) 2002-2003 Jean-Marc Valin
+    Copyright (C) 2005-2008 Xiph.Org Foundation
+    License: BSD 3-Clause
+
+2.  WebRTC Audio Processing
+    Copyright (C) 2011 The WebRTC project authors
+    Copyright (C) 2011 Google Inc.
+    License: BSD 3-Clause
+
+3.  NKF-AEC
+    "Neural Kalman Filtering for Acoustic Echo Cancellation"
+    Jiang et al., ICASSP 2023
+    License: MIT
+
+4.  ONNX Runtime
+    Copyright (C) Microsoft Corporation
+    License: MIT
+
+5.  Dear ImGui
+    Copyright (C) 2014-2025 Omar Cornut
+    License: MIT
+
+6.  miniaudio
+    Copyright (C) 2023 David Reid
+    License: MIT No Attribution (MIT-0)
+
+7.  GLFW
+    Copyright (C) 2002-2006 Marcus Geelnard
+    Copyright (C) 2006-2019 Camilla Lowy
+    License: zlib/libpng
+
+8.  stb_image
+    Copyright (C) 2017 Sean Barrett
+    License: Public Domain / MIT
+
+9.  pocketfft
+    Copyright (C) 2010-2024 Max-Planck-Society
+    License: BSD 3-Clause
+
+10. AudioFile
+    Copyright (C) 2017 Adam Stark
+    License: MIT
+
+Full license texts are available at the source URLs listed in the
+project repository:
+https://github.com/samudinzul/aec-client
