@@ -13,11 +13,10 @@
 - [What It Does](#what-it-does)
 - [Features](#features)
 - [Quick Start](#quick-start)
-- [Screenshots](#screenshots)
 - [Technical Stack](#technical-stack)
 - [Architecture](#architecture)
 - [Engine Comparison](#engine-comparison)
-- [About NKF-AEC (Experimental Engine)](#about-nkf-aec-experimental-engine)
+- [About the Neural Engines](#about-the-neural-engines)
 - [Building from Source](#building-from-source)
 - [Project Structure](#project-structure)
 - [Runtime Dependencies](#runtime-dependencies)
@@ -28,7 +27,7 @@
 
 ## What It Does
 
-AEC Client routes your microphone through one of **three acoustic echo cancellation engines**, subtracts the sound coming from your speakers, and outputs a clean, echo-free signal to a virtual audio cable. Any voice app can then use that clean signal as its microphone input.
+AEC Client routes your microphone through one of **four acoustic echo cancellation engines**, subtracts the sound coming from your speakers, and outputs a clean, echo-free signal to a virtual audio cable. Any voice app can then use that clean signal as its microphone input.
 
 ```
 Microphone ─────────────────┐
@@ -58,6 +57,7 @@ No more headphones. No more echo.
 - **Clock-drift correction** — stable over long calls
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
+- **Single-instance protection** — launching twice brings the existing window to front
 
 ---
 
@@ -70,7 +70,7 @@ No more headphones. No more echo.
    - **Microphone** → your physical mic
    - **Speaker Reference** → your physical speakers
    - **Output** → `CABLE Input (VB-Audio Virtual Cable)`
-5. **Pick an engine** (WebRTC AEC3 is a good default).
+5. **Pick an engine** — WebRTC AEC3 or LocalVQE are good defaults.
 6. **Click Start**.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
@@ -82,14 +82,6 @@ Done. Talk normally with speakers on.
 
 ---
 
-## Screenshots
-
-| Audio Tab | Appearance Tab | About Tab |
-|-----------|----------------|-----------|
-| ![Audio](screenshots/main.png) | *coming soon* | *coming soon* |
-
----
-
 ## Technical Stack
 
 ### Languages
@@ -97,9 +89,9 @@ Done. Talk normally with speakers on.
 | Language | Role |
 |----------|------|
 | **C++17** | Main application |
-| **C** | Third-party libraries (miniaudio, stb_image, SpeexDSP) |
-| **CMake** | Build system |
+| **C** | Third-party libraries (miniaudio, stb_image, SpeexDSP, GGML) |
 | **Rust** | (Indirect) — `thewh1teagle/aec` SpeexDSP wrapper |
+| **CMake** | Build system |
 | **Bash** | Build scripts |
 | **Markdown** | Documentation |
 
@@ -109,17 +101,19 @@ Done. Talk normally with speakers on.
 |------|---------|---------|
 | **GCC (MinGW-w64)** | 16.2.0 | C/C++ compiler |
 | **CMake** | 3.20+ | Build system generator |
-| **mingw32-make** | — | Make implementation |
+| **Ninja** | — | Fast build backend |
+| **ccache** | — | Compile caching |
 | **gendef / dlltool** | — | Generate MinGW import libraries |
 | **MSYS2 UCRT64** | — | Build environment |
 
 ### AEC Engines
 
-| Engine | Language | Source | Notes |
-|--------|----------|--------|-------|
-| **SpeexDSP** | C | [Xiph.Org](https://gitlab.xiph.org/xiph/speexdsp) via [thewh1teagle/aec](https://github.com/thewh1teagle/aec) | Lightweight, phone quality |
-| **WebRTC AEC3** | C++ | [MSYS2 package](https://packages.msys2.org/package/mingw-w64-ucrt-x86_64-webrtc-audio-processing-1) | Best quality, full-band |
-| **NKF-AEC** | C++ | [William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC) | Experimental neural |
+| Engine | Type | Language | Source |
+|--------|------|----------|--------|
+| **SpeexDSP** | Classic DSP | C | [Xiph.Org](https://gitlab.xiph.org/xiph/speexdsp) via [thewh1teagle/aec](https://github.com/thewh1teagle/aec) |
+| **WebRTC AEC3** | Advanced DSP | C++ | [MSYS2 package](https://packages.msys2.org/package/mingw-w64-ucrt-x86_64-webrtc-audio-processing-1) |
+| **NKF-AEC** | Neural (Kalman) | C++ | [William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC) |
+| **LocalVQE** | Neural (echo-only) | C++ | [LocalAI-io/LocalVQE](https://github.com/localai-org/LocalVQE) |
 
 ### Libraries
 
@@ -131,6 +125,7 @@ Done. Talk normally with speakers on.
 | **[OpenGL](https://www.opengl.org/)** | — | Rendering backend |
 | **[stb_image](https://github.com/nothings/stb)** | C (single-header) | Image loading for wallpapers |
 | **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC) |
+| **[GGML](https://github.com/ggml-org/ggml)** | C/C++ | Neural inference (LocalVQE) |
 | **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC |
 | **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
 
@@ -147,12 +142,14 @@ Done. Talk normally with speakers on.
 
 ### DSP Concepts
 
-- Acoustic echo cancellation via adaptive filtering
-- Frame buffering at 10 ms intervals
+- Acoustic echo cancellation via adaptive filtering (Speex, AEC3)
+- Neural Kalman filtering (NKF-AEC)
+- Neural echo-only removal via DAF front-end (LocalVQE)
+- Frame buffering at 10–16 ms intervals
 - Lock-free SPSC ring buffers (audio thread ↔ UI thread)
 - Clock-drift correction (dynamic sample drop/duplicate)
 - RMS metering with peak hold + decay
-- Neural Kalman filtering (NKF-AEC)
+- Residual noise gating (LocalVQE)
 
 ---
 
@@ -177,100 +174,56 @@ Done. Talk normally with speakers on.
 - **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
 - **No heap allocation in audio callback** — stack buffers only
 - **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
-- **Engine abstraction** — `enum EngineType` + function pointers for runtime swap
+- **Engine abstraction** — runtime swap between 4 engines with a single enum + function pointer
 - **Settings persistence** — plain text `aec_config.txt`
+- **Single-instance mutex** — prevents accidental double launches
 
 ---
 
 ## Engine Comparison
 
-| Engine | Quality | CPU | Sample Rate | Notes |
-|--------|---------|-----|-------------|-------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | Moderate | 16/32/48 kHz | Best overall |
-| **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐⭐ | Very low | 16 kHz only | Echo-only, preserves voice |
-| **SpeexDSP** | ⭐⭐ | Very low | 16/32/48 kHz | Phone quality |
-| **NKF-AEC** | ⭐⭐⭐⭐ | Low | 16 kHz only | Experimental neural |
+| Engine | Quality | CPU | Sample Rate | Latency | Best For |
+|--------|---------|-----|-------------|---------|----------|
+| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | Moderate | 16/32/48 kHz | ~40 ms | Best overall |
+| **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
+| **SpeexDSP** | ⭐⭐ | Very low | 16/32/48 kHz | ~30 ms | Low-power hardware |
+| **NKF-AEC** | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
 
 ---
 
-## About NKF-AEC (Experimental Engine)
+## About the Neural Engines
 
-NKF-AEC is the **only engine in this app that must be built locally** — there are no prebuilt binaries available. Here's why, and how it works.
+### LocalVQE v1.4-AEC
 
-### What Is NKF-AEC?
+LocalVQE is a compact neural echo canceller from **LocalAI** that uses a **DAF (Deep Adaptive Filtering) front-end** to remove only the far-end echo. It preserves your voice, room tone, and background noise naturally — no robotic artifacts, no dead silence.
 
-**NKF-AEC** (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research model published at **ICASSP 2023** by Jiang et al. It combines classical Kalman filtering with a small neural network to cancel echo at very low CPU cost.
+- **Model size**: 2.8 MB (203K parameters)
+- **Sample rate**: 16 kHz (auto-locked)
+- **Latency**: ~32 ms (256-sample hop + processing window)
+- **CPU**: ~0.83 ms per 16 ms frame (19× realtime)
+- **Residual noise gate**: -45 dBFS default (cleans quiet residual without muting voice)
 
-- **Paper**: "Neural Kalman Filtering for Acoustic Echo Cancellation"
-- **Original repo**: [fjiang9/NKF-AEC](https://github.com/fjiang9/NKF-AEC) (Python/PyTorch)
-- **Real-time C++ port**: [William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC)
+The wrapper at `src/localvqe_wrapper.cpp` handles:
+- Frame accumulation (256-sample hops)
+- Int16 ↔ float conversion
+- Noise gate configuration
+- Fallback to raw mic on error
 
-The C++ port is what this app uses. It runs the neural network through **ONNX Runtime** and produces output in real time.
+The library builds into `liblocalvqe.dll` (458 KB) using GGML. All the `ggml-*.dll` runtime files are shipped alongside.
 
-### Why It's Compiled Locally
+### NKF-AEC
 
-The `REAL_TIME_NKF_AEC` repository is a **research project**, not a packaged library. It ships as C++ source code only — no `.dll`, no `.lib`, no prebuilt artifacts. To use it, we compile it ourselves.
+NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research model published at **ICASSP 2023** by Jiang et al. It combines classical Kalman filtering with a small neural network.
 
-Additionally, the code needed several patches to work on Windows + MinGW + ONNX Runtime:
+- **Model size**: 45 KB (5.3K parameters)
+- **Sample rate**: 16 kHz (auto-locked)
+- **Latency**: ~32 ms
+- **CPU**: Very low
+- **Requires**: ONNX Runtime (28 MB DLL)
 
-| Patch | Reason |
-|-------|--------|
-| Added `#include <complex>` and `std::complex` | C++ standard library requires explicit inclusion on modern compilers |
-| Added `#define PI` | C++ doesn't define `PI` in standard headers |
-| Converted `ModelPath` to `std::wstring` | Windows ONNX Runtime requires **wide-string** paths |
-| Fixed `m_pEngine->` → `m_pEngine.` | Original code treated a struct as a pointer |
-| Fixed `kgreal` → `kg_real` typo | Compilation error |
-| Removed orphan `output_fea` block | Leftover from abandoned experiment |
-| Changed `Enhance` return type to `int` | Match header declaration |
-| **Added `ProcessBlock()` method** | Original API only processed entire WAV files — we added a real-time block-by-block entry point |
-| **Fixed `BLOCK_LEN` 512 → 1024** | The ONNX model expects 513-bin FFT (1024-sample block), not 257-bin |
+The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
-The patched source lives in `third_party/REAL_TIME_NKF_AEC/` and is included in this repo so anyone can build it.
-
-### How It's Built
-
-The NKF library compiles into `libnkf_aec.dll` using CMake + MinGW-w64:
-
-```bash
-cd third_party/REAL_TIME_NKF_AEC/c
-cmake -B build -G "MinGW Makefiles" \
-    -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/mingw32-make.exe
-cmake --build build
-# → produces build/libnkf_aec.dll
-```
-
-The DLL links against:
-- **ONNX Runtime** (Microsoft) — neural network inference
-- **pocketfft** (header-only) — FFT
-- **AudioFile** (header-only) — WAV I/O (only for the offline `Enhance()` API)
-
-Our app calls it via a C wrapper (`src/nkf_wrapper.cpp`) that handles streaming audio frame-by-frame.
-
-### Why Ship It Then?
-
-Despite the extra complexity, NKF-AEC is worth including because:
-
-- **Very small neural model** — only 5.3 K parameters (45 KB ONNX file)
-- **Low CPU usage** — runs comfortably on any modern CPU
-- **Neural approach** — different character from AEC3 and SpeexDSP; useful for comparison
-- **Research value** — showcases cutting-edge AEC as an alternative to classical DSP
-
-It's marked **experimental** because:
-
-- Fixed **16 kHz** sample rate (not resampled internally)
-- Latency is **32 ms** (larger block size)
-- No time-delay compensation (TDC) built in — requires good device alignment
-- Quality varies with different mic/speaker geometries
-
-### When to Use It
-
-| Situation | Recommendation |
-|-----------|---------------|
-| Best voice quality | **WebRTC AEC3** |
-| Lowest CPU | **SpeexDSP** |
-| Trying something new | **NKF-AEC** |
-| Low-end hardware (Atom, old laptop) | **NKF-AEC** or **SpeexDSP** |
-| 48 kHz full-band audio | **AEC3** only |
+The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and builds to `libnkf_aec.dll` (1.3 MB).
 
 ---
 
@@ -283,6 +236,8 @@ Install [MSYS2](https://www.msys2.org/) and open the **UCRT64** terminal. Then:
 ```bash
 pacman -S mingw-w64-ucrt-x86_64-gcc
 pacman -S mingw-w64-ucrt-x86_64-cmake
+pacman -S mingw-w64-ucrt-x86_64-ninja
+pacman -S mingw-w64-ucrt-x86_64-ccache
 pacman -S mingw-w64-ucrt-x86_64-glfw
 pacman -S mingw-w64-ucrt-x86_64-webrtc-audio-processing-1
 pacman -S mingw-w64-ucrt-x86_64-onnxruntime
@@ -296,9 +251,7 @@ git clone https://github.com/samudinzul/aec-client.git
 cd aec-client
 ```
 
-### Build the NKF-AEC engine first
-
-NKF-AEC has no prebuilt binaries — it must be compiled from the source in `third_party/`.
+### Build NKF-AEC Engine
 
 ```bash
 cd third_party/REAL_TIME_NKF_AEC/c
@@ -307,16 +260,54 @@ cmake --build build
 cd ../../..
 ```
 
-This produces `build/libnkf_aec.dll`. The main app's CMake will pick it up automatically.
+Produces `libnkf_aec.dll`.
 
-### Build the main app
+### Build LocalVQE Engine
 
 ```bash
-cmake -B build -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/mingw32-make.exe
+cd third_party/LocalVQE/ggml
+cmake -B build -G Ninja \
+    -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe \
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DLOCALVQE_BUILD_SHARED=ON \
+    -DBUILD_TESTING=OFF \
+    -DCMAKE_C_FLAGS="-DLOCALVQE_BUILD" \
+    -DCMAKE_CXX_FLAGS="-DLOCALVQE_BUILD"
+cmake --build build --target localvqe_shared -j$(nproc)
+cd ../../../..
+```
+
+Produces `liblocalvqe.dll` and its GGML dependencies.
+
+### Download Models
+
+```bash
+mkdir -p models
+
+# LocalVQE v1.4-AEC (2.8 MB)
+curl -L -o models/localvqe-v1.4-aec-200K-f32.gguf \
+  "https://huggingface.co/LocalAI-io/LocalVQE/resolve/main/localvqe-v1.4-aec-200K-f32.gguf"
+
+# NKF-AEC model is bundled in third_party/REAL_TIME_NKF_AEC/python/nkf.onnx
+cp third_party/REAL_TIME_NKF_AEC/python/nkf.onnx models/
+```
+
+### Build the Main App
+
+```bash
+cd /path/to/aec-client
+cmake -B build -G Ninja \
+    -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe \
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build build
 ```
 
-Output: `build/aec_gui.exe`
+First build: ~1 minute. Subsequent builds with ccache: ~15 seconds.
+
+Output: `build/aec_gui.exe`.
 
 ### Run
 
@@ -331,35 +322,40 @@ cd build
 
 ```
 aec-client/
-├── src/                            Your application code (C++)
+├── src/
 │   ├── main.cpp                    Entry point, GUI, audio pipeline
 │   ├── aec3_wrapper.cpp/.h         WebRTC AEC3 C wrapper
-│   └── nkf_wrapper.cpp/.h          NKF-AEC C wrapper
+│   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper
+│   └── localvqe_wrapper.cpp/.h     LocalVQE C wrapper
 │
-├── include/                        Third-party headers
+├── include/
 │   ├── miniaudio.h                 Audio I/O
 │   ├── libaec.h                    SpeexDSP C API
 │   └── stb_image.h                 Image loading
 │
-├── libs/                           Prebuilt libraries
+├── libs/
 │   ├── aec.dll                     SpeexDSP runtime
 │   ├── libaec.a                    SpeexDSP import library
 │   └── aec.def                     Symbol export list
 │
 ├── third_party/
 │   ├── imgui/                      Dear ImGui source
-│   └── REAL_TIME_NKF_AEC/          NKF neural engine
-│       └── c/                      NKF-AEC source
+│   ├── REAL_TIME_NKF_AEC/          NKF neural engine (patched)
+│   │   ├── c/                      C++ source
+│   │   └── python/                 Original model + scripts
+│   └── LocalVQE/                   LocalVQE neural engine
+│       └── ggml/                   C++ source + GGML vendor tree
 │
 ├── models/
-│   └── nkf.onnx                    Neural model (45 KB)
+│   ├── nkf.onnx                    NKF model (45 KB)
+│   └── localvqe-v1.4-aec-200K-f32.gguf   LocalVQE model (2.8 MB)
 │
 ├── screenshots/
 │   └── main.png                    README image
 │
 ├── wallpapers/                     User-supplied backgrounds
 │
-├── release/                        Distribution build (gitignored)
+├── release/                        Distribution builds (gitignored)
 │
 ├── CMakeLists.txt                  Build configuration
 ├── README.md                       This file
@@ -374,21 +370,22 @@ aec-client/
 
 The release ZIP bundles all required DLLs:
 
-| File | Size | Source |
-|------|------|--------|
-| `aec_gui.exe` | ~2.3 MB | Your build |
+| File | Size | Purpose |
+|------|------|---------|
+| `aec_gui.exe` | ~2.4 MB | Main application |
 | `aec.dll` | ~185 KB | SpeexDSP wrapper |
 | `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
+| `liblocalvqe.dll` | ~458 KB | LocalVQE neural engine |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 |
-| `onnxruntime.dll` | ~28 MB | Neural inference |
+| `onnxruntime.dll` | ~28 MB | Neural inference (NKF) |
+| `ggml.dll` | ~93 KB | GGML runtime (LocalVQE) |
+| `ggml-base.dll` | ~860 KB | GGML base |
+| `ggml-cpu-*.dll` (15 files) | ~18 MB total | CPU backend variants |
 | `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
 | `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
 | `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
 | `models/nkf.onnx` | ~45 KB | NKF model |
-
-**Note on `libnkf_aec.dll` and `onnxruntime.dll`:**
-
-Unlike other DLLs, these come from building NKF-AEC locally and from the MSYS2 `onnxruntime` package. They are bundled in the release ZIP because NKF-AEC is compiled once at release time — end users don't need to build anything.
+| `models/localvqe-v1.4-aec-200K-f32.gguf` | ~2.8 MB | LocalVQE model |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
 
@@ -409,6 +406,7 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **NKF-AEC** — Jiang et al., ICASSP 2023 (MIT)
 - **LocalVQE** — LocalAI (Apache-2.0)
 - **ONNX Runtime** — Microsoft (MIT)
+- **GGML** — The GGML authors (MIT)
 - **Dear ImGui** — Omar Cornut (MIT)
 - **miniaudio** — David Reid (MIT-0)
 - **GLFW** — Marcus Geelnard & Camilla Löwy (zlib)
