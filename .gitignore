@@ -1,0 +1,68 @@
+# Build artifacts
+build/
+third_party/REAL_TIME_NKF_AEC/c/build/
+
+# Compiled binaries
+*.exe
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+
+# Runtime data
+aec_config.txt
+release/
+
+# Wallpapers (users bring their own)
+wallpapers/*.jpg
+wallpapers/*.png
+wallpapers/*.jpeg
+wallpapers/*.bmp
+
+# IDE
+.vscode/
+.vs/
+*.user
+
+# NKF-AEC research repo demo assets (not needed for build)
+third_party/NKF-AEC/
+third_party/REAL_TIME_NKF_AEC/python/
+third_party/REAL_TIME_NKF_AEC/model/
+third_party/REAL_TIME_NKF_AEC/*.wav
+third_party/REAL_TIME_NKF_AEC/**/*.wav
+third_party/REAL_TIME_NKF_AEC/**/*.mp3
+third_party/REAL_TIME_NKF_AEC/**/*.flac
+
+# Demo audio files anywhere
+**/*.wav
+**/*.mp3
+**/*.flac
+!models/nkf.onnx
+
+# Build artifacts inside third_party
+third_party/**/build/
+third_party/**/*.o
+third_party/**/*.a
+third_party/**/*.dll
+third_party/**/*.exe
+third_party/**/*.lib
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# ImGui optional folders (not needed for build)
+third_party/imgui/examples/
+third_party/imgui/docs/
+third_party/imgui/misc/
+third_party/imgui/.github/
+third_party/imgui/imgui_demo.cpp
+
+# ImGui optional folders (not needed for build)
+third_party/imgui/examples/
+third_party/imgui/docs/
+third_party/imgui/misc/
+third_party/imgui/.github/
+third_party/imgui/imgui_demo.cpp

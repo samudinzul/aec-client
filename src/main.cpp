@@ -1,0 +1,1300 @@
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+#include <GLFW/glfw3.h>
+
+// --- Windows tray support ---
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+#include "libaec.h"
+#include "aec3_wrapper.h"
+#include "nkf_wrapper.h"
+
+#include <cstdio>
+#include <cmath>
+#include <cstring>
+#include <cstdlib>
+#include <chrono>
+#include <vector>
+#include <string>
+#include <atomic>
+#include <fstream>
+#include <filesystem>
+#include <algorithm>
+
+namespace fs = std::filesystem;
+using Clock = std::chrono::steady_clock;
+
+// ============================================================
+//  App identity
+// ============================================================
+#define APP_NAME    "AEC Client"
+#define APP_VERSION "1.0.0"
+
+// ============================================================
+//  Tray icon (Windows)
+// ============================================================
+#ifdef _WIN32
+#define WM_TRAYICON   (WM_APP + 1)
+#define ID_TRAY_SHOW  1001
+#define ID_TRAY_EXIT  1002
+
+static NOTIFYICONDATAW g_nid = {};
+static bool            g_trayIconActive = false;
+static WNDPROC         g_originalWndProc = nullptr;
+static HWND            g_hwnd = nullptr;
+static GLFWwindow*     g_glfwWindow = nullptr;
+#endif
+
+// ============================================================
+//  Lock-free SPSC ring buffer
+// ============================================================
+template <size_t N>
+struct SpscRing {
+    static_assert((N & (N - 1)) == 0, "N must be power of 2");
+    int16_t buf[N];
+    std::atomic<size_t> head{0};
+    std::atomic<size_t> tail{0};
+
+    inline size_t available() const {
+        return head.load(std::memory_order_acquire) - tail.load(std::memory_order_relaxed);
+    }
+    inline void write(const int16_t* src, size_t count) {
+        size_t h = head.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < count; i++) buf[(h + i) & (N - 1)] = src[i];
+        head.store(h + count, std::memory_order_release);
+    }
+    inline void read(int16_t* dst, size_t count) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < count; i++) dst[i] = buf[(t + i) & (N - 1)];
+        tail.store(t + count, std::memory_order_release);
+    }
+    inline void skip(size_t count) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        tail.store(t + count, std::memory_order_release);
+    }
+    void reset() { head.store(0); tail.store(0); }
+};
+
+// ============================================================
+//  Engine abstraction
+// ============================================================
+enum EngineType { ENGINE_SPEEX = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2 };
+struct EngineState {
+    EngineType  type  = ENGINE_SPEEX;
+    Aec*        speex = nullptr;
+    Aec3Handle* aec3  = nullptr;
+    NkfHandle*  nkf   = nullptr;
+};
+
+// ============================================================
+//  Presets
+// ============================================================
+struct Preset {
+    const char* name;
+    int   engine;
+    int   sampleRateIdx;
+    int   filterIdx;
+    bool  preprocess;
+    float micGain;
+    float outGain;
+};
+
+static const Preset PRESETS[] = {
+    { "Custom",               1, 2, 1, false, 1.00f, 1.00f },
+    { "Discord (recommended)",1, 2, 2, false, 1.00f, 1.00f },
+    { "Low CPU",              0, 0, 0, false, 1.00f, 1.00f },
+    { "High Quality",         1, 2, 4, false, 1.00f, 1.00f },
+    { "Noisy Room",           0, 1, 3, true,  1.20f, 1.00f },
+    { "Echo-Heavy Room",      1, 2, 2, false, 1.00f, 1.00f },
+};
+const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
+
+// ============================================================
+//  Globals
+// ============================================================
+EngineState g_engine;
+ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
+ma_context g_context;
+static bool g_contextInitialized = false;
+const int MAX_FRAME_SIZE = 480;
+SpscRing<4096> g_micRing, g_refRing;
+bool g_isRunning = false;
+Clock::time_point g_sessionStart;
+
+std::atomic<int>   g_sampleRate(48000);
+std::atomic<int>   g_selectedEngine(ENGINE_AEC3);
+std::atomic<int>   g_filterLengthMs(50);
+std::atomic<bool>  g_enablePreprocess(false);
+std::atomic<float> g_micGain(1.0f);
+std::atomic<float> g_outputGain(1.0f);
+std::atomic<float> g_last_reduction_db(0.0f);
+std::atomic<float> g_last_mic_rms(0.0f), g_last_ref_rms(0.0f), g_last_out_rms(0.0f);
+
+std::atomic<float> g_peakMic(0.0f), g_peakRef(0.0f), g_peakOut(0.0f);
+Clock::time_point g_peakMicTime, g_peakRefTime, g_peakOutTime;
+
+std::vector<ma_device_info> g_captureDevices, g_playbackDevices;
+
+// Display filter lists (indices into the full arrays above)
+std::vector<int> g_micDisplayIndices;
+std::vector<int> g_refDisplayIndices;
+std::vector<int> g_outDisplayIndices;
+
+int  g_micIndex = 0, g_refIndex = 0, g_outIndex = 0;
+int  g_engineIndex = 1, g_sampleRateIndex = 2, g_filterIndex = 2;
+int  g_presetIndex = 1;
+bool g_preprocessEnabled = false;
+bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
+char g_statusText[128] = "Idle";
+
+GLuint g_wallpaperTex = 0;
+int    g_wallpaperW = 0, g_wallpaperH = 0;
+std::vector<std::string> g_wallpaperPaths;
+std::vector<std::string> g_wallpaperNames;
+int    g_wallpaperIndex = 0;
+
+// ============================================================
+//  Helpers
+// ============================================================
+static inline int16_t clamp_s16(int v) {
+    return (v > 32767) ? 32767 : (v < -32768) ? -32768 : (int16_t)v;
+}
+static inline int frameSizeForRate(int sr) { return sr / 100; }
+
+std::string FormatUptime() {
+    if (!g_isRunning) return "";
+    auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+        Clock::now() - g_sessionStart).count();
+    int h = (int)(secs / 3600);
+    int m = (int)((secs % 3600) / 60);
+    int s = (int)(secs % 60);
+    char buf[32];
+    if (h > 0) snprintf(buf, 32, "%d:%02d:%02d", h, m, s);
+    else       snprintf(buf, 32, "%02d:%02d", m, s);
+    return buf;
+}
+
+static bool IsVirtualCableDevice(const std::string& name) {
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower.find("cable") != std::string::npos ||
+           lower.find("vb-audio") != std::string::npos;
+}
+
+// ============================================================
+//  System tray (Windows)
+// ============================================================
+#ifdef _WIN32
+
+void ShowTrayIcon() {
+    if (g_trayIconActive || !g_hwnd) return;
+    ZeroMemory(&g_nid, sizeof(g_nid));
+    g_nid.cbSize = sizeof(g_nid);
+    g_nid.hWnd = g_hwnd;
+    g_nid.uID = 1;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAYICON;
+    g_nid.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+    wcscpy_s(g_nid.szTip, L"AEC Client — running");
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+    g_trayIconActive = true;
+}
+
+void HideTrayIcon() {
+    if (!g_trayIconActive) return;
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+    g_trayIconActive = false;
+}
+
+// Show/hide tray icon based on the current setting
+void UpdateTrayIcon() {
+    if (g_minimizeToTray) {
+        ShowTrayIcon();
+    } else {
+        HideTrayIcon();
+    }
+}
+
+void ShowMainWindow() {
+    if (!g_hwnd) return;
+    ShowWindow(g_hwnd, SW_SHOW);
+    ShowWindow(g_hwnd, SW_RESTORE);
+    SetForegroundWindow(g_hwnd);
+}
+
+void MinimizeToTray() {
+    if (!g_hwnd) return;
+    ShowWindow(g_hwnd, SW_HIDE);
+}
+
+void ShowTrayMenu() {
+    if (!g_hwnd) return;
+    POINT pt;
+    GetCursorPos(&pt);
+    HMENU hMenu = CreatePopupMenu();
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_SHOW, L"Show AEC Client");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+    SetForegroundWindow(g_hwnd);
+    int cmd = TrackPopupMenu(hMenu,
+                             TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+                             pt.x, pt.y, 0, g_hwnd, NULL);
+    DestroyMenu(hMenu);
+    if (cmd == ID_TRAY_SHOW) {
+        ShowMainWindow();
+    } else if (cmd == ID_TRAY_EXIT) {
+        HideTrayIcon();
+        if (g_glfwWindow) glfwSetWindowShouldClose(g_glfwWindow, GLFW_TRUE);
+    }
+}
+
+LRESULT CALLBACK CustomWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CLOSE:
+            // If tray mode is ON, hide window. Otherwise close normally.
+            if (g_minimizeToTray) {
+                MinimizeToTray();
+                return 0;
+            }
+            // Fall through to GLFW's default handler, which sets shouldClose
+            break;
+
+        case WM_TRAYICON:
+            if (lParam == WM_LBUTTONUP || lParam == WM_LBUTTONDBLCLK) {
+                ShowMainWindow();
+            } else if (lParam == WM_RBUTTONUP) {
+                ShowTrayMenu();
+            }
+            return 0;
+
+        case WM_COMMAND:
+            if (LOWORD(wParam) == ID_TRAY_SHOW) {
+                ShowMainWindow();
+            } else if (LOWORD(wParam) == ID_TRAY_EXIT) {
+                HideTrayIcon();
+                if (g_glfwWindow) glfwSetWindowShouldClose(g_glfwWindow, GLFW_TRUE);
+            }
+            return 0;
+    }
+    return CallWindowProcW(g_originalWndProc, hwnd, msg, wParam, lParam);
+}
+
+void SetupTray(GLFWwindow* window) {
+    g_glfwWindow = window;
+    g_hwnd = glfwGetWin32Window(window);
+    if (!g_hwnd) return;
+    g_originalWndProc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC,
+                                                    (LONG_PTR)CustomWndProc);
+    // Note: tray icon visibility is decided by UpdateTrayIcon() after settings load.
+}
+
+#else
+
+// Non-Windows: no-op stubs
+void SetupTray(GLFWwindow*) {}
+void UpdateTrayIcon() {}
+void HideTrayIcon() {}
+
+#endif // _WIN32
+
+// ============================================================
+//  Wallpaper
+// ============================================================
+void ScanWallpapers() {
+    g_wallpaperPaths.clear();
+    g_wallpaperNames.clear();
+    g_wallpaperNames.push_back("(none)");
+
+    std::vector<std::string> candidates = { "wallpapers", "../wallpapers", "C:/aec/wallpapers" };
+    for (const auto& dir : candidates) {
+        if (!fs::exists(dir) || !fs::is_directory(dir)) continue;
+        for (auto& e : fs::directory_iterator(dir)) {
+            if (!e.is_regular_file()) continue;
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
+                g_wallpaperPaths.push_back(e.path().string());
+                g_wallpaperNames.push_back(e.path().filename().string());
+            }
+        }
+        if (!g_wallpaperPaths.empty()) break;
+    }
+}
+
+bool LoadWallpaperByIndex(int idx) {
+    if (idx == 0 || idx - 1 >= (int)g_wallpaperPaths.size()) {
+        if (g_wallpaperTex != 0) { glDeleteTextures(1, &g_wallpaperTex); g_wallpaperTex = 0; }
+        g_wallpaperW = g_wallpaperH = 0;
+        return true;
+    }
+    const std::string& path = g_wallpaperPaths[idx - 1];
+    int w, h, ch;
+    stbi_set_flip_vertically_on_load(false);
+    unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 4);
+    if (!data) return false;
+
+    if (g_wallpaperTex != 0) glDeleteTextures(1, &g_wallpaperTex);
+    glGenTextures(1, &g_wallpaperTex);
+    glBindTexture(GL_TEXTURE_2D, g_wallpaperTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    stbi_image_free(data);
+    g_wallpaperW = w; g_wallpaperH = h;
+    return true;
+}
+
+void RenderWallpaper(int vpW, int vpH) {
+    if (g_wallpaperTex == 0) return;
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glOrtho(0, vpW, vpH, 0, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, g_wallpaperTex);
+    glColor4f(1, 1, 1, 1);
+    float imgAspect = (float)g_wallpaperW / (float)g_wallpaperH;
+    float winAspect = (float)vpW / (float)vpH;
+    float x0, y0, x1, y1;
+    if (imgAspect > winAspect) {
+        float newW = vpH * imgAspect;
+        x0 = (vpW - newW) * 0.5f; x1 = x0 + newW; y0 = 0; y1 = (float)vpH;
+    } else {
+        float newH = vpW / imgAspect;
+        y0 = (vpH - newH) * 0.5f; y1 = y0 + newH; x0 = 0; x1 = (float)vpW;
+    }
+    glBegin(GL_QUADS);
+    glTexCoord2f(0,0); glVertex2f(x0, y0);
+    glTexCoord2f(1,0); glVertex2f(x1, y0);
+    glTexCoord2f(1,1); glVertex2f(x1, y1);
+    glTexCoord2f(0,1); glVertex2f(x0, y1);
+    glEnd();
+    glDisable(GL_TEXTURE_2D);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+}
+
+// ============================================================
+//  Settings
+// ============================================================
+void SaveSettings() {
+    std::ofstream f("aec_config.txt");
+    if (!f.is_open()) return;
+    f << g_micIndex << "\n" << g_refIndex << "\n" << g_outIndex << "\n"
+      << g_engineIndex << "\n" << g_sampleRateIndex << "\n" << g_filterIndex << "\n"
+      << g_preprocessEnabled << "\n"
+      << (int)(g_micGain.load() * 100) << "\n"
+      << (int)(g_outputGain.load() * 100) << "\n"
+      << g_wallpaperIndex << "\n"
+      << g_presetIndex << "\n"
+      << (g_minimizeToTray ? 1 : 0) << "\n";
+}
+
+void LoadSettings() {
+    std::ifstream f("aec_config.txt");
+    if (!f.is_open()) return;
+    int mg, og;
+    if (f >> g_micIndex >> g_refIndex >> g_outIndex
+          >> g_engineIndex >> g_sampleRateIndex >> g_filterIndex
+          >> g_preprocessEnabled >> mg >> og) {
+        g_micGain.store(mg / 100.0f);
+        g_outputGain.store(og / 100.0f);
+        if (g_sampleRateIndex == 0) g_sampleRate.store(16000);
+        else if (g_sampleRateIndex == 1) g_sampleRate.store(32000);
+        else g_sampleRate.store(48000);
+        g_selectedEngine.store(g_engineIndex);
+        g_enablePreprocess.store(g_preprocessEnabled);
+        int wp = -1;
+        if (f >> wp) g_wallpaperIndex = wp;
+        int pi = -1;
+        if (f >> pi) g_presetIndex = pi;
+
+        // New field — default true if missing (backward compat with old config)
+        int mt = 1;
+        if (f >> mt) g_minimizeToTray = (mt != 0);
+    }
+}
+
+void ResetToDefaults() {
+    g_micIndex = 0; g_refIndex = 0; g_outIndex = 0;
+    g_engineIndex = 1; g_sampleRateIndex = 2; g_filterIndex = 2;
+    g_presetIndex = 1;
+    g_preprocessEnabled = false;
+    g_minimizeToTray = true;
+    g_micGain.store(1.0f);
+    g_outputGain.store(1.0f);
+    g_sampleRate.store(48000);
+    g_selectedEngine.store(ENGINE_AEC3);
+    g_filterLengthMs.store(50);
+    g_enablePreprocess.store(false);
+    g_wallpaperIndex = 0;
+    LoadWallpaperByIndex(0);
+    UpdateTrayIcon();
+    SaveSettings();
+}
+
+void ApplyPreset(int idx) {
+    if (idx <= 0 || idx >= PRESET_COUNT) return;
+    const Preset& p = PRESETS[idx];
+
+    g_engineIndex      = p.engine;
+    g_sampleRateIndex  = p.sampleRateIdx;
+    g_filterIndex      = p.filterIdx;
+    g_preprocessEnabled= p.preprocess;
+
+    static const int rates[] = { 16000, 32000, 48000 };
+    static const int filters[] = { 30, 50, 80, 120, 200 };
+
+    g_selectedEngine.store(p.engine);
+    g_sampleRate.store(rates[p.sampleRateIdx]);
+    g_filterLengthMs.store(filters[p.filterIdx]);
+    g_enablePreprocess.store(p.preprocess);
+    g_micGain.store(p.micGain);
+    g_outputGain.store(p.outGain);
+    g_presetIndex = idx;
+}
+
+// ============================================================
+//  Engine init
+// ============================================================
+void ReinitEngine() {
+    if (g_engine.speex) { AecDestroy(g_engine.speex); g_engine.speex = nullptr; }
+    if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3); g_engine.aec3  = nullptr; }
+    if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
+
+    EngineType eng = (EngineType)g_selectedEngine.load();
+
+    if (eng == ENGINE_NKF) {
+        g_sampleRate.store(16000);
+        g_sampleRateIndex = 0;
+    }
+
+    int sr = g_sampleRate.load();
+    int fs = frameSizeForRate(sr);
+
+    if (eng == ENGINE_SPEEX) {
+        int filterLen = sr * g_filterLengthMs.load() / 1000;
+        g_engine.speex = AecNew(fs, filterLen, sr, g_enablePreprocess.load());
+        g_engine.type  = ENGINE_SPEEX;
+    } else if (eng == ENGINE_AEC3) {
+        g_engine.aec3 = Aec3New(sr, fs);
+        g_engine.type = ENGINE_AEC3;
+    } else if (eng == ENGINE_NKF) {
+        g_engine.nkf = NkfNew("models/nkf.onnx");
+        g_engine.type = ENGINE_NKF;
+    }
+}
+
+// ============================================================
+//  Audio callbacks
+// ============================================================
+void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
+    if (!pInput) return;
+    g_micRing.write((const int16_t*)pInput, frameCount);
+}
+void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
+    if (!pInput) return;
+    g_refRing.write((const int16_t*)pInput, frameCount);
+}
+void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
+    int16_t* out = (int16_t*)pOutput;
+    int fs = frameSizeForRate(g_sampleRate.load());
+    if ((int)frameCount != fs) { memset(out, 0, frameCount * sizeof(int16_t)); return; }
+
+    const size_t DRIFT_TARGET = (size_t)fs * 2;
+    const size_t DRIFT_THRESHOLD = (size_t)fs / 16;
+    if (g_micRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
+        g_micRing.skip(g_micRing.available() - DRIFT_TARGET);
+    if (g_refRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
+        g_refRing.skip(g_refRing.available() - DRIFT_TARGET);
+
+    if (g_micRing.available() < (size_t)fs || g_refRing.available() < (size_t)fs) {
+        memset(out, 0, frameCount * sizeof(int16_t));
+        return;
+    }
+
+    int16_t micFrame[MAX_FRAME_SIZE];
+    int16_t refFrame[MAX_FRAME_SIZE];
+    int16_t cleanedFrame[MAX_FRAME_SIZE];
+
+    g_micRing.read(micFrame, fs);
+    g_refRing.read(refFrame, fs);
+
+    if (g_engine.type == ENGINE_SPEEX && g_engine.speex)
+        AecCancelEcho(g_engine.speex, micFrame, refFrame, cleanedFrame, fs);
+    else if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
+        Aec3CancelEcho(g_engine.aec3, micFrame, refFrame, cleanedFrame, fs);
+    else if (g_engine.type == ENGINE_NKF && g_engine.nkf)
+        NkfProcess(g_engine.nkf, micFrame, refFrame, cleanedFrame, fs);
+    else
+        memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
+
+    float rms_mic = 0, rms_ref = 0, rms_out = 0;
+    for (int i = 0; i < fs; i++) {
+        rms_mic += (float)micFrame[i]     * micFrame[i];
+        rms_ref += (float)refFrame[i]     * refFrame[i];
+        rms_out += (float)cleanedFrame[i] * cleanedFrame[i];
+    }
+    rms_mic = sqrtf(rms_mic / fs);
+    rms_ref = sqrtf(rms_ref / fs);
+    rms_out = sqrtf(rms_out / fs);
+
+    g_last_mic_rms = rms_mic;
+    g_last_ref_rms = rms_ref;
+    g_last_out_rms = rms_out;
+
+    auto now = Clock::now();
+    if (rms_mic > g_peakMic.load()) { g_peakMic = rms_mic; g_peakMicTime = now; }
+    if (rms_ref > g_peakRef.load()) { g_peakRef = rms_ref; g_peakRefTime = now; }
+    if (rms_out > g_peakOut.load()) { g_peakOut = rms_out; g_peakOutTime = now; }
+
+    if (rms_mic > 30.0f && rms_ref > 100.0f) {
+        float ratio = (rms_out + 1.0f) / (rms_mic + 1.0f);
+        if (ratio < 1.0f) g_last_reduction_db = 20.0f * log10f(ratio);
+    }
+
+    float gain = g_micGain.load() * g_outputGain.load();
+    for (int i = 0; i < fs; i++)
+        out[i] = clamp_s16((int)((float)cleanedFrame[i] * gain));
+}
+
+// ============================================================
+//  Device enumeration + display filter
+// ============================================================
+void BuildDisplayIndices() {
+    g_micDisplayIndices.clear();
+    g_refDisplayIndices.clear();
+    g_outDisplayIndices.clear();
+
+    for (int i = 0; i < (int)g_captureDevices.size(); i++) {
+        if (!IsVirtualCableDevice(g_captureDevices[i].name))
+            g_micDisplayIndices.push_back(i);
+    }
+    for (int i = 0; i < (int)g_playbackDevices.size(); i++) {
+        if (!IsVirtualCableDevice(g_playbackDevices[i].name))
+            g_refDisplayIndices.push_back(i);
+    }
+    for (int i = 0; i < (int)g_playbackDevices.size(); i++) {
+        g_outDisplayIndices.push_back(i);
+    }
+
+    auto snap = [](int& index, const std::vector<int>& list) {
+        if (list.empty()) { index = 0; return; }
+        for (int v : list) if (v == index) return;
+        index = list[0];
+    };
+    snap(g_micIndex, g_micDisplayIndices);
+    snap(g_refIndex, g_refDisplayIndices);
+    snap(g_outIndex, g_outDisplayIndices);
+}
+
+void EnumerateDevices() {
+    std::string micName, refName, outName;
+    if (!g_captureDevices.empty()  && g_micIndex < (int)g_captureDevices.size())
+        micName = g_captureDevices[g_micIndex].name;
+    if (!g_playbackDevices.empty() && g_refIndex < (int)g_playbackDevices.size())
+        refName = g_playbackDevices[g_refIndex].name;
+    if (!g_playbackDevices.empty() && g_outIndex < (int)g_playbackDevices.size())
+        outName = g_playbackDevices[g_outIndex].name;
+
+    if (g_contextInitialized) {
+        ma_context_uninit(&g_context);
+        g_contextInitialized = false;
+    }
+
+    if (ma_context_init(NULL, 0, NULL, &g_context) != MA_SUCCESS) {
+        return;
+    }
+    g_contextInitialized = true;
+
+    ma_device_info* pPlayback; ma_uint32 playbackCount;
+    ma_device_info* pCapture;  ma_uint32 captureCount;
+    ma_context_get_devices(&g_context, &pPlayback, &playbackCount,
+                                       &pCapture,  &captureCount);
+
+    g_captureDevices.assign(pCapture,  pCapture  + captureCount);
+    g_playbackDevices.assign(pPlayback, pPlayback + playbackCount);
+
+    auto findBy = [](const std::vector<ma_device_info>& list, const std::string& name) -> int {
+        if (name.empty()) return -1;
+        for (int i = 0; i < (int)list.size(); i++)
+            if (name == list[i].name) return i;
+        return -1;
+    };
+    int mi = findBy(g_captureDevices, micName);   if (mi >= 0) g_micIndex = mi; else g_micIndex = 0;
+    int ri = findBy(g_playbackDevices, refName);  if (ri >= 0) g_refIndex = ri; else g_refIndex = 0;
+    int oi = findBy(g_playbackDevices, outName);  if (oi >= 0) g_outIndex = oi; else g_outIndex = 0;
+
+    BuildDisplayIndices();
+}
+
+// ============================================================
+//  Start / Stop
+// ============================================================
+void StartAEC() {
+    if (g_isRunning) return;
+    if (g_captureDevices.empty() || g_playbackDevices.empty()) {
+        snprintf(g_statusText, 128, "No devices found");
+        return;
+    }
+    if (g_micIndex >= (int)g_captureDevices.size())  g_micIndex = 0;
+    if (g_refIndex >= (int)g_playbackDevices.size()) g_refIndex = 0;
+    if (g_outIndex >= (int)g_playbackDevices.size()) g_outIndex = 0;
+
+    SaveSettings();
+    ReinitEngine();
+
+    if (g_engine.type == ENGINE_NKF && !g_engine.nkf) {
+        snprintf(g_statusText, 128, "Failed to load NKF model");
+        return;
+    }
+
+    g_micRing.reset();
+    g_refRing.reset();
+    g_peakMic.store(0); g_peakRef.store(0); g_peakOut.store(0);
+
+    int sr = g_sampleRate.load();
+    int fs = frameSizeForRate(sr);
+
+    ma_device_config micCfg = ma_device_config_init(ma_device_type_capture);
+    micCfg.capture.format = ma_format_s16;
+    micCfg.capture.channels = 1;
+    micCfg.sampleRate = sr;
+    micCfg.periodSizeInFrames = fs;
+    micCfg.dataCallback = mic_callback;
+    micCfg.capture.pDeviceID = &g_captureDevices[g_micIndex].id;
+
+    ma_device_config loopCfg = ma_device_config_init(ma_device_type_loopback);
+    loopCfg.capture.format = ma_format_s16;
+    loopCfg.capture.channels = 1;
+    loopCfg.sampleRate = sr;
+    loopCfg.periodSizeInFrames = fs;
+    loopCfg.dataCallback = loopback_callback;
+    loopCfg.capture.pDeviceID = &g_playbackDevices[g_refIndex].id;
+
+    ma_device_config outCfg = ma_device_config_init(ma_device_type_playback);
+    outCfg.playback.format = ma_format_s16;
+    outCfg.playback.channels = 1;
+    outCfg.sampleRate = sr;
+    outCfg.periodSizeInFrames = fs;
+    outCfg.dataCallback = output_callback;
+    outCfg.playback.pDeviceID = &g_playbackDevices[g_outIndex].id;
+
+    if (ma_device_init(&g_context, &micCfg,  &g_micDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Failed to init mic");
+        return;
+    }
+    if (ma_device_init(&g_context, &loopCfg, &g_loopbackDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Failed to init loopback");
+        ma_device_uninit(&g_micDevice);
+        return;
+    }
+    if (ma_device_init(&g_context, &outCfg, &g_outputDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Failed to init output");
+        ma_device_uninit(&g_micDevice);
+        ma_device_uninit(&g_loopbackDevice);
+        return;
+    }
+
+    ma_device_start(&g_micDevice);
+    ma_device_start(&g_loopbackDevice);
+    ma_device_start(&g_outputDevice);
+
+    g_isRunning = true;
+    g_sessionStart = Clock::now();
+    const char* engineName =
+        (g_engine.type == ENGINE_SPEEX) ? "SpeexDSP" :
+        (g_engine.type == ENGINE_AEC3)  ? "AEC3"    : "NKF-AEC";
+    snprintf(g_statusText, 128, "Running (%d Hz, %s)", sr, engineName);
+}
+
+void StopAEC() {
+    if (!g_isRunning) return;
+    ma_device_uninit(&g_micDevice);
+    ma_device_uninit(&g_loopbackDevice);
+    ma_device_uninit(&g_outputDevice);
+    g_isRunning = false;
+    snprintf(g_statusText, 128, "Stopped");
+}
+
+// ============================================================
+//  Custom widgets
+// ============================================================
+void DrawStatusDot(bool active) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float r = 6.0f;
+    ImU32 col  = active ? IM_COL32(80, 220, 100, 255) : IM_COL32(220, 80, 80, 255);
+    ImU32 glow = active ? IM_COL32(80, 220, 100, 80)  : IM_COL32(220, 80, 80, 80);
+    dl->AddCircleFilled(ImVec2(p.x + r, p.y + r + 2), r + 2, glow, 24);
+    dl->AddCircleFilled(ImVec2(p.x + r, p.y + r + 2), r, col, 24);
+    ImGui::Dummy(ImVec2(r * 2 + 6, r * 2 + 4));
+}
+
+void DrawInlineDot(bool ok) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float r = 4.0f;
+    ImU32 col = ok ? IM_COL32(80, 220, 100, 255) : IM_COL32(220, 80, 80, 255);
+    dl->AddCircleFilled(ImVec2(p.x + r, p.y + r + 3), r, col, 16);
+    ImGui::Dummy(ImVec2(r * 2 + 6, r * 2 + 4));
+}
+
+void DrawLevelMeter(const char* label, float rms, float peak, float maxValue) {
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(60);
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float width = ImGui::GetContentRegionAvail().x;
+    float height = 18.0f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height),
+                      IM_COL32(25, 25, 30, 255), 4.0f);
+    float frac = rms / maxValue;
+    if (frac > 1.0f) frac = 1.0f;
+    float barW = width * frac;
+    if (barW > 1.0f) {
+        ImU32 col;
+        if (frac < 0.6f)       col = IM_COL32(80, 200, 100, 255);
+        else if (frac < 0.85f) col = IM_COL32(230, 200, 60, 255);
+        else                   col = IM_COL32(230, 80, 80, 255);
+        dl->AddRectFilled(pos, ImVec2(pos.x + barW, pos.y + height), col, 4.0f);
+    }
+    float peakFrac = peak / maxValue;
+    if (peakFrac > 1.0f) peakFrac = 1.0f;
+    float peakX = pos.x + width * peakFrac;
+    if (peakX > pos.x)
+        dl->AddLine(ImVec2(peakX - 1, pos.y), ImVec2(peakX - 1, pos.y + height),
+                    IM_COL32(255, 255, 255, 220), 2.0f);
+    dl->AddRect(pos, ImVec2(pos.x + width, pos.y + height),
+                IM_COL32(60, 60, 70, 255), 4.0f);
+    ImGui::Dummy(ImVec2(width, height));
+}
+
+// ============================================================
+//  UI sections
+// ============================================================
+static void MarkPresetCustom() {
+    g_presetIndex = 0;
+}
+
+static bool FilteredDeviceCombo(const char* label, const char* tooltip, int& index,
+                                const std::vector<ma_device_info>& devices,
+                                const std::vector<int>& displayIndices) {
+    int displayPos = -1;
+    for (int i = 0; i < (int)displayIndices.size(); i++) {
+        if (displayIndices[i] == index) { displayPos = i; break; }
+    }
+
+    const char* currentName =
+        (displayPos >= 0 && displayIndices[displayPos] < (int)devices.size())
+            ? devices[displayIndices[displayPos]].name
+            : "(none)";
+
+    bool changed = false;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo(("##" + std::string(label)).c_str(), currentName)) {
+        if (displayIndices.empty()) {
+            ImGui::TextDisabled("(no devices)");
+        } else {
+            for (int i = 0; i < (int)displayIndices.size(); i++) {
+                int realIdx = displayIndices[i];
+                bool selected = (realIdx == index);
+                if (ImGui::Selectable(devices[realIdx].name, selected)) {
+                    index = realIdx;
+                    changed = true;
+                }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tooltip);
+    return changed;
+}
+
+void DrawDevicesSection() {
+    ImGui::SeparatorText("Devices");
+
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90);
+    if (ImGui::Button("Refresh", ImVec2(90, 0))) {
+        EnumerateDevices();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Rescan audio devices without restarting");
+
+    ImGui::BeginDisabled(g_isRunning);
+    const float labelCol = 190.0f;
+
+    DrawInlineDot(!g_micDisplayIndices.empty());
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Microphone");
+    ImGui::SameLine(labelCol);
+    FilteredDeviceCombo("Microphone", "The physical mic you speak into (virtual cables hidden)",
+                        g_micIndex, g_captureDevices, g_micDisplayIndices);
+
+    DrawInlineDot(!g_refDisplayIndices.empty());
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Speaker Reference");
+    ImGui::SameLine(labelCol);
+    FilteredDeviceCombo("Speaker Reference", "Speakers whose sound we cancel (virtual cables hidden)",
+                        g_refIndex, g_playbackDevices, g_refDisplayIndices);
+
+    DrawInlineDot(!g_outDisplayIndices.empty());
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Output");
+    ImGui::SameLine(labelCol);
+    FilteredDeviceCombo("Output", "Where the cleaned mic goes. Select CABLE Input",
+                        g_outIndex, g_playbackDevices, g_outDisplayIndices);
+
+    ImGui::EndDisabled();
+}
+
+void DrawEngineSection() {
+    ImGui::SeparatorText("Engine");
+    const float labelCol = 190.0f;
+
+    ImGui::BeginDisabled(g_isRunning);
+
+    ImGui::TextUnformatted("Engine");
+    ImGui::SameLine(labelCol);
+    ImGui::SetNextItemWidth(-1);
+    const char* engines[] = {
+        "SpeexDSP (Low CPU)",
+        "WebRTC AEC3 (High Quality)",
+        "NKF-AEC (Experimental)"
+    };
+    if (ImGui::Combo("##engine", &g_engineIndex, engines, IM_ARRAYSIZE(engines))) {
+        g_selectedEngine.store(g_engineIndex);
+        if (g_engineIndex == ENGINE_NKF) {
+            g_sampleRateIndex = 0;
+            g_sampleRate.store(16000);
+        }
+        MarkPresetCustom();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "SpeexDSP = very light, phone quality\n"
+            "AEC3 = best voice, more CPU\n"
+            "NKF-AEC = neural Kalman filter (experimental, 16 kHz only)");
+
+    ImGui::TextUnformatted("Sample Rate");
+    ImGui::SameLine(labelCol);
+    ImGui::SetNextItemWidth(-1);
+
+    const char* rates[] = { "16000", "32000", "48000" };
+    if (g_engineIndex == ENGINE_NKF) {
+        ImGui::BeginDisabled(true);
+        int lockedIdx = 0;
+        ImGui::Combo("##rate", &lockedIdx, rates, IM_ARRAYSIZE(rates));
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("NKF-AEC only supports 16 kHz (locked)");
+    } else {
+        if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
+            g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
+            MarkPresetCustom();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Higher = better quality, more CPU\nAEC3 best at 48000");
+    }
+
+    if (g_engineIndex == ENGINE_SPEEX) {
+        ImGui::TextUnformatted("Echo tail");
+        ImGui::SameLine(labelCol);
+        ImGui::SetNextItemWidth(-1);
+        const char* filterLengths[] = { "30", "50", "80", "120", "200" };
+        if (ImGui::Combo("##tail", &g_filterIndex, filterLengths, IM_ARRAYSIZE(filterLengths))) {
+            g_filterLengthMs.store(atoi(filterLengths[g_filterIndex]));
+            MarkPresetCustom();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("SpeexDSP only - how much echo to cancel (ms)");
+
+        ImGui::Spacing();
+        if (ImGui::Checkbox("Enable cleanup", &g_preprocessEnabled)) {
+            g_enablePreprocess.store(g_preprocessEnabled);
+            MarkPresetCustom();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("SpeexDSP residual echo + noise cleaner\nMay make voice sound processed");
+    } else if (g_engineIndex == ENGINE_AEC3) {
+        ImGui::TextDisabled("Echo tail and cleanup are only available for SpeexDSP.");
+        ImGui::TextDisabled("AEC3 handles these internally.");
+    } else if (g_engineIndex == ENGINE_NKF) {
+        ImGui::TextDisabled("NKF-AEC is an experimental neural engine.");
+        ImGui::TextDisabled("Fixed at 16 kHz with internal echo cancellation.");
+    }
+
+    ImGui::EndDisabled();
+}
+
+void DrawGainsSection() {
+    ImGui::SeparatorText("Gains");
+    const float labelCol = 190.0f;
+
+    float micGain = g_micGain.load() * 100.0f;
+    ImGui::TextUnformatted("Microphone gain");
+    ImGui::SameLine(labelCol);
+    ImGui::SetNextItemWidth(-80);
+    if (ImGui::SliderFloat("##micgain", &micGain, 0.0f, 200.0f, "%.0f%%")) {
+        g_micGain.store(micGain / 100.0f);
+        MarkPresetCustom();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%.0f%%", micGain);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Boost or attenuate mic. Editable while running.");
+
+    float outGain = g_outputGain.load() * 100.0f;
+    ImGui::TextUnformatted("Output gain");
+    ImGui::SameLine(labelCol);
+    ImGui::SetNextItemWidth(-80);
+    if (ImGui::SliderFloat("##outgain", &outGain, 0.0f, 200.0f, "%.0f%%")) {
+        g_outputGain.store(outGain / 100.0f);
+        MarkPresetCustom();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%.0f%%", outGain);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Final output level to Discord");
+}
+
+void DrawAudioTab() {
+    ImGui::SeparatorText("Preset");
+
+    ImGui::TextUnformatted("Quick preset");
+    ImGui::SameLine(190.0f);
+    ImGui::SetNextItemWidth(-1);
+    std::vector<const char*> presetNames;
+    for (int i = 0; i < PRESET_COUNT; i++) presetNames.push_back(PRESETS[i].name);
+
+    bool wasRunning = g_isRunning;
+    if (ImGui::Combo("##preset", &g_presetIndex, presetNames.data(), (int)presetNames.size())) {
+        if (g_presetIndex > 0) {
+            ApplyPreset(g_presetIndex);
+            if (wasRunning) { StopAEC(); StartAEC(); }
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("One-click configurations for common scenarios");
+
+    ImGui::Spacing();
+    DrawDevicesSection();
+    ImGui::Spacing();
+    DrawEngineSection();
+    ImGui::Spacing();
+    DrawGainsSection();
+}
+
+void DrawAppearanceTab() {
+    ImGui::SeparatorText("Wallpaper");
+    const float labelCol = 190.0f;
+
+    ImGui::TextUnformatted("Wallpaper");
+    ImGui::SameLine(labelCol);
+    ImGui::SetNextItemWidth(-120);
+    std::vector<const char*> names;
+    for (auto& n : g_wallpaperNames) names.push_back(n.c_str());
+    if (ImGui::Combo("##wallpaper", &g_wallpaperIndex, names.data(), (int)names.size())) {
+        LoadWallpaperByIndex(g_wallpaperIndex);
+        SaveSettings();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reload")) {
+        ScanWallpapers();
+        if (g_wallpaperIndex >= (int)g_wallpaperNames.size()) g_wallpaperIndex = 0;
+        LoadWallpaperByIndex(g_wallpaperIndex);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan wallpapers/ folder");
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Put .png / .jpg files in the wallpapers/ folder");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Behavior");
+
+    bool trayChecked = g_minimizeToTray;
+    if (ImGui::Checkbox("Minimize to system tray (X button hides window)", &trayChecked)) {
+        g_minimizeToTray = trayChecked;
+        UpdateTrayIcon();
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "When ON:  X hides the window, tray icon stays active\n"
+            "When OFF: X closes the app completely");
+
+    if (g_minimizeToTray) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("Right-click the tray icon to Exit the app.");
+    }
+}
+
+void DrawAboutTab() {
+    ImGui::SeparatorText("About");
+
+    ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), APP_NAME);
+    ImGui::Text("Version %s", APP_VERSION);
+    ImGui::Spacing();
+
+    ImGui::TextWrapped(
+        "A lightweight, open-source acoustic echo cancellation (AEC) client "
+        "for Windows. Route your microphone through it and pick up a cleaned, "
+        "echo-free signal in any app (Discord, Zoom, Teams, etc.).");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Features");
+    ImGui::BulletText("Three AEC engines: SpeexDSP, WebRTC AEC3, NKF-AEC (experimental)");
+    ImGui::BulletText("Real-time processing with low CPU usage");
+    ImGui::BulletText("Works with speakers, earphones, and headsets");
+    ImGui::BulletText("Selectable sample rate (16 / 32 / 48 kHz)");
+    ImGui::BulletText("Live level meters with peak hold");
+    ImGui::BulletText("Presets for common scenarios");
+    ImGui::BulletText("Optional minimize to system tray");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Credits");
+    ImGui::BulletText("SpeexDSP      - Xiph.Org Foundation (BSD-3)");
+    ImGui::BulletText("WebRTC AP     - Google (BSD-3)");
+    ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
+    ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
+    ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
+    ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
+    ImGui::BulletText("GLFW          - Marcus Geelnard / Camilla Berglund (zlib)");
+    ImGui::BulletText("stb_image     - Sean Barrett (public domain)");
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Made with C++ and MinGW-w64");
+}
+
+// ============================================================
+//  Main UI
+// ============================================================
+void DrawUI() {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin(APP_NAME, nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus |
+                 ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 18));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 10));
+
+    ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), APP_NAME);
+    ImGui::SameLine();
+    ImGui::TextDisabled("v" APP_VERSION);
+    ImGui::SameLine(vp->WorkSize.x - 200);
+    DrawStatusDot(g_isRunning);
+    ImGui::SameLine();
+    if (g_isRunning)
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Running  %s", FormatUptime().c_str());
+    else
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Idle");
+
+    ImGui::Spacing();
+
+    if (ImGui::BeginTabBar("MainTabs")) {
+        if (ImGui::BeginTabItem("Audio")) {
+            ImGui::Spacing();
+            DrawAudioTab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Appearance")) {
+            ImGui::Spacing();
+            DrawAppearanceTab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("About")) {
+            ImGui::Spacing();
+            DrawAboutTab();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    {
+        std::string startLabel = g_isRunning
+            ? ("Stop   " + FormatUptime())
+            : std::string("Start");
+
+        if (g_isRunning) {
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.70f, 0.20f, 0.20f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.85f, 0.30f, 0.30f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.55f, 0.15f, 0.15f, 1.0f));
+            if (ImGui::Button(startLabel.c_str(), ImVec2(160, 36))) StopAEC();
+            ImGui::PopStyleColor(3);
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.55f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.70f, 0.33f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.15f, 0.45f, 0.20f, 1.0f));
+            if (ImGui::Button(startLabel.c_str(), ImVec2(160, 36))) StartAEC();
+            ImGui::PopStyleColor(3);
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Reset to defaults", ImVec2(160, 36))) ResetToDefaults();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restore all settings to default");
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", g_statusText);
+    }
+
+    if (g_isRunning) {
+        ImGui::Spacing();
+        ImGui::SeparatorText("Live Levels");
+
+        float micRms = g_last_mic_rms.load();
+        float refRms = g_last_ref_rms.load();
+        float outRms = g_last_out_rms.load();
+        float db     = g_last_reduction_db.load();
+
+        DrawLevelMeter("Mic", micRms, g_peakMic.load(), 3000.0f);
+        DrawLevelMeter("Ref", refRms, g_peakRef.load(), 3000.0f);
+        DrawLevelMeter("Out", outRms, g_peakOut.load(), 3000.0f);
+
+        ImGui::Spacing();
+        if (db < 0.0f)
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                               "Echo reduction: %.1f dB", db);
+        else
+            ImGui::TextDisabled("Echo reduction: -- dB (silent)");
+
+        auto now = Clock::now();
+        auto decayMs = [&](std::atomic<float>& peak, Clock::time_point& tp) {
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - tp).count();
+            if (ms > 1500) peak.store(peak.load() * 0.92f);
+        };
+        decayMs(g_peakMic, g_peakMicTime);
+        decayMs(g_peakRef, g_peakRefTime);
+        decayMs(g_peakOut, g_peakOutTime);
+    }
+
+    ImGui::PopStyleVar(2);
+    ImGui::End();
+}
+
+// ============================================================
+//  MAIN
+// ============================================================
+int main(int, char**) {
+    if (!glfwInit()) return 1;
+    const char* glslVersion = "#version 130";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+
+    GLFWwindow* window = glfwCreateWindow(700, 720, APP_NAME " v" APP_VERSION, nullptr, nullptr);
+    if (!window) { glfwTerminate(); return 1; }
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1);
+
+    // Install custom WndProc for tray behavior
+    SetupTray(window);
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+
+    ImGuiStyle& s = ImGui::GetStyle();
+    s.WindowRounding    = 0.0f;
+    s.FrameRounding     = 6.0f;
+    s.GrabRounding      = 6.0f;
+    s.PopupRounding     = 6.0f;
+    s.ScrollbarRounding = 6.0f;
+    s.TabRounding       = 6.0f;
+    s.WindowBorderSize  = 0.0f;
+    s.FrameBorderSize   = 0.0f;
+    s.FramePadding      = ImVec2(10, 6);
+    s.ItemSpacing       = ImVec2(10, 10);
+    s.WindowPadding     = ImVec2(20, 18);
+    s.Colors[ImGuiCol_WindowBg]  = ImVec4(0.06f, 0.06f, 0.08f, 0.82f);
+    s.Colors[ImGuiCol_FrameBg]   = ImVec4(0.14f, 0.14f, 0.18f, 0.90f);
+    s.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.20f, 0.20f, 0.26f, 0.95f);
+    s.Colors[ImGuiCol_FrameBgActive]  = ImVec4(0.24f, 0.24f, 0.30f, 1.00f);
+    s.Colors[ImGuiCol_Header]    = ImVec4(0.20f, 0.30f, 0.50f, 0.85f);
+    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.28f, 0.40f, 0.65f, 0.90f);
+    s.Colors[ImGuiCol_Separator] = ImVec4(0.25f, 0.28f, 0.35f, 0.60f);
+
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init(glslVersion);
+
+    ScanWallpapers();
+    LoadSettings();     // loads g_minimizeToTray too
+    if (g_wallpaperIndex >= (int)g_wallpaperNames.size()) g_wallpaperIndex = 0;
+    LoadWallpaperByIndex(g_wallpaperIndex);
+
+    // Now that g_minimizeToTray is loaded, show or hide tray icon accordingly
+    UpdateTrayIcon();
+
+    ReinitEngine();
+    EnumerateDevices();
+
+    while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        DrawUI();
+
+        ImGui::Render();
+        int w, h;
+        glfwGetFramebufferSize(window, &w, &h);
+        glViewport(0, 0, w, h);
+        glClearColor(0.05f, 0.05f, 0.06f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        RenderWallpaper(w, h);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        glfwSwapBuffers(window);
+
+        // When hidden to tray, throttle the render loop to save CPU
+#ifdef _WIN32
+        if (g_hwnd && !IsWindowVisible(g_hwnd)) {
+            Sleep(50);
+        }
+#endif
+    }
+
+    SaveSettings();
+    StopAEC();
+    if (g_engine.speex) AecDestroy(g_engine.speex);
+    if (g_engine.aec3)  Aec3Destroy(g_engine.aec3);
+    if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
+    if (g_contextInitialized) {
+        ma_context_uninit(&g_context);
+        g_contextInitialized = false;
+    }
+    if (g_wallpaperTex) glDeleteTextures(1, &g_wallpaperTex);
+
+#ifdef _WIN32
+    HideTrayIcon();
+#endif
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 0;
+}
