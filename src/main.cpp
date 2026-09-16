@@ -948,7 +948,8 @@ void DrawEngineSection() {
         ImGui::SetTooltip(
             "SpeexDSP = very light, phone quality\n"
             "AEC3 = best voice, more CPU\n"
-            "NKF-AEC = neural Kalman filter (experimental, 16 kHz only)");
+            "NKF-AEC = neural Kalman filter (experimental, 16 kHz only)\n"
+            "LocalVQE v1.4-AEC = neural echo-only, natural voice (16 kHz only)");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -961,7 +962,7 @@ void DrawEngineSection() {
         ImGui::Combo("##rate", &lockedIdx, rates, IM_ARRAYSIZE(rates));
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("NKF-AEC only supports 16 kHz (locked)");
+            ImGui::SetTooltip("NKF-AEC / LocalVQE only support 16 kHz (locked)");
     } else {
         if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
             g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
@@ -1171,8 +1172,10 @@ void DrawUI() {
 
     ImGui::Spacing();
 
+    bool isAudioTabActive = false;
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Audio")) {
+            isAudioTabActive = true;
             ImGui::Spacing();
             DrawAudioTab();
             ImGui::EndTabItem();
@@ -1190,6 +1193,9 @@ void DrawUI() {
         ImGui::EndTabBar();
     }
 
+    // Audio-tab-only footer: Start / Reset + Live Levels.
+    // Hidden on Appearance and About tabs.
+    if (isAudioTabActive) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -1250,6 +1256,7 @@ void DrawUI() {
         decayMs(g_peakRef, g_peakRefTime);
         decayMs(g_peakOut, g_peakOutTime);
     }
+    } // end if (isAudioTabActive)
 
     ImGui::PopStyleVar(2);
     ImGui::End();
