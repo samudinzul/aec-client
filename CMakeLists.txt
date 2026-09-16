@@ -72,22 +72,79 @@ if(WIN32)
     target_link_libraries(aec_gui PRIVATE imm32 ole32 uuid winmm shell32)
 endif()
 
+# ============================================================
+#  Resolve Absl DLLs at configure time (versioned filenames)
+# ============================================================
+file(GLOB ABSL_DLLS "${MSYS2_ROOT}/bin/libabsl_*.dll")
+set(ABSL_COPY_COMMANDS "")
+foreach(_absl ${ABSL_DLLS})
+    list(APPEND ABSL_COPY_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_absl}" "$<TARGET_FILE_DIR:aec_gui>")
+endforeach()
+
+# ============================================================
+#  Copy every runtime DLL next to aec_gui.exe
+#  Includes transitive deps that load dynamically at runtime
+#  (ggml backends, ONNX Runtime, WebRTC, GLFW, Absl, OpenMP).
+# ============================================================
 add_custom_command(TARGET aec_gui POST_BUILD
+    # Our own engine DLLs
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/libs/aec.dll
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/libwebrtc-audio-processing-1-3.dll
         $<TARGET_FILE_DIR:aec_gui>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NKF_DLL}
         $<TARGET_FILE_DIR:aec_gui>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/onnxruntime.dll
+        ${LOCALVQE_BIN}/liblocalvqe.dll
         $<TARGET_FILE_DIR:aec_gui>
+
+    # GGML runtime (all CPU backend variants)
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${LOCALVQE_BIN}
         $<TARGET_FILE_DIR:aec_gui>
+
+    # MSYS2 runtime — direct deps
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libwebrtc-audio-processing-1-3.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/onnxruntime.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/glfw3.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libwinpthread-1.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libgcc_s_seh-1.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libstdc++-6.dll
+        $<TARGET_FILE_DIR:aec_gui>
+
+    # MSYS2 runtime — transitive deps (load dynamically)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libgomp-1.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libonnx.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libprotobuf-lite.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libre2-11.dll
+        $<TARGET_FILE_DIR:aec_gui>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libutf8_validity.dll
+        $<TARGET_FILE_DIR:aec_gui>
+
+    # Absl runtime (copied individually — list built above)
+    ${ABSL_COPY_COMMANDS}
+
+    # Models
     COMMAND ${CMAKE_COMMAND} -E make_directory
         $<TARGET_FILE_DIR:aec_gui>/models
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -96,5 +153,6 @@ add_custom_command(TARGET aec_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/models/localvqe-v1.4-aec-200K-f32.gguf
         $<TARGET_FILE_DIR:aec_gui>/models/localvqe-v1.4-aec-200K-f32.gguf
+
     COMMENT "Copying runtime DLLs and models"
 )
