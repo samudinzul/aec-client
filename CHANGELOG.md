@@ -5,6 +5,15 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-09-16
+
+### Fixed
+
+- Engine dropdown tooltip now documents all four engines (was missing LocalVQE v1.4-AEC)
+- Sample-rate lock tooltip covers both 16 kHz-only engines (NKF-AEC / LocalVQE)
+- Start / Reset to defaults footer (plus Live Levels) now shows on the Audio tab only;
+  hidden on Appearance and About tabs
+
 ## [1.1.0] — 2026-09-16
 
 ### Added
@@ -62,5 +71,6 @@ The release ZIP now ships **123 DLLs** and runs on a fresh Windows 10/11 install
 - Settings auto-save to `aec_config.txt`
 - Built with Dear ImGui + GLFW + miniaudio
 
+[1.1.1]: https://github.com/samudinzul/aec-client/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/samudinzul/aec-client/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/samudinzul/aec-client/releases/tag/v1.0.0
