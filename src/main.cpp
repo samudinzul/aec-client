@@ -24,6 +24,7 @@
 #include "aec3_wrapper.h"
 #include "nkf_wrapper.h"
 #include "localvqe_wrapper.h"
+#include "dtln_wrapper.h"
 
 #include <cstdio>
 #include <cmath>
@@ -86,7 +87,7 @@ static void ReleaseSingleInstance() {
 //  App identity
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.1.1"
+#define APP_VERSION "1.2.0"
 
 // ============================================================
 //  Tray icon (Windows)
@@ -136,13 +137,14 @@ struct SpscRing {
 // ============================================================
 //  Engine abstraction
 // ============================================================
-enum EngineType { ENGINE_SPEEX = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_LOCALVQE = 3 };
+enum EngineType { ENGINE_SPEEX = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_LOCALVQE = 3, ENGINE_DTLN = 4 };
 struct EngineState {
     EngineType  type  = ENGINE_SPEEX;
     Aec*        speex = nullptr;
     Aec3Handle* aec3  = nullptr;
     NkfHandle*  nkf   = nullptr;
     LocalVqeHandle* localvqe = nullptr;
+    DtlnHandle* dtln  = nullptr;
 };
 
 // ============================================================
@@ -463,6 +465,8 @@ void LoadSettings() {
         if (g_sampleRateIndex == 0) g_sampleRate.store(16000);
         else if (g_sampleRateIndex == 1) g_sampleRate.store(32000);
         else g_sampleRate.store(48000);
+        if (g_engineIndex < ENGINE_SPEEX || g_engineIndex > ENGINE_DTLN)
+            g_engineIndex = ENGINE_AEC3;
         g_selectedEngine.store(g_engineIndex);
         g_enablePreprocess.store(g_preprocessEnabled);
         int wp = -1;
@@ -523,10 +527,11 @@ void ReinitEngine() {
     if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3); g_engine.aec3  = nullptr; }
     if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
     if (g_engine.localvqe) { LocalVqeDestroy(g_engine.localvqe); g_engine.localvqe = nullptr; }
+    if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
-    if (eng == ENGINE_NKF || eng == ENGINE_LOCALVQE) {
+    if (eng == ENGINE_NKF || eng == ENGINE_LOCALVQE || eng == ENGINE_DTLN) {
         g_sampleRate.store(16000);
         g_sampleRateIndex = 0;
     }
@@ -547,6 +552,9 @@ void ReinitEngine() {
     } else if (eng == ENGINE_LOCALVQE) {
         g_engine.localvqe = LocalVqeNew("models/localvqe-v1.4-aec-200K-f32.gguf");
         g_engine.type = ENGINE_LOCALVQE;
+    } else if (eng == ENGINE_DTLN) {
+        g_engine.dtln = DtlnNew("models/dtln_aec_512");
+        g_engine.type = ENGINE_DTLN;
     }
 }
 
@@ -593,6 +601,8 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         NkfProcess(g_engine.nkf, micFrame, refFrame, cleanedFrame, fs);
     else if (g_engine.type == ENGINE_LOCALVQE && g_engine.localvqe)
         LocalVqeProcess(g_engine.localvqe, micFrame, refFrame, cleanedFrame, fs);
+    else if (g_engine.type == ENGINE_DTLN && g_engine.dtln)
+        DtlnProcess(g_engine.dtln, micFrame, refFrame, cleanedFrame, fs);
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
@@ -719,6 +729,10 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load LocalVQE model");
         return;
     }
+    if (g_engine.type == ENGINE_DTLN && !g_engine.dtln) {
+        snprintf(g_statusText, 128, "Failed to load DTLN model");
+        return;
+    }
 
     g_micRing.reset();
     g_refRing.reset();
@@ -776,7 +790,8 @@ void StartAEC() {
     const char* engineName =
         (g_engine.type == ENGINE_SPEEX) ? "SpeexDSP" :
         (g_engine.type == ENGINE_AEC3)  ? "AEC3" :
-        (g_engine.type == ENGINE_NKF)   ? "NKF-AEC" : "LocalVQE";
+        (g_engine.type == ENGINE_NKF)   ? "NKF-AEC" :
+        (g_engine.type == ENGINE_DTLN)  ? "DTLN-AEC" : "LocalVQE";
     snprintf(g_statusText, 128, "Running (%d Hz, %s)", sr, engineName);
 }
 
@@ -934,11 +949,12 @@ void DrawEngineSection() {
         "SpeexDSP (Low CPU)",
         "WebRTC AEC3 (High Quality)",
         "NKF-AEC (Experimental)",
-        "LocalVQE v1.4-AEC (Echo Only)"
+        "LocalVQE v1.4-AEC (Echo Only)",
+        "DTLN-AEC 512 (Neural)"
     };
     if (ImGui::Combo("##engine", &g_engineIndex, engines, IM_ARRAYSIZE(engines))) {
         g_selectedEngine.store(g_engineIndex);
-        if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE) {
+        if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
             g_sampleRateIndex = 0;
             g_sampleRate.store(16000);
         }
@@ -949,20 +965,21 @@ void DrawEngineSection() {
             "SpeexDSP = very light, phone quality\n"
             "AEC3 = best voice, more CPU\n"
             "NKF-AEC = neural Kalman filter (experimental, 16 kHz only)\n"
-            "LocalVQE v1.4-AEC = neural echo-only, natural voice (16 kHz only)");
+            "LocalVQE v1.4-AEC = neural echo-only, natural voice (16 kHz only)\n"
+            "DTLN-AEC 512 = dual-LSTM echo+noise, needs model files (16 kHz only)");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
 
     const char* rates[] = { "16000", "32000", "48000" };
-    if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE) {
+    if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
         ImGui::BeginDisabled(true);
         int lockedIdx = 0;
         ImGui::Combo("##rate", &lockedIdx, rates, IM_ARRAYSIZE(rates));
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("NKF-AEC / LocalVQE only support 16 kHz (locked)");
+            ImGui::SetTooltip("NKF-AEC / LocalVQE / DTLN-AEC only support 16 kHz (locked)");
     } else {
         if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
             g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
@@ -1000,6 +1017,10 @@ void DrawEngineSection() {
     } else if (g_engineIndex == ENGINE_LOCALVQE) {
         ImGui::TextDisabled("LocalVQE v1.4-AEC: removes only echo, keeps voice and room tone.");
         ImGui::TextDisabled("Fixed at 16 kHz. 200K params. Very light CPU.");
+    } else if (g_engineIndex == ENGINE_DTLN) {
+        ImGui::TextDisabled("DTLN-AEC 512: dual-LSTM echo + noise canceller.");
+        ImGui::TextDisabled("Fixed at 16 kHz. Needs models/dtln_aec_512_{1,2}.tflite");
+        ImGui::TextDisabled("(+ tensorflowlite_c.dll) or the _1/_2.onnx pair.");
     }
 
     ImGui::EndDisabled();
@@ -1119,7 +1140,7 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Four AEC engines: SpeexDSP, WebRTC AEC3, NKF-AEC, LocalVQE v1.4-AEC");
+    ImGui::BulletText("Five AEC engines: SpeexDSP, WebRTC AEC3, NKF-AEC, LocalVQE v1.4-AEC, DTLN-AEC 512");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 32 / 48 kHz)");
@@ -1132,6 +1153,7 @@ void DrawAboutTab() {
     ImGui::BulletText("SpeexDSP      - Xiph.Org Foundation (BSD-3)");
     ImGui::BulletText("WebRTC AP     - Google (BSD-3)");
     ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
+    ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("LocalVQE      - LocalAI (Apache-2.0)");
     ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
@@ -1355,6 +1377,7 @@ int main(int, char**) {
     if (g_engine.aec3)  Aec3Destroy(g_engine.aec3);
     if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
     if (g_engine.localvqe) LocalVqeDestroy(g_engine.localvqe);
+    if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

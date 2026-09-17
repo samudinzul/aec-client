@@ -5,6 +5,38 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-09-17
+
+- **Download:** [AEC-Client-v1.2.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.2.0/AEC-Client-v1.2.0-win64.zip) (66 MB, Windows 10/11 64-bit)
+
+### Added
+
+- **DTLN-AEC 512 engine** — dual-signal LSTM echo + noise canceller
+  (Westhausen & Meyer, ICASSP 2021, MIT)
+  - New `src/dtln_wrapper.{h,cpp}`: 512-sample block / 128-sample shift /
+    257-bin FFT pipeline with overlap-add, LSTM state carry-over, and
+    int16 ↔ float bridging to the 160-sample audio callback
+  - Dual backend probed in order: TFLite pair
+    (`models/dtln_aec_512_1.tflite` + `_2.tflite` via `tensorflowlite_c.dll`
+    loaded at runtime, no link-time dependency) then ONNX pair
+    (`models/dtln_aec_512_1.onnx` + `_2.onnx` via the already-linked
+    ONNX Runtime)
+  - `ENGINE_DTLN = 4` wired through `ReinitEngine`, audio callback,
+    `StartAEC` guard (`Failed to load DTLN model`), 16 kHz auto-lock,
+    engine dropdown + tooltip, and shutdown cleanup
+  - About tab now lists five engines and credits DTLN-AEC; old
+    `aec_config.txt` engine indices are clamped on load
+  - CMake copies any present `models/dtln_aec_512_*` files and an optional
+    `libs/tensorflowlite_c.dll` next to `aec_gui.exe`; build succeeds with
+    no DTLN files (engine reports missing models at Start)
+- `APP_VERSION` bumped to `1.2.0`
+
+### Notes
+
+- DTLN runs at 16 kHz only; model files are user-supplied (see README
+  “Download Models”) until vendored into a release
+- `ldd` check: 0 `not found` after the change
+
 ## [1.1.1] — 2026-09-16
 
 ### Fixed

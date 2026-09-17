@@ -27,7 +27,7 @@
 
 ## What It Does
 
-AEC Client routes your microphone through one of **four acoustic echo cancellation engines**, subtracts the sound coming from your speakers, and outputs a clean, echo-free signal to a virtual audio cable. Any voice app can then use that clean signal as its microphone input.
+AEC Client routes your microphone through one of **five acoustic echo cancellation engines**, subtracts the sound coming from your speakers, and outputs a clean, echo-free signal to a virtual audio cable. Any voice app can then use that clean signal as its microphone input.
 
 ```
 Microphone ─────────────────┐
@@ -41,11 +41,12 @@ No more headphones. No more echo.
 
 ## Features
 
-- **4 selectable AEC engines** in one app:
+- **5 selectable AEC engines** in one app:
   - **WebRTC AEC3** — best voice quality, same engine used by Chrome and Google Meet
   - **LocalVQE v1.4-AEC** — echo-only neural model; preserves voice, room tone, and background noise
   - **SpeexDSP** — extremely lightweight, phone quality, lowest CPU
   - **NKF-AEC** — experimental neural Kalman filter (ICASSP 2023)
+  - **DTLN-AEC 512** — dual-LSTM echo + noise canceller (ICASSP 2021, needs model files)
 - **Low CPU usage** — under 2% on a typical desktop
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -114,6 +115,7 @@ Done. Talk normally with speakers on.
 | **WebRTC AEC3** | Advanced DSP | C++ | [MSYS2 package](https://packages.msys2.org/package/mingw-w64-ucrt-x86_64-webrtc-audio-processing-1) |
 | **NKF-AEC** | Neural (Kalman) | C++ | [William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC) |
 | **LocalVQE** | Neural (echo-only) | C++ | [LocalAI-io/LocalVQE](https://github.com/localai-org/LocalVQE) |
+| **DTLN-AEC** | Neural (dual-LSTM) | C++ | [breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec) |
 
 ### Libraries
 
@@ -124,9 +126,9 @@ Done. Talk normally with speakers on.
 | **[GLFW](https://www.glfw.org/)** | C | Window + OpenGL context |
 | **[OpenGL](https://www.opengl.org/)** | — | Rendering backend |
 | **[stb_image](https://github.com/nothings/stb)** | C (single-header) | Image loading for wallpapers |
-| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC) |
+| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback) |
 | **[GGML](https://github.com/ggml-org/ggml)** | C/C++ | Neural inference (LocalVQE) |
-| **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC |
+| **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC and DTLN-AEC |
 | **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
 
 ### Windows APIs
@@ -144,6 +146,7 @@ Done. Talk normally with speakers on.
 
 - Acoustic echo cancellation via adaptive filtering (Speex, AEC3)
 - Neural Kalman filtering (NKF-AEC)
+- Dual-signal LSTM echo + noise cancellation (DTLN-AEC)
 - Neural echo-only removal via DAF front-end (LocalVQE)
 - Frame buffering at 10–16 ms intervals
 - Lock-free SPSC ring buffers (audio thread ↔ UI thread)
@@ -174,7 +177,7 @@ Done. Talk normally with speakers on.
 - **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
 - **No heap allocation in audio callback** — stack buffers only
 - **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
-- **Engine abstraction** — runtime swap between 4 engines with a single enum + function pointer
+- **Engine abstraction** — runtime swap between 5 engines with a single enum + function pointer
 - **Settings persistence** — plain text `aec_config.txt`
 - **Single-instance mutex** — prevents accidental double launches
 
@@ -188,6 +191,7 @@ Done. Talk normally with speakers on.
 | **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
 | **SpeexDSP** | ⭐⭐ | Very low | 16/32/48 kHz | ~30 ms | Low-power hardware |
 | **NKF-AEC** | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
+| **DTLN-AEC 512** | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
 
 ---
 
@@ -224,6 +228,20 @@ NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research m
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
 The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and builds to `libnkf_aec.dll` (1.3 MB).
+
+### DTLN-AEC 512
+
+DTLN-AEC (Dual-signal Transformation LSTM Network) by Westhausen & Meyer (**ICASSP 2021**, 3rd place in the Microsoft AEC Challenge) cancels echo **and** noise with a two-stage LSTM (separation mask + waveform refinement).
+
+- **Model size**: 10.4M parameters (512 LSTM units/layer), two files: `dtln_aec_512_1` + `dtln_aec_512_2`
+- **Sample rate**: 16 kHz (auto-locked)
+- **DSP**: 512-sample block, 128-sample shift, 257-bin FFT, overlap-add
+- **Runtime (in probe order)**:
+  1. **TFLite** — drop `dtln_aec_512_1.tflite` + `dtln_aec_512_2.tflite` from [breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec) into `models/` plus a Windows `tensorflowlite_c.dll` next to `aec_gui.exe` (loaded at runtime, no rebuild needed)
+  2. **ONNX fallback** — `dtln_aec_512_1.onnx` + `dtln_aec_512_2.onnx` in `models/` (reuses the already-linked ONNX Runtime)
+- Without either pair the engine reports `Failed to load DTLN model` on Start; all other engines are unaffected.
+
+The wrapper at `src/dtln_wrapper.cpp` handles frame accumulation (128-sample shifts bridged to the 160-sample audio callback), int16 ↔ float conversion, LSTM state carry-over, and graceful fallback to mic on inference failure.
 
 ---
 
@@ -292,6 +310,14 @@ curl -L -o models/localvqe-v1.4-aec-200K-f32.gguf \
 
 # NKF-AEC model is bundled in third_party/REAL_TIME_NKF_AEC/python/nkf.onnx
 cp third_party/REAL_TIME_NKF_AEC/python/nkf.onnx models/
+
+# DTLN-AEC 512 (optional — engine stays disabled until these exist)
+# Option A (preferred, upstream weights verbatim):
+#   download dtln_aec_512_1.tflite + dtln_aec_512_2.tflite from
+#   https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models
+#   into models/, plus a Windows tensorflowlite_c.dll next to aec_gui.exe
+# Option B (no new DLL): convert the pair to
+#   models/dtln_aec_512_1.onnx + models/dtln_aec_512_2.onnx
 ```
 
 ### Build the Main App
@@ -326,7 +352,8 @@ aec-client/
 │   ├── main.cpp                    Entry point, GUI, audio pipeline
 │   ├── aec3_wrapper.cpp/.h         WebRTC AEC3 C wrapper
 │   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper
-│   └── localvqe_wrapper.cpp/.h     LocalVQE C wrapper
+│   ├── localvqe_wrapper.cpp/.h     LocalVQE C wrapper
+│   └── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
 │
 ├── include/
 │   ├── miniaudio.h                 Audio I/O
@@ -348,7 +375,8 @@ aec-client/
 │
 ├── models/
 │   ├── nkf.onnx                    NKF model (45 KB)
-│   └── localvqe-v1.4-aec-200K-f32.gguf   LocalVQE model (2.8 MB)
+│   ├── localvqe-v1.4-aec-200K-f32.gguf   LocalVQE model (2.8 MB)
+│   └── dtln_aec_512_{1,2}.tflite|.onnx  DTLN models (user-supplied, optional)
 │
 ├── screenshots/
 │   └── main.png                    README image
@@ -377,7 +405,7 @@ The release ZIP bundles all required DLLs:
 | `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
 | `liblocalvqe.dll` | ~458 KB | LocalVQE neural engine |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 |
-| `onnxruntime.dll` | ~28 MB | Neural inference (NKF) |
+| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback) |
 | `ggml.dll` | ~93 KB | GGML runtime (LocalVQE) |
 | `ggml-base.dll` | ~860 KB | GGML base |
 | `ggml-cpu-*.dll` (15 files) | ~18 MB total | CPU backend variants |
@@ -386,6 +414,8 @@ The release ZIP bundles all required DLLs:
 | `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
 | `models/nkf.onnx` | ~45 KB | NKF model |
 | `models/localvqe-v1.4-aec-200K-f32.gguf` | ~2.8 MB | LocalVQE model |
+| `models/dtln_aec_512_*` | user-supplied | DTLN models (optional) |
+| `tensorflowlite_c.dll` | user-supplied | TFLite runtime for DTLN (optional) |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
 
@@ -404,6 +434,7 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **SpeexDSP** — Xiph.Org Foundation (BSD-3)
 - **WebRTC Audio Processing** — Google (BSD-3)
 - **NKF-AEC** — Jiang et al., ICASSP 2023 (MIT)
+- **DTLN-AEC** — Westhausen & Meyer, ICASSP 2021 (MIT)
 - **LocalVQE** — LocalAI (Apache-2.0)
 - **ONNX Runtime** — Microsoft (MIT)
 - **GGML** — The GGML authors (MIT)
