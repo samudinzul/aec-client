@@ -13,15 +13,17 @@
 - [What It Does](#what-it-does)
 - [Features](#features)
 - [Quick Start](#quick-start)
-- [Technical Stack](#technical-stack)
-- [Architecture](#architecture)
 - [Engine Comparison](#engine-comparison)
+- [Runtime Dependencies](#runtime-dependencies)
+- [Architecture](#architecture)
+- [Technical Stack](#technical-stack)
 - [About the Neural Engines](#about-the-neural-engines)
 - [Building from Source](#building-from-source)
 - [Project Structure](#project-structure)
-- [Runtime Dependencies](#runtime-dependencies)
 - [License](#license)
 - [Credits](#credits)
+- [Contributing](#contributing)
+- [Support](#support)
 
 ---
 
@@ -80,6 +82,74 @@ No more headphones. No more echo.
    - **Automatic Gain Control**: **OFF**
 
 Done. Talk normally with speakers on.
+
+---
+
+## Engine Comparison
+
+| Engine | Voice quality | Double-talk | CPU | Sample Rate | Latency | Best For |
+|--------|---------------|-------------|-----|-------------|---------|----------|
+| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/32/48 kHz | ~40 ms | Best overall |
+| **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
+| **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
+| **NKF-AEC** | ⭐⭐⭐ | ⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
+| **SpeexDSP** | ⭐⭐⭐ | ⭐⭐ | Very low | 16/32/48 kHz | ~30 ms | Low-power hardware |
+
+*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Ranks are research-based (published challenge scores, algorithm design, in-app listening) — your ears outrank this table.*
+
+---
+
+## Runtime Dependencies
+
+The release ZIP bundles all required DLLs:
+
+| File | Size | Purpose |
+|------|------|---------|
+| `aec_gui.exe` | ~2.4 MB | Main application |
+| `aec.dll` | ~185 KB | SpeexDSP wrapper |
+| `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
+| `liblocalvqe.dll` | ~458 KB | LocalVQE neural engine |
+| `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 |
+| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback) |
+| `ggml.dll` | ~93 KB | GGML runtime (LocalVQE) |
+| `ggml-base.dll` | ~860 KB | GGML base |
+| `ggml-cpu-*.dll` (15 files) | ~18 MB total | CPU backend variants |
+| `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
+| `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
+| `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
+| `models/nkf.onnx` | ~45 KB | NKF model |
+| `models/localvqe-v1.4-aec-200K-f32.gguf` | ~2.8 MB | LocalVQE model |
+| `models/dtln_aec_512_*` | user-supplied | DTLN models (optional) |
+| `tensorflowlite_c.dll` | user-supplied | TFLite runtime for DTLN (optional) |
+
+**External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Microphone (WASAPI capture)                                    │
+│         ↓                                                       │
+│  Lock-free ring buffer  ──┐                                     │
+│                            ├──→ AEC Engine ──→ Clean signal    │
+│  Speaker loopback (WASAPI) │                                     │
+│         ↓                  │                                     │
+│  Lock-free ring buffer  ──┘                                     │
+│         ↓                                                       │
+│  Output → VB-CABLE → Discord                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Design principles:**
+
+- **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
+- **No heap allocation in audio callback** — stack buffers only
+- **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
+- **Engine abstraction** — runtime swap between 5 engines with a single enum + function pointer
+- **Settings persistence** — plain text `aec_config.txt`
+- **Single-instance mutex** — prevents accidental double launches
 
 ---
 
@@ -153,45 +223,6 @@ Done. Talk normally with speakers on.
 - Clock-drift correction (dynamic sample drop/duplicate)
 - RMS metering with peak hold + decay
 - Residual noise gating (LocalVQE)
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Microphone (WASAPI capture)                                    │
-│         ↓                                                       │
-│  Lock-free ring buffer  ──┐                                     │
-│                            ├──→ AEC Engine ──→ Clean signal    │
-│  Speaker loopback (WASAPI) │                                     │
-│         ↓                  │                                     │
-│  Lock-free ring buffer  ──┘                                     │
-│         ↓                                                       │
-│  Output → VB-CABLE → Discord                                    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Design principles:**
-
-- **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
-- **No heap allocation in audio callback** — stack buffers only
-- **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
-- **Engine abstraction** — runtime swap between 5 engines with a single enum + function pointer
-- **Settings persistence** — plain text `aec_config.txt`
-- **Single-instance mutex** — prevents accidental double launches
-
----
-
-## Engine Comparison
-
-| Engine | Quality | CPU | Sample Rate | Latency | Best For |
-|--------|---------|-----|-------------|---------|----------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | Moderate | 16/32/48 kHz | ~40 ms | Best overall |
-| **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
-| **SpeexDSP** | ⭐⭐ | Very low | 16/32/48 kHz | ~30 ms | Low-power hardware |
-| **NKF-AEC** | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
-| **DTLN-AEC 512** | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
 
 ---
 
@@ -391,33 +422,6 @@ aec-client/
 ├── CHANGELOG.md                    Version history
 └── .gitignore
 ```
-
----
-
-## Runtime Dependencies
-
-The release ZIP bundles all required DLLs:
-
-| File | Size | Purpose |
-|------|------|---------|
-| `aec_gui.exe` | ~2.4 MB | Main application |
-| `aec.dll` | ~185 KB | SpeexDSP wrapper |
-| `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
-| `liblocalvqe.dll` | ~458 KB | LocalVQE neural engine |
-| `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 |
-| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback) |
-| `ggml.dll` | ~93 KB | GGML runtime (LocalVQE) |
-| `ggml-base.dll` | ~860 KB | GGML base |
-| `ggml-cpu-*.dll` (15 files) | ~18 MB total | CPU backend variants |
-| `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
-| `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
-| `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
-| `models/nkf.onnx` | ~45 KB | NKF model |
-| `models/localvqe-v1.4-aec-200K-f32.gguf` | ~2.8 MB | LocalVQE model |
-| `models/dtln_aec_512_*` | user-supplied | DTLN models (optional) |
-| `tensorflowlite_c.dll` | user-supplied | TFLite runtime for DTLN (optional) |
-
-**External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
 
 ---
 
