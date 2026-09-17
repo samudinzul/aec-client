@@ -45,6 +45,7 @@ add_executable(aec_gui
     src/aec3_wrapper.cpp
     src/nkf_wrapper.cpp
     src/localvqe_wrapper.cpp
+    src/dtln_wrapper.cpp
 )
 
 target_include_directories(aec_gui PRIVATE
@@ -156,3 +157,33 @@ add_custom_command(TARGET aec_gui POST_BUILD
 
     COMMENT "Copying runtime DLLs and models"
 )
+
+# ============================================================
+#  DTLN-AEC models (optional — engine reports "Failed to load
+#  DTLN model" if absent). Guarded so a fresh clone without the
+#  model files still configures and builds.
+# ============================================================
+foreach(_dtln
+    models/dtln_aec_512_1.tflite
+    models/dtln_aec_512_2.tflite
+    models/dtln_aec_512_1.onnx
+    models/dtln_aec_512_2.onnx)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${_dtln}")
+        add_custom_command(TARGET aec_gui POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/${_dtln}"
+                "$<TARGET_FILE_DIR:aec_gui>/${_dtln}"
+            COMMENT "Copying ${_dtln}")
+    endif()
+endforeach()
+# TFLite runtime (optional, loaded at runtime by dtln_wrapper)
+foreach(_tflite_dll
+    "${CMAKE_SOURCE_DIR}/libs/tensorflowlite_c.dll"
+    "${CMAKE_SOURCE_DIR}/libs/libtensorflowlite_c.dll")
+    if(EXISTS "${_tflite_dll}")
+        add_custom_command(TARGET aec_gui POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_tflite_dll}"
+                "$<TARGET_FILE_DIR:aec_gui>")
+    endif()
+endforeach()

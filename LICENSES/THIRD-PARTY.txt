@@ -15,6 +15,12 @@ AEC Client bundles the following open-source libraries:
     Jiang et al., ICASSP 2023
     License: MIT
 
+3b. DTLN-AEC
+    "Acoustic Echo Cancellation with the Dual-Signal Transformation
+    LSTM Network"
+    Westhausen & Meyer, ICASSP 2021 (breizhn/DTLN-aec)
+    License: MIT (model weights + reference pipeline)
+
 4.  ONNX Runtime
     Copyright (C) Microsoft Corporation
     License: MIT
