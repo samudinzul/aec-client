@@ -87,7 +87,7 @@ static void ReleaseSingleInstance() {
 //  App identity
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.2.0"
+#define APP_VERSION "1.2.1"
 
 // ============================================================
 //  Tray icon (Windows)

@@ -5,6 +5,19 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] — 2026-09-17
+
+- **Download:** [AEC-Client-v1.2.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.2.1/AEC-Client-v1.2.1-win64.zip) (Windows 10/11 64-bit)
+
+### Fixed
+
+- **LocalVQE word endings no longer clipped.** The SDK noise gate
+  (`-45 dBFS`, always on) was muting low-energy speech tails, so words
+  sounded cut off — most audible during double-talk. The gate is now off;
+  the joint network suppresses background noise on its own
+  (`src/localvqe_wrapper.cpp`). If background hiss in silence bothers you,
+  the fallback is re-enabling the gate at `-60 dBFS` (same line).
+
 ## [1.2.0] — 2026-09-17
 
 - **Download:** [AEC-Client-v1.2.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.2.0/AEC-Client-v1.2.0-win64.zip) (66 MB, Windows 10/11 64-bit)
