@@ -76,7 +76,10 @@ LocalVqeHandle* LocalVqeNew(const char* modelPath) {
     auto* h = new LocalVqeHandle();
     h->ctx = ctx;
 
-    localvqe_set_noise_gate(h->ctx, 1, -45.0f);
+    // Noise gate OFF: the joint network suppresses noise on its own, and the
+    // gate was chopping low-energy word endings (audible tail clipping).
+    // Re-enable at -60 dBFS only if background hiss in silence bothers you.
+    localvqe_set_noise_gate(h->ctx, 0, -45.0f);
 
     h->micAccum.reserve(LOCALVQE_HOP * 4);
     h->refAccum.reserve(LOCALVQE_HOP * 4);
