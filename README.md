@@ -94,7 +94,7 @@ After echo cancellation, a tiny neural network (Silero VAD, ~2 MB) checks for sp
 - Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = muted.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
 - Uncheck **Voice gate** in the Audio tab to pass original audio through.
-- Works at **16 and 48 kHz** (the model itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — the neural engines always qualify; for Speex/AEC3 pick 16000 or 48000.
+- Works at **16 and 48 kHz** (the model itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
 
 ---
 
@@ -106,7 +106,7 @@ After echo cancellation, a tiny neural network (Silero VAD, ~2 MB) checks for sp
 | **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
 | **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
 | **NKF-AEC** | ⭐⭐⭐ | ⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
-| **SpeexDSP** | ⭐⭐⭐ | ⭐⭐ | Very low | 16/48 kHz | ~30 ms | Low-power hardware |
+| **SpeexDSP** | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Low-power hardware |
 
 *Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Ranks are research-based (published challenge scores, algorithm design, in-app listening) — your ears outrank this table.*
 

@@ -161,7 +161,7 @@ struct Preset {
     int   engine;
     int   sampleRateIdx;
     int   filterIdx;
-    bool  preprocess;
+    bool  preprocess;  // retired, always false (kept for initializer shape)
     float micGain;
     float outGain;
 };
@@ -171,7 +171,7 @@ static const Preset PRESETS[] = {
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
     { "Low CPU",              0, 0, 0, false, 1.00f, 1.00f },
     { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
-    { "Noisy Room",           0, 1, 3, false, 1.20f, 1.00f },
+    { "Noisy Room",           0, 0, 3, false, 1.20f, 1.00f },
     { "Echo-Heavy Room",      1, 1, 2, false, 1.00f, 1.00f },
 };
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
@@ -183,11 +183,11 @@ EngineState g_engine;
 
 // ============================================================
 //  Silero voice gate (neural VAD -> fixed gate -> output)
-//  Post-AEC: speech passes, silence is muted — all engines except
-//  SpeexDSP, which bypasses the gate (Silero under-scores its output
-//  at both rates, so any gate just eats words). Live at 16 kHz direct
-//  and 48 kHz via internal downsample (feed only). g_vadGain/g_vadHang
-//  live on the audio thread; UI only reads the atomics.
+//  Post-AEC: speech passes, silence is muted on every engine.
+//  SpeexDSP runs at 16 kHz only so the detector eats natively.
+//  Live at 16 kHz direct and 48 kHz via internal downsample
+//  (feed only). g_vadGain/g_vadHang live on the audio thread;
+//  UI only reads the atomics.
 // ============================================================
 SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
 std::atomic<bool>  g_vadEnabled{ true };  // default ON, zero-click
@@ -513,10 +513,16 @@ void LoadSettings() {
         // out-of-range index land on 48 kHz — no stranded configs.
         if (g_sampleRateIndex == 0) { g_sampleRate.store(16000); }
         else { g_sampleRateIndex = 1; g_sampleRate.store(48000); }
+        // SpeexDSP is 16 kHz only now: old Speex-at-48 kHz configs land
+        // on 16 kHz automatically (gate eats natively there).
+        if (g_engineIndex == ENGINE_SPEEX) { g_sampleRateIndex = 0; g_sampleRate.store(16000); }
         if (g_engineIndex < ENGINE_SPEEX || g_engineIndex > ENGINE_DTLN)
             g_engineIndex = ENGINE_AEC3;
         g_selectedEngine.store(g_engineIndex);
         g_enablePreprocess.store(g_preprocessEnabled);
+        // Speex cleanup retired: old configs with it on land on gate-only.
+        g_preprocessEnabled = false;
+        g_enablePreprocess.store(false);
         int wp = -1;
         if (f >> wp) g_wallpaperIndex = wp;
         int pi = -1;
@@ -563,7 +569,7 @@ void ApplyPreset(int idx) {
     g_engineIndex      = p.engine;
     g_sampleRateIndex  = p.sampleRateIdx;
     g_filterIndex      = p.filterIdx;
-    g_preprocessEnabled= p.preprocess;
+    g_preprocessEnabled= false;  // retired: gate does the silencing
 
     static const int rates[] = { 16000, 48000 };
     static const int filters[] = { 30, 50, 80, 120, 200 };
@@ -571,7 +577,7 @@ void ApplyPreset(int idx) {
     g_selectedEngine.store(p.engine);
     g_sampleRate.store(rates[p.sampleRateIdx]);
     g_filterLengthMs.store(filters[p.filterIdx]);
-    g_enablePreprocess.store(p.preprocess);
+    g_enablePreprocess.store(false);  // retired: gate does the silencing
     g_micGain.store(p.micGain);
     g_outputGain.store(p.outGain);
     g_presetIndex = idx;
@@ -589,7 +595,9 @@ void ReinitEngine() {
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
-    if (eng == ENGINE_NKF || eng == ENGINE_LOCALVQE || eng == ENGINE_DTLN) {
+    // SpeexDSP joins the 16 kHz-only club: the voice gate eats natively
+    // instead of off a downsampled feed, which is where it under-scored.
+    if (eng == ENGINE_SPEEX || eng == ENGINE_NKF || eng == ENGINE_LOCALVQE || eng == ENGINE_DTLN) {
         g_sampleRate.store(16000);
         g_sampleRateIndex = 0;
     }
@@ -599,7 +607,9 @@ void ReinitEngine() {
 
     if (eng == ENGINE_SPEEX) {
         int filterLen = sr * g_filterLengthMs.load() / 1000;
-        g_engine.speex = AecNew(fs, filterLen, sr, g_enablePreprocess.load());
+        // Preprocess (cleanup) permanently off: the Silero gate does the
+        // silencing now, and the two stacked sounded aggressive.
+        g_engine.speex = AecNew(fs, filterLen, sr, false);
         g_engine.type  = ENGINE_SPEEX;
     } else if (eng == ENGINE_AEC3) {
         g_engine.aec3 = Aec3New(sr, fs);
@@ -637,19 +647,10 @@ static void VadReset() {
 // metering so meters show what Discord hears. Lock-free, no allocation:
 // 512-sample inference runs inline (< 1 ms). Pure neural decision with
 // fixed hysteresis — open at 0.50, close at 0.30 (uncertain band holds
-// the last decision). SpeexDSP bypasses the gate entirely (see below),
-// so no per-engine pairs remain here. ~30 ms fade open, ~50 ms fade
-// to hard mute, 300 ms hangover against clipping word tails.
+// the last decision). Same pair on every engine. ~30 ms fade open,
+// ~50 ms fade to hard mute, 300 ms hangover against clipping word tails.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
-    // SpeexDSP bypass: Silero under-scores its output at both rates even
-    // on loud speech, so any gate threshold eats words. Raw Speex output
-    // passes untouched; all other engines are gated below.
-    if (g_engine.type == ENGINE_SPEEX) {
-        g_vadGain = 1.0f;
-        g_vadHang = 0;
-        return;
-    }
     if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
         g_vadGain = 1.0f;
         g_vadHang = 0;
@@ -1163,7 +1164,7 @@ void DrawEngineSection() {
     };
     if (ImGui::Combo("##engine", &g_engineIndex, engines, IM_ARRAYSIZE(engines))) {
         g_selectedEngine.store(g_engineIndex);
-        if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
+        if (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
             g_sampleRateIndex = 0;
             g_sampleRate.store(16000);
         }
@@ -1171,7 +1172,7 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "SpeexDSP = very light, phone quality\n"
+            "SpeexDSP = very light, phone quality (16 kHz, locked for voice-gate accuracy)\n"
             "AEC3 = best voice, more CPU\n"
             "NKF-AEC = neural Kalman filter (experimental, 16 kHz only)\n"
             "LocalVQE v1.4-AEC = neural echo-only, natural voice (16 kHz only)\n"
@@ -1182,13 +1183,13 @@ void DrawEngineSection() {
     ImGui::SetNextItemWidth(-1);
 
     const char* rates[] = { "16000", "48000" };
-    if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
+    if (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
         ImGui::BeginDisabled(true);
         int lockedIdx = 0;
         ImGui::Combo("##rate", &lockedIdx, rates, IM_ARRAYSIZE(rates));
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("NKF-AEC / LocalVQE / DTLN-AEC only support 16 kHz (locked)");
+            ImGui::SetTooltip("SpeexDSP / NKF-AEC / LocalVQE / DTLN-AEC run at 16 kHz (locked)");
     } else {
         if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
             g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
@@ -1209,19 +1210,9 @@ void DrawEngineSection() {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("SpeexDSP only - how much echo to cancel (ms)");
-
-        ImGui::Spacing();
-        if (ImGui::Checkbox("Enable cleanup", &g_preprocessEnabled)) {
-            g_enablePreprocess.store(g_preprocessEnabled);
-            MarkPresetCustom();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("SpeexDSP residual echo + noise cleaner\n"
-                              "Stacks with the Voice gate below — both suppress at once,\n"
-                              "which can sound aggressive. Try gate-only first.");
     } else if (g_engineIndex == ENGINE_AEC3) {
-        ImGui::TextDisabled("Echo tail and cleanup are only available for SpeexDSP.");
-        ImGui::TextDisabled("AEC3 handles these internally.");
+        ImGui::TextDisabled("Echo tail is only available for SpeexDSP.");
+        ImGui::TextDisabled("AEC3 handles cleanup internally.");
     } else if (g_engineIndex == ENGINE_NKF) {
         ImGui::TextDisabled("NKF-AEC is an experimental neural engine.");
         ImGui::TextDisabled("Fixed at 16 kHz with internal echo cancellation.");
@@ -1284,8 +1275,6 @@ void DrawVadSection() {
     if (!g_vad) {
         ImGui::TextDisabled("Silero model not found in models/ — gate is off.");
         ImGui::TextDisabled("Add models/silero_vad.onnx (link in LICENSES/THIRD-PARTY.txt).");
-    } else if (g_selectedEngine.load() == ENGINE_SPEEX) {
-        ImGui::TextDisabled("Gate bypassed for SpeexDSP — raw output passes through.");
     } else if (enabled) {
         float prob = g_vadProb.load();
         float ms = g_vadMs.load();

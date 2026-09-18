@@ -27,14 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   close at 0.30 — the uncertain band holds the last decision, so
   quiet speech is never cut by a drifting close line. Hangover,
   fades, and fail-open bypass unchanged.
-- **Noisy Room preset no longer enables Speex cleanup.** Speex
-  preprocess stacks with the voice gate (double suppression, sounds
-  aggressive); the gate alone does the silencing now. The cleanup
-  tooltip warns about the stacking.
-- **SpeexDSP bypasses the voice gate.** Silero under-scores Speex
-  output at both rates even on loud speech, so any threshold ate
-  words — raw Speex output now passes untouched, with a UI note in
-  the Voice gate section. All other engines stay gated at 0.50 / 0.30.
+- **SpeexDSP is 16 kHz only, gated by Silero again.** The gate
+  under-scored Speex output off a downsampled 48 kHz feed, so Speex
+  joins the 16 kHz-only club (native feed, 0.50 / 0.30 like every
+  other engine) — old Speex-at-48 kHz configs and the Noisy Room
+  preset migrate automatically. The gate bypass experiment is reverted.
+- **Speex cleanup (preprocess) retired.** The Silero gate does the
+  silencing and the two stacked sounded aggressive — the checkbox is
+  gone, old configs with it on land on gate-only.
 
 ## [1.3.1] — 2026-09-18
 

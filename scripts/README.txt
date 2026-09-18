@@ -30,7 +30,7 @@ QUICK START
 4. Pick an engine:
    - WebRTC AEC3          best overall (default, 16 / 48 kHz)
    - LocalVQE v1.4-AEC    echo-only neural, preserves voice (16 kHz)
-   - SpeexDSP             lowest CPU (16 / 48 kHz)
+   - SpeexDSP             lowest CPU (16 kHz)
    - NKF-AEC              experimental neural engine (16 kHz)
    - DTLN-AEC 512         neural echo + noise canceller (16 kHz)
 
