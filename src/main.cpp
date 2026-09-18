@@ -171,7 +171,7 @@ static const Preset PRESETS[] = {
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
     { "Low CPU",              0, 0, 0, false, 1.00f, 1.00f },
     { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
-    { "Noisy Room",           0, 1, 3, true,  1.20f, 1.00f },
+    { "Noisy Room",           0, 1, 3, false, 1.20f, 1.00f },
     { "Echo-Heavy Room",      1, 1, 2, false, 1.00f, 1.00f },
 };
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
@@ -182,7 +182,7 @@ const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 EngineState g_engine;
 
 // ============================================================
-//  Silero voice gate (neural VAD -> adaptive gate -> output)
+//  Silero voice gate (neural VAD -> fixed gate -> output)
 //  Post-AEC: speech passes, silence is muted. Live at 16 kHz direct
 //  and 48 kHz via internal downsample (feed only). g_vadGain/g_vadHang
 //  live on the audio thread; UI only reads the atomics.
@@ -193,7 +193,6 @@ std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
 float              g_vadGain = 1.0f;      // audio thread only
 int                g_vadHang = 0;         // audio thread only (300 ms hangover)
-float              g_vadNoiseFloor = 0.0f;  // audio thread only, adaptive close line
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
 ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
@@ -224,6 +223,7 @@ std::vector<int> g_refDisplayIndices;
 std::vector<int> g_outDisplayIndices;
 
 int  g_micIndex = 0, g_refIndex = 0, g_outIndex = 0;
+bool g_listenToSelf = false;  // self-monitor: route cleaned mic to Speaker Reference instead of Output
 int  g_engineIndex = 1, g_sampleRateIndex = 1, g_filterIndex = 2;
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
@@ -263,6 +263,27 @@ static bool IsVirtualCableDevice(const std::string& name) {
     return lower.find("cable") != std::string::npos ||
            lower.find("vb-audio") != std::string::npos;
 }
+
+// CABLE Input = the playback endpoint voice apps listen to via CABLE Output.
+static bool IsCableInputDevice(const std::string& name) {
+    if (!IsVirtualCableDevice(name)) return false;
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower.find("input") != std::string::npos;
+}
+
+// First CABLE Input in the playback list, else first cable device, else -1.
+static int FindCableInputIndex() {
+    int fallback = -1;
+    for (int i = 0; i < (int)g_playbackDevices.size(); i++) {
+        if (!IsVirtualCableDevice(g_playbackDevices[i].name)) continue;
+        if (fallback < 0) fallback = i;
+        if (IsCableInputDevice(g_playbackDevices[i].name)) return i;
+    }
+    return fallback;
+}
+
+static bool CableInputPresent() { return FindCableInputIndex() >= 0; }
 
 // ============================================================
 //  System tray (Windows)
@@ -472,8 +493,9 @@ void SaveSettings() {
       << (int)(g_outputGain.load() * 100) << "\n"
       << g_wallpaperIndex << "\n"
       << g_presetIndex << "\n"
-      << (g_minimizeToTray ? 1 : 0) << "\n"
-      << (g_vadEnabled.load() ? 1 : 0) << "\n";
+       << (g_minimizeToTray ? 1 : 0) << "\n"
+       << (g_vadEnabled.load() ? 1 : 0) << "\n"
+       << (g_listenToSelf ? 1 : 0) << "\n";
 }
 
 void LoadSettings() {
@@ -505,6 +527,10 @@ void LoadSettings() {
         // New field — voice gate defaults ON if missing
         int ve = 1;
         if (f >> ve) g_vadEnabled.store(ve != 0);
+
+        // New field — self-monitor defaults OFF if missing
+        int ls = 0;
+        if (f >> ls) g_listenToSelf = (ls != 0);
     }
 }
 
@@ -515,6 +541,7 @@ void ResetToDefaults() {
     g_preprocessEnabled = false;
     g_minimizeToTray = true;
     g_vadEnabled.store(true);
+    g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
     g_sampleRate.store(48000);
@@ -601,16 +628,15 @@ static void VadReset() {
     }
     g_vadGain = 1.0f;
     g_vadHang = 0;
-    g_vadNoiseFloor = 0.0f;
     g_vadProb.store(0.0f);
 }
 
 // Audio-thread gate. Called from output_callback after AEC, before
 // metering so meters show what Discord hears. Lock-free, no allocation:
-// 512-sample inference runs inline (< 1 ms). Fixed open line 0.5 with an
-// adaptive close line (noise floor + 0.15, clamped) against flutter;
-// ~30 ms fade open, ~50 ms fade to hard mute, 300 ms hangover against
-// clipping word tails.
+// 512-sample inference runs inline (< 1 ms). Pure neural decision with
+// fixed hysteresis — open at 0.50, close at 0.30 (uncertain band holds
+// the last decision); ~30 ms fade open, ~50 ms fade to hard mute,
+// 300 ms hangover against clipping word tails.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
     if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
@@ -654,19 +680,16 @@ static void VadGateApply(int16_t* cleaned, int fs) {
         float ms = (float)std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - t0).count() / 1000.0f;
         g_vadMs.store(ms);
-        // Adaptive close line tracks the slow minimum: persistent
-        // background chatter lifts it, real silence drops it back.
-        if (prob < g_vadNoiseFloor) g_vadNoiseFloor = prob;
-        else g_vadNoiseFloor += (prob - g_vadNoiseFloor) * 0.001f;
     }
-    float closeTh = g_vadNoiseFloor + 0.15f;
-    if (closeTh < 0.35f) closeTh = 0.35f;
-    if (closeTh > 0.60f) closeTh = 0.60f;
-    if (lastProb >= 0.50f) {
+    // Fixed hysteresis: open at 0.50, close at 0.30. Between the lines
+    // the last decision holds (plus hangover), so quiet speech is never
+    // cut by a drifting close line.
+    const float kVadOpen = 0.50f, kVadClose = 0.30f;
+    if (lastProb >= kVadOpen) {
         g_vadHang = 30;
         g_vadGain += (1.0f - g_vadGain) * 0.5f;
         if (g_vadGain > 0.99f) g_vadGain = 1.0f;
-    } else if (lastProb <= closeTh) {
+    } else if (lastProb <= kVadClose) {
         if (g_vadHang > 0) {
             g_vadHang--;
         } else {
@@ -789,7 +812,12 @@ void BuildDisplayIndices() {
     };
     snap(g_micIndex, g_micDisplayIndices);
     snap(g_refIndex, g_refDisplayIndices);
-    snap(g_outIndex, g_outDisplayIndices);
+    // Output prefers CABLE Input (fresh installs land on it, not index 0).
+    int cable = FindCableInputIndex();
+    bool outKept = false;
+    for (int v : g_outDisplayIndices) if (v == g_outIndex) { outKept = true; break; }
+    if (!outKept) g_outIndex = (cable >= 0) ? cable
+        : (g_outDisplayIndices.empty() ? 0 : g_outDisplayIndices[0]);
 }
 
 void EnumerateDevices() {
@@ -827,7 +855,14 @@ void EnumerateDevices() {
     };
     int mi = findBy(g_captureDevices, micName);   if (mi >= 0) g_micIndex = mi; else g_micIndex = 0;
     int ri = findBy(g_playbackDevices, refName);  if (ri >= 0) g_refIndex = ri; else g_refIndex = 0;
-    int oi = findBy(g_playbackDevices, outName);  if (oi >= 0) g_outIndex = oi; else g_outIndex = 0;
+    int oi = findBy(g_playbackDevices, outName);
+    if (oi >= 0) {
+        g_outIndex = oi;
+    } else {
+        // Saved output gone (or first run): prefer CABLE Input over index 0.
+        int cable = FindCableInputIndex();
+        g_outIndex = (cable >= 0) ? cable : 0;
+    }
 
     BuildDisplayIndices();
 }
@@ -844,6 +879,18 @@ void StartAEC() {
     if (g_micIndex >= (int)g_captureDevices.size())  g_micIndex = 0;
     if (g_refIndex >= (int)g_playbackDevices.size()) g_refIndex = 0;
     if (g_outIndex >= (int)g_playbackDevices.size()) g_outIndex = 0;
+
+    // Self-monitor routes the cleaned mic to the speakers (Speaker
+    // Reference) instead of Output; otherwise Output must be usable.
+    // Without VB-CABLE installed/enabled there is nowhere to send the
+    // cleaned mic, so refuse to start with a pointer at the fix.
+    int outIdx = g_outIndex;
+    if (g_listenToSelf) {
+        outIdx = g_refIndex;
+    } else if (!CableInputPresent()) {
+        snprintf(g_statusText, 128, "VB-CABLE not found — install/enable CABLE Input");
+        return;
+    }
 
     SaveSettings();
     ReinitEngine();
@@ -891,7 +938,7 @@ void StartAEC() {
     outCfg.sampleRate = sr;
     outCfg.periodSizeInFrames = fs;
     outCfg.dataCallback = output_callback;
-    outCfg.playback.pDeviceID = &g_playbackDevices[g_outIndex].id;
+    outCfg.playback.pDeviceID = &g_playbackDevices[outIdx].id;
 
     if (ma_device_init(&g_context, &micCfg,  &g_micDevice) != MA_SUCCESS) {
         snprintf(g_statusText, 128, "Failed to init mic");
@@ -920,7 +967,8 @@ void StartAEC() {
         (g_engine.type == ENGINE_AEC3)  ? "AEC3" :
         (g_engine.type == ENGINE_NKF)   ? "NKF-AEC" :
         (g_engine.type == ENGINE_DTLN)  ? "DTLN-AEC" : "LocalVQE";
-    snprintf(g_statusText, 128, "Running (%d Hz, %s)", sr, engineName);
+    snprintf(g_statusText, 128, "Running (%d Hz, %s)%s", sr, engineName,
+             g_listenToSelf ? " [monitor]" : "");
 }
 
 void StopAEC() {
@@ -1059,8 +1107,29 @@ void DrawDevicesSection() {
     ImGui::SameLine();
     ImGui::TextUnformatted("Output");
     ImGui::SameLine(labelCol);
-    FilteredDeviceCombo("Output", "Where the cleaned mic goes. Select CABLE Input",
+    FilteredDeviceCombo("Output", "Where the cleaned mic goes. CABLE Input is picked automatically",
                         g_outIndex, g_playbackDevices, g_outDisplayIndices);
+
+    if (!CableInputPresent()) {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
+            "VB-CABLE not found — install VB-CABLE and enable CABLE Input,");
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
+            "then hit Refresh (or tick Listen to myself below).");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Free download: vb-audio.com/Cable/ (reboot after install).\n"
+                              "Windows lists only enabled devices — a disabled CABLE Input\n"
+                              "looks the same as not installed: check Sound settings too.");
+    }
+
+    ImGui::Spacing();
+    if (ImGui::Checkbox("Listen to myself", &g_listenToSelf)) {
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Monitor mode: the cleaned mic goes to your Speaker Reference\n"
+                          "device so you hear yourself — nothing is sent to VB-CABLE.\n"
+                          "Untick to route back to Output (CABLE Input for Discord).");
 
     ImGui::EndDisabled();
 }
@@ -1136,7 +1205,9 @@ void DrawEngineSection() {
             MarkPresetCustom();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("SpeexDSP residual echo + noise cleaner\nMay make voice sound processed");
+            ImGui::SetTooltip("SpeexDSP residual echo + noise cleaner\n"
+                              "Stacks with the Voice gate below — both suppress at once,\n"
+                              "which can sound aggressive. Try gate-only first.");
     } else if (g_engineIndex == ENGINE_AEC3) {
         ImGui::TextDisabled("Echo tail and cleanup are only available for SpeexDSP.");
         ImGui::TextDisabled("AEC3 handles these internally.");

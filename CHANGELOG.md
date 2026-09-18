@@ -5,6 +5,33 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Output auto-selects CABLE Input.** Fresh installs (or a saved
+  device that disappeared) land on CABLE Input instead of index 0;
+  plus a **Listen to myself** tick that routes the cleaned mic to
+  your Speaker Reference device for monitoring (nothing goes to
+  VB-CABLE). Choice is saved; status shows `[monitor]` while active.
+- **VB-CABLE missing warning.** When no CABLE device is present, the
+  Devices section shows a red hint (install/enable + Refresh), and
+  Start refuses with a status message unless Listen-to-myself is on.
+  (Windows lists only enabled devices, so disabled looks the same as
+  not installed — the hint covers both.)
+
+### Changed
+
+- **Voice gate is now pure neural VAD.** The adaptive close line
+  (noise floor + 0.15) is nuked: fixed hysteresis, open at 0.50,
+  close at 0.30 — the uncertain band holds the last decision, so
+  quiet speech is never cut by a drifting close line. Hangover,
+  fades, and fail-open bypass unchanged.
+- **Noisy Room preset no longer enables Speex cleanup.** Speex
+  preprocess stacks with the voice gate (double suppression, sounds
+  aggressive); the gate alone does the silencing now. The cleanup
+  tooltip warns about the stacking.
+
 ## [1.3.1] — 2026-09-18
 
 - **Download:** [AEC-Client-v1.3.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.3.1/AEC-Client-v1.3.1-win64.zip) (Windows 10/11 64-bit)
