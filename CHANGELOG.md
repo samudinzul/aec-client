@@ -31,10 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preprocess stacks with the voice gate (double suppression, sounds
   aggressive); the gate alone does the silencing now. The cleanup
   tooltip warns about the stacking.
-- **SpeexDSP at 48 kHz gets a lenient gate pair (0.40 / 0.20).**
-  Its downsampled VAD feed under-scores loud speech (hot mic, prob
-  stuck low), so the standard 0.50 / 0.30 cut into words. All other
-  engine/rate combos unchanged.
+- **SpeexDSP gets a very lenient gate pair (0.30 / 0.10).**
+  Silero under-scores Speex output at both rates (hot mic, prob stuck
+  low), so the gate stays open on anything speech-like and only true
+  silence (~0.01, 10x margin) still mutes. All other engines keep
+  0.50 / 0.30.
 
 ## [1.3.1] — 2026-09-18
 
