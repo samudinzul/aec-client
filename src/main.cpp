@@ -635,8 +635,9 @@ static void VadReset() {
 // metering so meters show what Discord hears. Lock-free, no allocation:
 // 512-sample inference runs inline (< 1 ms). Pure neural decision with
 // fixed hysteresis — open at 0.50, close at 0.30 (uncertain band holds
-// the last decision); ~30 ms fade open, ~50 ms fade to hard mute,
-// 300 ms hangover against clipping word tails.
+// the last decision); SpeexDSP at 48 kHz excepted (0.40 / 0.20: its
+// resampled feed scores low even on loud speech). ~30 ms fade open,
+// ~50 ms fade to hard mute, 300 ms hangover against clipping word tails.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
     if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
@@ -683,8 +684,14 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     }
     // Fixed hysteresis: open at 0.50, close at 0.30. Between the lines
     // the last decision holds (plus hangover), so quiet speech is never
-    // cut by a drifting close line.
-    const float kVadOpen = 0.50f, kVadClose = 0.30f;
+    // cut by a drifting close line. SpeexDSP at 48 kHz gets a lenient
+    // pair (0.40 / 0.20): its downsampled feed under-scores loud speech,
+    // observed live as hot mic meter with prob stuck ~0.2-0.4.
+    float kVadOpen = 0.50f, kVadClose = 0.30f;
+    if (g_engine.type == ENGINE_SPEEX && sr == 48000) {
+        kVadOpen = 0.40f;
+        kVadClose = 0.20f;
+    }
     if (lastProb >= kVadOpen) {
         g_vadHang = 30;
         g_vadGain += (1.0f - g_vadGain) * 0.5f;
