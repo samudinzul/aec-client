@@ -5,6 +5,17 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — 2026-09-18
+
+- **Download:** [AEC-Client-v1.3.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.3.1/AEC-Client-v1.3.1-win64.zip) (Windows 10/11 64-bit)
+
+### Fixed
+
+- **Second launch now brings the app window forward.** The
+  single-instance lookup used a hardcoded "v1.0.0" window title, so on
+  every later version the duplicate exited without focusing the
+  running window. The title is now built from the app version.
+
 ## [1.3.0] — 2026-09-18
 
 - **Download:** [AEC-Client-v1.3.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.3.0/AEC-Client-v1.3.0-win64.zip) (Windows 10/11 64-bit)
