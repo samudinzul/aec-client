@@ -183,7 +183,9 @@ EngineState g_engine;
 
 // ============================================================
 //  Silero voice gate (neural VAD -> fixed gate -> output)
-//  Post-AEC: speech passes, silence is muted. Live at 16 kHz direct
+//  Post-AEC: speech passes, silence is muted — all engines except
+//  SpeexDSP, which bypasses the gate (Silero under-scores its output
+//  at both rates, so any gate just eats words). Live at 16 kHz direct
 //  and 48 kHz via internal downsample (feed only). g_vadGain/g_vadHang
 //  live on the audio thread; UI only reads the atomics.
 // ============================================================
@@ -635,12 +637,19 @@ static void VadReset() {
 // metering so meters show what Discord hears. Lock-free, no allocation:
 // 512-sample inference runs inline (< 1 ms). Pure neural decision with
 // fixed hysteresis — open at 0.50, close at 0.30 (uncertain band holds
-// the last decision); SpeexDSP excepted (0.30 / 0.10: Silero under-scores
-// its output at both rates, so the gate stays almost always open and
-// only true silence ~0.01 still mutes). ~30 ms fade open, ~50 ms fade
+// the last decision). SpeexDSP bypasses the gate entirely (see below),
+// so no per-engine pairs remain here. ~30 ms fade open, ~50 ms fade
 // to hard mute, 300 ms hangover against clipping word tails.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
+    // SpeexDSP bypass: Silero under-scores its output at both rates even
+    // on loud speech, so any gate threshold eats words. Raw Speex output
+    // passes untouched; all other engines are gated below.
+    if (g_engine.type == ENGINE_SPEEX) {
+        g_vadGain = 1.0f;
+        g_vadHang = 0;
+        return;
+    }
     if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
         g_vadGain = 1.0f;
         g_vadHang = 0;
@@ -685,15 +694,8 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     }
     // Fixed hysteresis: open at 0.50, close at 0.30. Between the lines
     // the last decision holds (plus hangover), so quiet speech is never
-    // cut by a drifting close line. SpeexDSP gets a very lenient pair
-    // (0.30 / 0.10) at both rates: Silero under-scores its output even
-    // on loud speech, so the gate stays open on anything speech-like
-    // and only true silence (~0.01, 10x margin) still mutes.
-    float kVadOpen = 0.50f, kVadClose = 0.30f;
-    if (g_engine.type == ENGINE_SPEEX) {
-        kVadOpen = 0.30f;
-        kVadClose = 0.10f;
-    }
+    // cut by a drifting close line.
+    const float kVadOpen = 0.50f, kVadClose = 0.30f;
     if (lastProb >= kVadOpen) {
         g_vadHang = 30;
         g_vadGain += (1.0f - g_vadGain) * 0.5f;
@@ -1282,6 +1284,8 @@ void DrawVadSection() {
     if (!g_vad) {
         ImGui::TextDisabled("Silero model not found in models/ — gate is off.");
         ImGui::TextDisabled("Add models/silero_vad.onnx (link in LICENSES/THIRD-PARTY.txt).");
+    } else if (g_selectedEngine.load() == ENGINE_SPEEX) {
+        ImGui::TextDisabled("Gate bypassed for SpeexDSP — raw output passes through.");
     } else if (enabled) {
         float prob = g_vadProb.load();
         float ms = g_vadMs.load();
