@@ -43,6 +43,13 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 // ============================================================
+//  App identity (kept above single-instance: the focus-steal title
+//  is built from these at runtime)
+// ============================================================
+#define APP_NAME    "AEC Client"
+#define APP_VERSION "1.3.0"
+
+// ============================================================
 //  Single-instance protection
 // ============================================================
 #ifdef _WIN32
@@ -60,8 +67,12 @@ static bool AcquireSingleInstance() {
     }
 
     if (err == ERROR_ALREADY_EXISTS) {
-        // Another instance is running — try to bring it to front
-        HWND existing = FindWindowW(NULL, L"AEC Client v1.0.0");
+        // Another instance is running — try to bring it to front.
+        // Title is built from APP_VERSION (a hardcoded "v1.0.0" here
+        // silently broke focus-steal on every later version).
+        wchar_t title[64];
+        swprintf(title, 64, L"%hs v%hs", APP_NAME, APP_VERSION);
+        HWND existing = FindWindowW(NULL, title);
         if (existing) {
             ShowWindow(existing, SW_SHOW);
             ShowWindow(existing, SW_RESTORE);
@@ -83,12 +94,6 @@ static void ReleaseSingleInstance() {
     }
 }
 #endif
-
-// ============================================================
-//  App identity
-// ============================================================
-#define APP_NAME    "AEC Client"
-#define APP_VERSION "1.3.0"
 
 // ============================================================
 //  Tray icon (Windows)
