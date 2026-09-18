@@ -13,6 +13,7 @@
 - [What It Does](#what-it-does)
 - [Features](#features)
 - [Quick Start](#quick-start)
+- [Voice Gate](#voice-gate)
 - [Engine Comparison](#engine-comparison)
 - [Runtime Dependencies](#runtime-dependencies)
 - [Architecture](#architecture)
@@ -33,11 +34,11 @@ AEC Client routes your microphone through one of **five acoustic echo cancellati
 
 ```
 Microphone ─────────────────┐
-                            ├─→ AEC Engine ─→ VB-CABLE ─→ Discord
-Speakers (loopback) ────────┘
+                             ├─→ AEC Engine ─→ Voice gate ─→ VB-CABLE ─→ Discord
+Speakers (loopback) ────────┘                   (speech passes, silence muted)
 ```
 
-No more headphones. No more echo.
+No more headphones. No more echo. No dead-air noise.
 
 ---
 
@@ -52,12 +53,13 @@ No more headphones. No more echo.
 - **Low CPU usage** — under 2% on a typical desktop
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
-- **Selectable sample rate** (16 / 32 / 48 kHz)
+- **Selectable sample rate** (16 / 48 kHz)
 - **Optional system tray** — runs in the background like a real utility
 - **Device filtering** — virtual cables hidden from Mic/Reference dropdowns
 - **Live level meters** with peak-hold
 - **Presets** for common scenarios (Discord, Low CPU, High Quality, Noisy Room)
 - **Clock-drift correction** — stable over long calls
+- **Voice gate** — a tiny neural network mutes silence, passes speech (16/48 kHz, on by default, one checkbox)
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
@@ -85,15 +87,26 @@ Done. Talk normally with speakers on.
 
 ---
 
+## Voice Gate
+
+After echo cancellation, a tiny neural network (Silero VAD, ~2 MB) checks for speech 30 times a second. Speech passes to Discord; silence is muted. No setup, no recording — it's on by default.
+
+- Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = muted.
+- It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
+- Uncheck **Voice gate** in the Audio tab to pass original audio through.
+- Works at **16 and 48 kHz** (the model itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — the neural engines always qualify; for Speex/AEC3 pick 16000 or 48000.
+
+---
+
 ## Engine Comparison
 
 | Engine | Voice quality | Double-talk | CPU | Sample Rate | Latency | Best For |
 |--------|---------------|-------------|-----|-------------|---------|----------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/32/48 kHz | ~40 ms | Best overall |
+| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Best overall |
 | **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
 | **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
 | **NKF-AEC** | ⭐⭐⭐ | ⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
-| **SpeexDSP** | ⭐⭐⭐ | ⭐⭐ | Very low | 16/32/48 kHz | ~30 ms | Low-power hardware |
+| **SpeexDSP** | ⭐⭐⭐ | ⭐⭐ | Very low | 16/48 kHz | ~30 ms | Low-power hardware |
 
 *Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Ranks are research-based (published challenge scores, algorithm design, in-app listening) — your ears outrank this table.*
 
@@ -110,7 +123,7 @@ The release ZIP bundles all required DLLs:
 | `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
 | `liblocalvqe.dll` | ~458 KB | LocalVQE neural engine |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 |
-| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback) |
+| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback, Silero VAD) |
 | `ggml.dll` | ~93 KB | GGML runtime (LocalVQE) |
 | `ggml-base.dll` | ~860 KB | GGML base |
 | `ggml-cpu-*.dll` (15 files) | ~18 MB total | CPU backend variants |
@@ -146,6 +159,7 @@ The release ZIP bundles all required DLLs:
 
 - **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
 - **No heap allocation in audio callback** — stack buffers only
+- **Sub-10 ms gate decisions** — 512-sample VAD inference inline (< 1 ms), no worker thread
 - **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
 - **Engine abstraction** — runtime swap between 5 engines with a single enum + function pointer
 - **Settings persistence** — plain text `aec_config.txt`
@@ -196,7 +210,7 @@ The release ZIP bundles all required DLLs:
 | **[GLFW](https://www.glfw.org/)** | C | Window + OpenGL context |
 | **[OpenGL](https://www.opengl.org/)** | — | Rendering backend |
 | **[stb_image](https://github.com/nothings/stb)** | C (single-header) | Image loading for wallpapers |
-| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback) |
+| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback, Silero VAD) |
 | **[GGML](https://github.com/ggml-org/ggml)** | C/C++ | Neural inference (LocalVQE) |
 | **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC and DTLN-AEC |
 | **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
@@ -236,7 +250,7 @@ LocalVQE is a compact neural echo canceller from **LocalAI** that uses a **DAF (
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms (256-sample hop + processing window)
 - **CPU**: ~0.83 ms per 16 ms frame (19× realtime)
-- **Residual noise gate**: -45 dBFS default (cleans quiet residual without muting voice)
+- **Residual noise gate**: off since v1.2.1 (was muting word tails; the joint network suppresses noise on its own)
 
 The wrapper at `src/localvqe_wrapper.cpp` handles:
 - Frame accumulation (256-sample hops)
@@ -349,6 +363,11 @@ cp third_party/REAL_TIME_NKF_AEC/python/nkf.onnx models/
 #   into models/, plus a Windows tensorflowlite_c.dll next to aec_gui.exe
 # Option B (no new DLL): convert the pair to
 #   models/dtln_aec_512_1.onnx + models/dtln_aec_512_2.onnx
+
+# Silero VAD voice gate (optional — gate reports "model not found" until
+# vendored, ~2.2 MB, MIT, sha256 1a153a22… = upstream v6.2.1)
+curl -L -o models/silero_vad.onnx \
+  "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
 ```
 
 ### Build the Main App
@@ -384,7 +403,8 @@ aec-client/
 │   ├── aec3_wrapper.cpp/.h         WebRTC AEC3 C wrapper
 │   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper
 │   ├── localvqe_wrapper.cpp/.h     LocalVQE C wrapper
-│   └── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
+│   ├── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
+│   └── silero_wrapper.cpp/.h       Silero VAD C wrapper (voice gate)
 │
 ├── include/
 │   ├── miniaudio.h                 Audio I/O
@@ -407,7 +427,8 @@ aec-client/
 ├── models/
 │   ├── nkf.onnx                    NKF model (45 KB)
 │   ├── localvqe-v1.4-aec-200K-f32.gguf   LocalVQE model (2.8 MB)
-│   └── dtln_aec_512_{1,2}.tflite|.onnx  DTLN models (user-supplied, optional)
+│   ├── dtln_aec_512_{1,2}.tflite|.onnx  DTLN models (user-supplied, optional)
+│   └── silero_vad.onnx             Silero VAD model (2.2 MB, user-supplied, optional)
 │
 ├── screenshots/
 │   └── main.png                    README image
@@ -417,6 +438,9 @@ aec-client/
 ├── release/                        Distribution builds (gitignored)
 │
 ├── CMakeLists.txt                  Build configuration
+├── scripts/
+│   ├── make-release.sh             Release bundle + zip builder
+│   └── README.txt                  End-user doc template (%%VERSION%%)
 ├── README.md                       This file
 ├── LICENSE                         MIT
 ├── CHANGELOG.md                    Version history
@@ -440,6 +464,7 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **NKF-AEC** — Jiang et al., ICASSP 2023 (MIT)
 - **DTLN-AEC** — Westhausen & Meyer, ICASSP 2021 (MIT)
 - **LocalVQE** — LocalAI (Apache-2.0)
+- **Silero VAD** — Silero Team (MIT)
 - **ONNX Runtime** — Microsoft (MIT)
 - **GGML** — The GGML authors (MIT)
 - **Dear ImGui** — Omar Cornut (MIT)

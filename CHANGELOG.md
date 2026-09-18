@@ -5,6 +5,36 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-09-18
+
+- **Download:** [AEC-Client-v1.3.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.3.0/AEC-Client-v1.3.0-win64.zip) (Windows 10/11 64-bit)
+
+### Added
+
+- **Voice gate (Silero VAD → adaptive gate → output)** — post-AEC
+  neural speech detector (snakers4/silero-vad v6.2.1, MIT, ~2.2 MB,
+  sha256-verified): speech passes, silence is muted. No setup, no
+  recording, ON by default (one checkbox to disable, choice saved)
+  - New `src/silero_wrapper.{h,cpp}`: 512-sample streaming chunks
+    with 64-sample context (upstream recipe), LSTM state carried
+    across chunks, reset on Start/Stop/engine change; already-linked
+    ONNX Runtime, no new DLL; < 1 ms per chunk, runs inline on the
+    audio thread — no worker, 32 ms cadence
+  - Adaptive gate: fixed 0.5 open line with a noise-floor-tracking
+    close line (+0.15, clamped) against flutter; ~30 ms fade open,
+    ~50 ms fade to hard mute, 300 ms hangover against clipping tails
+  - 16 and 48 kHz live (model is 16 kHz fixed; at 48 kHz a
+    miniaudio downsample feeds only the detector — proven
+    0.945/0.008 vs native 0.956/0.010 speech/noise, so audio stays
+    full-rate with no accuracy cost); green **SPEAKING** / grey
+    **SILENT** header pill + live probability readout in the Audio tab
+
+### Removed
+
+- **32 kHz sample rate** — rates are now 16 / 48 kHz only: the
+  dropdown, `Noisy Room` preset (now 48 kHz), and saved configs
+  (old 32 kHz entries land on 48 kHz automatically) all migrated
+
 ## [1.2.1] — 2026-09-17
 
 - **Download:** [AEC-Client-v1.2.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.2.1/AEC-Client-v1.2.1-win64.zip) (Windows 10/11 64-bit)

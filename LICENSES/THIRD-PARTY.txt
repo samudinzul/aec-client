@@ -50,6 +50,14 @@ AEC Client bundles the following open-source libraries:
     Copyright (C) 2017 Adam Stark
     License: MIT
 
+11. Silero VAD (voice gate, post-AEC speech/silence)
+    Upstream: snakers4/silero-vad v6.2.1 (~2.2 MB, ~309K params,
+    16 kHz, 512-sample streaming chunks)
+    Source: https://github.com/snakers4/silero-vad/blob/master/src/silero_vad/data/silero_vad.onnx
+    License: MIT, Copyright (c) 2020-present Silero Team
+    File (download on demand, not committed):
+      models/silero_vad.onnx (sha256 1a153a22…)
+
 Full license texts are available at the source URLs listed in the
 project repository:
 https://github.com/samudinzul/aec-client
