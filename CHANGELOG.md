@@ -31,10 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle previously read as eternal silence; it now nulls to
   gate-off with the correct UI notice.
 - **One-tap voice-gate calibration.** "Calibrate for my mic" works
-  idle or running (auto-starts audio, stays running after so the
-  SPEAKING pill verifies it) and listens 5 s while you speak, then
-  sets open/close thresholds from measured probs (quiet mics land
-  ~0.20/0.12, loud mics stay ~0.45/0.27); rejects flat/silent takes
+  idle or running (auto-starts audio, back to idle after with Start
+  clickable — an already-running session stays up) and listens 5 s
+  while you speak, then sets open/close thresholds from measured
+  probs (quiet mics land ~0.20/0.12, loud mics stay ~0.45/0.27); rejects flat/silent takes
   with a keep-old message. Step-process like Learn my voice, with
   Re-calibrate + Reset (0.50/0.30); re-calibrate after mic/engine
   switch. Bounded one-shot — no mid-call drift, so the v1.3.1

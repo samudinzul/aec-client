@@ -224,6 +224,7 @@ Clock::time_point  g_vadCalStart;          // UI thread only
 std::vector<float> g_vadCalSamples;        // UI thread only (prob samples)
 std::string        g_vadCalMsg;            // result / error line, UI thread only
 bool               g_vadCalMsgIsErr = false;
+bool               g_vadCalWasRunning = false;  // restore idle after auto-started calibration
 #define VAD_CAL_SECONDS 5
 float              g_vadGain = 1.0f;      // audio thread only
 int                g_vadHang = 0;         // audio thread only (300 ms hangover)
@@ -621,6 +622,7 @@ void ResetToDefaults() {
     g_vadCalibrating.store(false);
     g_vadCalSamples.clear();
     g_vadCalMsg.clear();
+    g_vadCalWasRunning = false;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
@@ -1584,6 +1586,13 @@ void DrawVadSection() {
             ImGui::TextDisabled("Silent (%.2f)", prob);
         // One-tap calibration: 5 s of normal speech sets open/close from
         // measured probs. Bounded + persisted — no mid-call drift.
+        if (g_vadCalibrating.load() && !g_isRunning) {
+            // User hit Stop mid-calibration — abort, don't judge stale audio.
+            g_vadCalibrating.store(false);
+            g_vadCalSamples.clear();
+            g_vadCalMsg = "Stopped — calibration cancelled.";
+            g_vadCalMsgIsErr = true;
+        }
         if (g_vadCalibrating.load()) {
             g_vadCalSamples.push_back(prob);
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1598,6 +1607,7 @@ void DrawVadSection() {
                 g_vadCalibrating.store(false);
                 g_vadCalSamples.clear();
                 g_vadCalMsg.clear();
+                if (!g_vadCalWasRunning && g_isRunning) StopAEC();  // undo auto-start
             }
             if (elapsed >= VAD_CAL_SECONDS * 1000) {
                 g_vadCalibrating.store(false);
@@ -1639,6 +1649,10 @@ void DrawVadSection() {
                         g_vadCalMsgIsErr = false;
                     }
                 }
+                // Learn-my-voice contract: back to idle after, Start clickable.
+                // Only undo the auto-start — a session that was already
+                // running stays running.
+                if (!g_vadCalWasRunning && g_isRunning) StopAEC();
             }
         } else {
             float openT = g_vadOpen.load(), closeT = g_vadClose.load();
@@ -1650,10 +1664,11 @@ void DrawVadSection() {
                                   "Reset restores 0.50/0.30.");
             // Step-process like Learn my voice: works idle (auto-starts
             // the session) or running; 5 s listen, then a kept result
-            // with Re-calibrate. Stays running after — speak and watch
-            // the SPEAKING pill to verify.
+            // with Re-calibrate. Back to idle after when it auto-started
+            // (Start clickable again); an already-running session stays up.
             const char* calLabel = custom ? "Re-calibrate" : "Calibrate for my mic";
             if (ImGui::Button(calLabel, ImVec2(180, 0))) {
+                g_vadCalWasRunning = g_isRunning;
                 if (!g_isRunning) StartAEC();
                 if (!g_isRunning || g_vad == nullptr) {
                     g_vadCalMsg = "Couldn't start audio — check devices / status above.";
@@ -1668,7 +1683,7 @@ void DrawVadSection() {
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Starts audio if needed, then listens 5 s while you speak.\n"
-                                  "Stays running after — speak and watch SPEAKING.");
+                                  "Back to idle after — press Start to use it.");
             ImGui::SameLine();
             if (custom && ImGui::Button("Reset", ImVec2(80, 0))) {
                 g_vadOpen.store(0.50f);
