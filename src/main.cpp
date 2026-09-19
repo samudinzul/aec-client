@@ -1505,8 +1505,6 @@ void DrawEngineSection() {
 
     const char* rates[] = { "16000", "48000" };
     if (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
-        ImGui::TextUnformatted("Sample rate");
-        ImGui::SameLine(labelCol);
         ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("This engine always runs at 16 kHz — nothing to choose.");
