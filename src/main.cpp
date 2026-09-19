@@ -225,6 +225,7 @@ std::vector<float> g_vadCalSamples;        // UI thread only (prob samples)
 std::string        g_vadCalMsg;            // result / error line, UI thread only
 bool               g_vadCalMsgIsErr = false;
 bool               g_vadCalWasRunning = false;  // restore idle after auto-started calibration
+bool               g_calMonitor = false;  // one-shot: next StartAEC routes to speakers (calibration monitor)
 #define VAD_CAL_SECONDS 5
 float              g_vadGain = 1.0f;      // audio thread only
 int                g_vadHang = 0;         // audio thread only (300 ms hangover)
@@ -1191,7 +1192,9 @@ void StartAEC() {
     // Without VB-CABLE installed/enabled there is nowhere to send the
     // cleaned mic, so refuse to start with a pointer at the fix.
     int outIdx = g_outIndex;
-    if (g_listenToSelf) {
+    // Calibration monitor: hear yourself through the speakers while the
+    // 5 s listen runs (same path as Listen-to-myself; needs no CABLE).
+    if (g_listenToSelf || g_calMonitor) {
         outIdx = g_refIndex;
     } else if (!CableInputPresent()) {
         snprintf(g_statusText, 128, "VB-CABLE not found — install/enable CABLE Input");
@@ -1290,7 +1293,7 @@ void StartAEC() {
         (g_engine.type == ENGINE_NKF)   ? "NKF-AEC" :
         (g_engine.type == ENGINE_DTLN)  ? "DTLN-AEC" : "LocalVQE";
     snprintf(g_statusText, 128, "Running (%d Hz, %s)%s", sr, engineName,
-             g_listenToSelf ? " [monitor]" : "");
+             (g_listenToSelf || g_calMonitor) ? " [monitor]" : "");
 }
 
 void StopAEC() {
@@ -1669,7 +1672,11 @@ void DrawVadSection() {
             const char* calLabel = custom ? "Re-calibrate" : "Calibrate for my mic";
             if (ImGui::Button(calLabel, ImVec2(180, 0))) {
                 g_vadCalWasRunning = g_isRunning;
+                // Idle path monitors through the speakers (hear yourself +
+                // live meters, no CABLE needed) — consumed by Start below.
+                g_calMonitor = !g_isRunning;
                 if (!g_isRunning) StartAEC();
+                g_calMonitor = false;
                 if (!g_isRunning || g_vad == nullptr) {
                     g_vadCalMsg = "Couldn't start audio — check devices / status above.";
                     g_vadCalMsgIsErr = true;
@@ -1682,8 +1689,9 @@ void DrawVadSection() {
                 }
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Starts audio if needed, then listens 5 s while you speak.\n"
-                                  "Back to idle after — press Start to use it.");
+                ImGui::SetTooltip("Starts audio if needed (you'll hear yourself),\n"
+                                  "then listens 5 s while you speak. Back to idle\n"
+                                  "after — press Start to use it.");
             ImGui::SameLine();
             if (custom && ImGui::Button("Reset", ImVec2(80, 0))) {
                 g_vadOpen.store(0.50f);

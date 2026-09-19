@@ -31,8 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle previously read as eternal silence; it now nulls to
   gate-off with the correct UI notice.
 - **One-tap voice-gate calibration.** "Calibrate for my mic" works
-  idle or running (auto-starts audio, back to idle after with Start
-  clickable — an already-running session stays up) and listens 5 s
+  idle or running (auto-starts audio with monitor routing — you'll
+  hear yourself with live meters, no CABLE needed; back to idle
+  after with Start clickable — an already-running session stays up) and listens 5 s
   while you speak, then sets open/close thresholds from measured
   probs (quiet mics land ~0.20/0.12, loud mics stay ~0.45/0.27); rejects flat/silent takes
   with a keep-old message. Step-process like Learn my voice, with
