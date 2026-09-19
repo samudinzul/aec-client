@@ -1,0 +1,27 @@
+AEC Client Rebuild Log - Started Sat Sep 19 2026
+==================================================
+
+STEP 1: Build NKF-AEC engine
+---------------------------
+Command: cd C:\aec-opencode\third_party\REAL_TIME_NKF_AEC\c && cmake -B build -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/mingw32-make.exe
+Command: cmake --build build
+Expected output: libnkf_aec.dll in build/
+
+STEP 2: Build LocalVQE GGML engine
+----------------------------------
+Command: cd C:\aec-opencode\third_party\LocalVQE\ggml && cmake -B build -G Ninja -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe -DLOCALVQE_BUILD_SHARED=ON -DBUILD_TESTING=OFF
+Command: cmake --build build --target localvqe_shared
+Expected output: build/bin/liblocalvqe.dll and build/liblocalvqe.dll.a
+
+STEP 3: Build main AEC GUI application
+--------------------------------------
+Command: cd C:\aec-opencode && cmake -B build -G Ninja -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+Command: cmake --build build
+Expected output: build/aec_gui.exe
+
+STEP 4: Run make-release.sh
+--------------------------
+Command: bash scripts/make-release.sh 1.3.2
+Expected output: release/AEC-Client-v1.3.2-win64.zip
+
+Overall check: What files exist after each step?
