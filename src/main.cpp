@@ -1590,8 +1590,10 @@ void DrawVadSection() {
                 Clock::now() - g_vadCalStart).count();
             int left = VAD_CAL_SECONDS - (int)(elapsed / 1000);
             if (left < 0) left = 0;
+            int pct = (int)(elapsed * 100 / (VAD_CAL_SECONDS * 1000));
+            if (pct > 100) pct = 100;
             ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
-                "Calibrating… keep speaking normally (%ds left)", left);
+                "Calibrating… keep speaking normally (%d%%, %ds left)", pct, left);
             if (ImGui::Button("Cancel", ImVec2(120, 0))) {
                 g_vadCalibrating.store(false);
                 g_vadCalSamples.clear();
@@ -1646,18 +1648,27 @@ void DrawVadSection() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Open/close lines. Calibrate rewrites them;\n"
                                   "Reset restores 0.50/0.30.");
-            bool canCal = g_isRunning && g_vad != nullptr;
-            if (!canCal) ImGui::BeginDisabled();
-            if (ImGui::Button("Calibrate for my mic", ImVec2(180, 0))) {
-                g_vadCalSamples.clear();
-                g_vadCalSamples.reserve(400);
-                g_vadCalMsg.clear();
-                g_vadCalStart = Clock::now();
-                g_vadCalibrating.store(true);
+            // Step-process like Learn my voice: works idle (auto-starts
+            // the session) or running; 5 s listen, then a kept result
+            // with Re-calibrate. Stays running after — speak and watch
+            // the SPEAKING pill to verify.
+            const char* calLabel = custom ? "Re-calibrate" : "Calibrate for my mic";
+            if (ImGui::Button(calLabel, ImVec2(180, 0))) {
+                if (!g_isRunning) StartAEC();
+                if (!g_isRunning || g_vad == nullptr) {
+                    g_vadCalMsg = "Couldn't start audio — check devices / status above.";
+                    g_vadCalMsgIsErr = true;
+                } else {
+                    g_vadCalSamples.clear();
+                    g_vadCalSamples.reserve(400);
+                    g_vadCalMsg.clear();
+                    g_vadCalStart = Clock::now();
+                    g_vadCalibrating.store(true);
+                }
             }
-            if (!canCal) ImGui::EndDisabled();
-            if (!canCal && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Press Start first — calibration listens to the live detector.");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Starts audio if needed, then listens 5 s while you speak.\n"
+                                  "Stays running after — speak and watch SPEAKING.");
             ImGui::SameLine();
             if (custom && ImGui::Button("Reset", ImVec2(80, 0))) {
                 g_vadOpen.store(0.50f);
