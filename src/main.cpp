@@ -167,7 +167,7 @@ struct Preset {
 };
 
 static const Preset PRESETS[] = {
-    { "Custom",               1, 1, 1, false, 1.00f, 1.00f },
+    { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
     { "Low CPU",              0, 0, 0, false, 1.00f, 1.00f },
     { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
@@ -226,6 +226,10 @@ std::vector<int> g_outDisplayIndices;
 
 int  g_micIndex = 0, g_refIndex = 0, g_outIndex = 0;
 bool g_listenToSelf = false;  // self-monitor: route cleaned mic to Speaker Reference instead of Output
+bool g_isFirstRun = false;      // no config file at launch: show the setup card
+bool g_sessionStartedOnce = false;  // setup card retires after first Start
+bool g_advancedOpen = false;    // Advanced collapse state (persisted)
+bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
 int  g_engineIndex = 1, g_sampleRateIndex = 1, g_filterIndex = 2;
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
@@ -497,18 +501,21 @@ void SaveSettings() {
       << g_presetIndex << "\n"
        << (g_minimizeToTray ? 1 : 0) << "\n"
        << (g_vadEnabled.load() ? 1 : 0) << "\n"
-       << (g_listenToSelf ? 1 : 0) << "\n";
+       << (g_listenToSelf ? 1 : 0) << "\n"
+       << (g_advancedOpen ? 1 : 0) << "\n";
 }
 
 void LoadSettings() {
     std::ifstream f("aec_config.txt");
+    g_isFirstRun = !f.is_open();
+    g_advancedOpen = !g_isFirstRun;  // newcomers start simple; regulars keep full view
     if (!f.is_open()) return;
     int mg, og;
     if (f >> g_micIndex >> g_refIndex >> g_outIndex
           >> g_engineIndex >> g_sampleRateIndex >> g_filterIndex
           >> g_preprocessEnabled >> mg >> og) {
         g_micGain.store(mg / 100.0f);
-        g_outputGain.store(og / 100.0f);
+        g_outputGain.store(1.0f);  // single visible level: output stage fixed
         // Rates are {16000, 48000}: old index 1 (32 kHz, removed) and any
         // out-of-range index land on 48 kHz — no stranded configs.
         if (g_sampleRateIndex == 0) { g_sampleRate.store(16000); }
@@ -539,6 +546,10 @@ void LoadSettings() {
         // New field — self-monitor defaults OFF if missing
         int ls = 0;
         if (f >> ls) g_listenToSelf = (ls != 0);
+
+        // New field — Advanced open state (defaults set above)
+        int ao = g_advancedOpen ? 1 : 0;
+        if (f >> ao) g_advancedOpen = (ao != 0);
     }
 }
 
@@ -552,6 +563,8 @@ void ResetToDefaults() {
     g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
+    g_advancedOpen = true;  // resetting users want the full controls
+    g_advInitDone = false;  // re-apply the default next frame
     g_sampleRate.store(48000);
     g_selectedEngine.store(ENGINE_AEC3);
     g_filterLengthMs.store(50);
@@ -579,7 +592,7 @@ void ApplyPreset(int idx) {
     g_filterLengthMs.store(filters[p.filterIdx]);
     g_enablePreprocess.store(false);  // retired: gate does the silencing
     g_micGain.store(p.micGain);
-    g_outputGain.store(p.outGain);
+    g_outputGain.store(1.0f);  // single visible level: output stage fixed
     g_presetIndex = idx;
 }
 
@@ -906,6 +919,7 @@ void StartAEC() {
 
     SaveSettings();
     ReinitEngine();
+    g_sessionStartedOnce = true;  // retire the first-run setup card
 
     if (g_engine.type == ENGINE_NKF && !g_engine.nkf) {
         snprintf(g_statusText, 128, "Failed to load NKF model");
@@ -1103,24 +1117,29 @@ void DrawDevicesSection() {
 
     DrawInlineDot(!g_micDisplayIndices.empty());
     ImGui::SameLine();
-    ImGui::TextUnformatted("Microphone");
+    ImGui::TextUnformatted("Your microphone");
     ImGui::SameLine(labelCol);
-    FilteredDeviceCombo("Microphone", "The physical mic you speak into (virtual cables hidden)",
+    FilteredDeviceCombo("Microphone", "The mic you speak into",
                         g_micIndex, g_captureDevices, g_micDisplayIndices);
 
     DrawInlineDot(!g_refDisplayIndices.empty());
     ImGui::SameLine();
-    ImGui::TextUnformatted("Speaker Reference");
+    ImGui::TextUnformatted("Your speakers");
     ImGui::SameLine(labelCol);
-    FilteredDeviceCombo("Speaker Reference", "Speakers whose sound we cancel (virtual cables hidden)",
+    FilteredDeviceCombo("Speaker Reference", "The speakers whose sound gets removed from your mic",
                         g_refIndex, g_playbackDevices, g_refDisplayIndices);
 
-    DrawInlineDot(!g_outDisplayIndices.empty());
-    ImGui::SameLine();
-    ImGui::TextUnformatted("Output");
-    ImGui::SameLine(labelCol);
-    FilteredDeviceCombo("Output", "Where the cleaned mic goes. CABLE Input is picked automatically",
-                        g_outIndex, g_playbackDevices, g_outDisplayIndices);
+    // Hidden while Listen-to-myself reroutes to Your speakers:
+    // showing it would suggest it still does something.
+    if (!g_listenToSelf) {
+        DrawInlineDot(!g_outDisplayIndices.empty());
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Send cleaned sound to");
+        ImGui::SameLine(labelCol);
+        FilteredDeviceCombo("Output", "Where your cleaned voice goes. CABLE Input is picked automatically\n"
+                                      "so voice apps can use it as your microphone",
+                            g_outIndex, g_playbackDevices, g_outDisplayIndices);
+    }
 
     if (!CableInputPresent()) {
         ImGui::Spacing();
@@ -1139,9 +1158,9 @@ void DrawDevicesSection() {
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Monitor mode: the cleaned mic goes to your Speaker Reference\n"
-                          "device so you hear yourself — nothing is sent to VB-CABLE.\n"
-                          "Untick to route back to Output (CABLE Input for Discord).");
+        ImGui::SetTooltip("Hear yourself through your speakers instead of sending\n"
+                          "to voice apps — for testing. Untick to send your voice\n"
+                          "to CABLE Input (Discord, Zoom, Teams) again.");
 
     ImGui::EndDisabled();
 }
@@ -1156,11 +1175,11 @@ void DrawEngineSection() {
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
     const char* engines[] = {
-        "SpeexDSP (Low CPU)",
-        "WebRTC AEC3 (High Quality)",
-        "NKF-AEC (Experimental)",
-        "LocalVQE v1.4-AEC (Echo Only)",
-        "DTLN-AEC 512 (Neural)"
+        "SpeexDSP (lightest on CPU)",
+        "WebRTC AEC3 (best quality, recommended)",
+        "NKF-AEC (experimental)",
+        "LocalVQE v1.4-AEC (natural voice)",
+        "DTLN-AEC 512 (neural)"
     };
     if (ImGui::Combo("##engine", &g_engineIndex, engines, IM_ARRAYSIZE(engines))) {
         g_selectedEngine.store(g_engineIndex);
@@ -1172,11 +1191,11 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "SpeexDSP = very light, phone quality (16 kHz, locked for voice-gate accuracy)\n"
-            "AEC3 = best voice, more CPU\n"
-            "NKF-AEC = neural Kalman filter (experimental, 16 kHz only)\n"
-            "LocalVQE v1.4-AEC = neural echo-only, natural voice (16 kHz only)\n"
-            "DTLN-AEC 512 = dual-LSTM echo+noise, needs model files (16 kHz only)");
+            "SpeexDSP = lightest on CPU, phone quality (16 kHz automatic)\n"
+            "AEC3 = best voice, more CPU (recommended)\n"
+            "NKF-AEC = experimental neural engine (16 kHz automatic)\n"
+            "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
+            "DTLN-AEC 512 = neural echo + noise removal (16 kHz automatic)");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -1184,12 +1203,11 @@ void DrawEngineSection() {
 
     const char* rates[] = { "16000", "48000" };
     if (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
-        ImGui::BeginDisabled(true);
-        int lockedIdx = 0;
-        ImGui::Combo("##rate", &lockedIdx, rates, IM_ARRAYSIZE(rates));
-        ImGui::EndDisabled();
+        ImGui::TextUnformatted("Sample rate");
+        ImGui::SameLine(labelCol);
+        ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("SpeexDSP / NKF-AEC / LocalVQE / DTLN-AEC run at 16 kHz (locked)");
+            ImGui::SetTooltip("This engine always runs at 16 kHz — nothing to choose.");
     } else {
         if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
             g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
@@ -1211,29 +1229,26 @@ void DrawEngineSection() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("SpeexDSP only - how much echo to cancel (ms)");
     } else if (g_engineIndex == ENGINE_AEC3) {
-        ImGui::TextDisabled("Echo tail is only available for SpeexDSP.");
-        ImGui::TextDisabled("AEC3 handles cleanup internally.");
+        ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
-        ImGui::TextDisabled("NKF-AEC is an experimental neural engine.");
-        ImGui::TextDisabled("Fixed at 16 kHz with internal echo cancellation.");
+        ImGui::TextDisabled("Experimental neural engine. Runs at 16 kHz automatically.");
     } else if (g_engineIndex == ENGINE_LOCALVQE) {
-        ImGui::TextDisabled("LocalVQE v1.4-AEC: removes only echo, keeps voice and room tone.");
-        ImGui::TextDisabled("Fixed at 16 kHz. 200K params. Very light CPU.");
+        ImGui::TextDisabled("Removes only echo — your voice and room sound stay natural.");
+        ImGui::TextDisabled("Runs at 16 kHz automatically. Very light on CPU.");
     } else if (g_engineIndex == ENGINE_DTLN) {
-        ImGui::TextDisabled("DTLN-AEC 512: dual-LSTM echo + noise canceller.");
-        ImGui::TextDisabled("Fixed at 16 kHz. Needs models/dtln_aec_512_{1,2}.tflite");
-        ImGui::TextDisabled("(+ tensorflowlite_c.dll) or the _1/_2.onnx pair.");
+        ImGui::TextDisabled("Neural echo + noise removal. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Needs an extra download — see About for details.");
     }
 
     ImGui::EndDisabled();
 }
 
 void DrawGainsSection() {
-    ImGui::SeparatorText("Gains");
+    ImGui::SeparatorText("Levels");
     const float labelCol = 190.0f;
 
     float micGain = g_micGain.load() * 100.0f;
-    ImGui::TextUnformatted("Microphone gain");
+    ImGui::TextUnformatted("Microphone level");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-80);
     if (ImGui::SliderFloat("##micgain", &micGain, 0.0f, 200.0f, "%.0f%%")) {
@@ -1242,19 +1257,7 @@ void DrawGainsSection() {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%.0f%%", micGain);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Boost or attenuate mic. Editable while running.");
-
-    float outGain = g_outputGain.load() * 100.0f;
-    ImGui::TextUnformatted("Output gain");
-    ImGui::SameLine(labelCol);
-    ImGui::SetNextItemWidth(-80);
-    if (ImGui::SliderFloat("##outgain", &outGain, 0.0f, 200.0f, "%.0f%%")) {
-        g_outputGain.store(outGain / 100.0f);
-        MarkPresetCustom();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%.0f%%", outGain);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Final output level to Discord");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How loud your voice goes out. Editable while running.");
 }
 
 void DrawVadSection() {
@@ -1267,30 +1270,47 @@ void DrawVadSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "After echo cancellation, a tiny neural network checks for\n"
-            "speech 30 times a second. Speech passes; silence is muted.\n"
-            "No setup, no recording. Live at 16 kHz, and at 48 kHz via\n"
-            "an internal downsample that only feeds the detector.");
+            "After echo removal, the app listens for speech many times a second.\n"
+            "Speech passes through; silence is muted. No setup, no recording.");
 
     if (!g_vad) {
-        ImGui::TextDisabled("Silero model not found in models/ — gate is off.");
-        ImGui::TextDisabled("Add models/silero_vad.onnx (link in LICENSES/THIRD-PARTY.txt).");
+        ImGui::TextDisabled("Voice detector is missing its data file — gate is off.");
+        ImGui::TextDisabled("Reinstall the app or see About for details.");
     } else if (enabled) {
         float prob = g_vadProb.load();
-        float ms = g_vadMs.load();
         DrawInlineDot(prob >= 0.5f);
         ImGui::SameLine();
         if (prob >= 0.5f)
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                               "Speaking (%.2f, check %.2f ms)", prob, ms);
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Speaking (%.2f)", prob);
         else
-            ImGui::TextDisabled("Silent (%.2f, check %.2f ms)", prob, ms);
+            ImGui::TextDisabled("Silent (%.2f)", prob);
     } else {
-        ImGui::TextDisabled("Gate is off — original audio passes through.");
+        ImGui::TextDisabled("Gate is off — everything passes through unchanged.");
     }
 }
 
 void DrawAudioTab() {
+    // First-run setup card: 3 live checklist steps for newcomers.
+    // Retires after the first Start; returning users never see it.
+    if (g_isFirstRun && !g_sessionStartedOnce && !g_isRunning) {
+        ImGui::SeparatorText("Get started");
+        ImGui::TextWrapped("Three steps, then press Start below. Your choices save automatically.");
+        ImGui::Spacing();
+        auto step = [](bool ok, const char* done, const char* todo) {
+            DrawInlineDot(ok);
+            ImGui::SameLine();
+            if (ok) ImGui::TextUnformatted(done);
+            else ImGui::TextDisabled("%s", todo);
+        };
+        std::string micName = "Pick Your microphone below.";
+        step(!g_micDisplayIndices.empty(), "Microphone selected.", micName.c_str());
+        std::string refName = "Pick Your speakers below.";
+        step(!g_refDisplayIndices.empty(), "Speakers selected.", refName.c_str());
+        step(CableInputPresent(), "Discord output ready (CABLE Input).",
+             "Install VB-CABLE so voice apps can hear you (see warning below).");
+        ImGui::Spacing();
+    }
+
     ImGui::SeparatorText("Preset");
 
     ImGui::TextUnformatted("Quick preset");
@@ -1307,16 +1327,31 @@ void DrawAudioTab() {
         }
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("One-click configurations for common scenarios");
+        ImGui::SetTooltip("One-click setups for common uses.\n"
+                          "Changing anything by hand switches this to Manual settings.");
 
     ImGui::Spacing();
     DrawDevicesSection();
     ImGui::Spacing();
-    DrawEngineSection();
-    ImGui::Spacing();
-    DrawGainsSection();
-    ImGui::Spacing();
-    DrawVadSection();
+    // Advanced: engine, levels, gate. No close-X — the header always
+    // stays visible and toggles. First frame applies the persisted
+    // default (closed for newcomers, as left for regulars).
+    if (!g_advInitDone) {
+        ImGui::SetNextItemOpen(g_advancedOpen);
+        g_advInitDone = true;
+    }
+    bool advOpen = ImGui::CollapsingHeader("Advanced");
+    if (advOpen != g_advancedOpen) {
+        g_advancedOpen = advOpen;
+        SaveSettings();
+    }
+    if (advOpen) {
+        DrawEngineSection();
+        ImGui::Spacing();
+        DrawGainsSection();
+        ImGui::Spacing();
+        DrawVadSection();
+    }
 }
 
 void DrawAppearanceTab() {
@@ -1452,10 +1487,8 @@ void DrawUI() {
 
     ImGui::Spacing();
 
-    bool isAudioTabActive = false;
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Audio")) {
-            isAudioTabActive = true;
             ImGui::Spacing();
             DrawAudioTab();
             ImGui::EndTabItem();
@@ -1473,9 +1506,9 @@ void DrawUI() {
         ImGui::EndTabBar();
     }
 
-    // Audio-tab-only footer: Start / Reset + Live Levels.
-    // Hidden on Appearance and About tabs.
-    if (isAudioTabActive) {
+    // Footer on every tab: Start / Stop + status + Live Levels,
+    // so you can stop or watch levels without switching back to Audio.
+    {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -1520,6 +1553,17 @@ void DrawUI() {
         DrawLevelMeter("Ref", refRms, g_peakRef.load(), 3000.0f);
         DrawLevelMeter("Out", outRms, g_peakOut.load(), 3000.0f);
 
+        // Self-diagnosis aid: a permanently silent reference means the
+        // wrong speakers are selected — but silence is also normal when
+        // nothing plays, so this informs, never warns.
+        ImGui::Spacing();
+        if (refRms > 5.0f)
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                               "Reference: receiving speaker audio");
+        else
+            ImGui::TextDisabled("Reference: silent (normal if nothing is playing —\n"
+                                "if speakers ARE playing, re-check Your speakers above)");
+
         ImGui::Spacing();
         if (db < 0.0f)
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
@@ -1536,7 +1580,7 @@ void DrawUI() {
         decayMs(g_peakRef, g_peakRefTime);
         decayMs(g_peakOut, g_peakOutTime);
     }
-    } // end if (isAudioTabActive)
+    } // end footer block
 
     ImGui::PopStyleVar(2);
     ImGui::End();
