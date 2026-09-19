@@ -46,7 +46,6 @@ add_executable(aec_gui
     src/nkf_wrapper.cpp
     src/localvqe_wrapper.cpp
     src/dtln_wrapper.cpp
-    src/firered_wrapper.cpp
     src/pvad_wrapper.cpp
     src/silero_wrapper.cpp
 )
@@ -191,34 +190,6 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx")
             "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx"
             "$<TARGET_FILE_DIR:aec_gui>/models/silero_vad.onnx"
         COMMENT "Copying models/silero_vad.onnx")
-endif()
-# ============================================================
-#  FireRed Stream-VAD (optional — picker reports "data file missing"
-#  until vendored). Guarded so a fresh clone without it still builds.
-#  model_with_caches.onnx (+ .onnx.data sidecar, both required) from
-#  leospark/FireRedVAD-Engineering (MIT); firered_cmvn.bin generated
-#  from the official cmvn.ark (see src/firered_wrapper.cpp).
-# ============================================================
-if(EXISTS "${CMAKE_SOURCE_DIR}/models/model_with_caches.onnx")
-    add_custom_command(TARGET aec_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/models/model_with_caches.onnx"
-            "$<TARGET_FILE_DIR:aec_gui>/models/model_with_caches.onnx"
-        COMMENT "Copying models/model_with_caches.onnx")
-endif()
-if(EXISTS "${CMAKE_SOURCE_DIR}/models/model_with_caches.onnx.data")
-    add_custom_command(TARGET aec_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/models/model_with_caches.onnx.data"
-            "$<TARGET_FILE_DIR:aec_gui>/models/model_with_caches.onnx.data"
-        COMMENT "Copying models/model_with_caches.onnx.data")
-endif()
-if(EXISTS "${CMAKE_SOURCE_DIR}/models/firered_cmvn.bin")
-    add_custom_command(TARGET aec_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/models/firered_cmvn.bin"
-            "$<TARGET_FILE_DIR:aec_gui>/models/firered_cmvn.bin"
-        COMMENT "Copying models/firered_cmvn.bin")
 endif()
 # ============================================================
 #  ECAPA speaker embedding for the owner-only voice gate

@@ -94,9 +94,8 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 - Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = muted.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
 - Uncheck **Voice gate** in the Audio tab to pass original audio through.
-- **Voice detector** picker: **Silero** (proven default) or **FireRed** (experimental — decides faster and is stricter about what counts as speech).
 - **Only my voice** (experimental, off by default): one tap learns your voice (~8 s, you'll hear yourself), and the gate also mutes *other* voices — TV, family, roommates. Your voiceprint never leaves the PC.
-- Works at **16 and 48 kHz** (the detectors themselves are 16 kHz; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
+- Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
 
 ---
 

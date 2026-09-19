@@ -6,15 +6,15 @@ extern "C" {
 
 typedef struct PvadHandle PvadHandle;
 
-// Personalized voice gate: Silero/FireRed decides WHEN (timing),
+// Personalized voice gate: Silero decides WHEN (timing),
 // ECAPA embedding decides WHO (identity). Verify runs on a worker
 // thread — never on the audio thread (~90 ms per 2 s window).
 //
 // Model: vedk00/ecapa-voxceleb-speaker-embedding-onnx (Apache-2.0,
 // mirror of speechbrain/spkrec-ecapa-voxceleb). Input features
 // [1,frames,80] log-mel + feature_lens -> embedding [1,192].
-// Frontend: 80-bin log-mel, 25 ms / 10 ms @16 kHz (kaldi-style,
-// same recipe as the FireRed harness), utterance mean-norm.
+// Frontend: 80-bin log-mel, 25 ms / 10 ms @16 kHz (kaldi-style),
+// utterance mean-norm.
 // Threshold default 0.60 (cosine). Fail-open: no voiceprint, no
 // verification yet, or inference error all read as "owner" — the
 // gate never mutes on identity uncertainty, only on measured mismatch.

@@ -24,19 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Manual settings"; Output row hidden while self-monitoring; dead
   rate combo replaced with "16 kHz (automatic)"; Start/Stop +
   Live Levels visible on every tab.
-- **Alternate voice detector: FireRed Stream-VAD (experimental).**
-  The Voice gate section gains a visible "Voice detector" picker
-  (Silero default). FireRed decides every 10 ms (vs Silero's 32 ms),
-  costs ~0.07 ms/frame, and separates speech from silence more
-  sharply on captures (0.76/0.03 vs 0.62/0.22). New
-  `src/firered_wrapper.*` (kaldi fbank + CMVN frontend, carried
-  caches, reset on Start/Stop); choice persisted; gate thresholds,
-  fades, and hangover unchanged. Provenance + parity in
-  THIRD-PARTY.txt (fbank meanabs 0.0025, probs meanabs 5.4e-5 vs
-  golden files). Silero stays fully wired as fallback.
+- **FireRed Stream-VAD spiked then nuked.** Harness-verified but
+  failed the live listening test — full revert of wrapper, picker,
+  and docs. Silero stands alone again.
 - **Missing voice-gate model now fails open.** A broken Silero
   handle previously read as eternal silence; it now nulls to
-  gate-off with the correct UI notice (same contract as FireRed).
+  gate-off with the correct UI notice.
 - **Owner-only voice gate PVAD (experimental, off by default).**
   "Only my voice": one tap on "Learn my voice" opens a mic-only
   session with live monitoring, counts down 8 seconds, and saves
@@ -44,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first, then enroll; idle stays idle after). A worker-thread ECAPA
   check (~1 Hz) then also mutes OTHER voices (TV, family) — only
   you pass. "Forget my voice" deletes the voiceprint (two-step
-  confirm). Timing stays with Silero/FireRed; identity only ever
+  confirm). Timing stays with the Silero gate; identity only ever
   mutes on measured mismatch (fail-open otherwise). New
   `src/pvad_wrapper.*`; voiceprint stays on the PC, model untracked.
   Harness: same-voice 0.840 vs cross-voice 0.673 (synth).

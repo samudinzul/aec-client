@@ -1,16 +1,16 @@
 // ============================================================
 //  PVAD wrapper — personalized voice gate (identity layer).
 //
-//  Timing (WHEN to open) stays with Silero/FireRed. This wrapper
+//  Timing (WHEN to open) stays with the Silero gate. This wrapper
 //  answers WHO: ECAPA-TDNN embedding (192-d) cosine-scored against
 //  an enrolled voiceprint. Proven in the temp harness: same-voice
 //  0.840 vs cross-voice 0.673 on synthetic voices (real voices
 //  separate wider; 0.60 default threshold awaits ear calibration).
 //
 //  Model: vedk00/ecapa-voxceleb-speaker-embedding-onnx (Apache-2.0).
-//  Frontend mirrors the FireRed harness fbank (kaldi-style 80-bin
-//  log-mel, 25 ms window / 10 ms hop, povey, preemphasis, DC cut,
-//  log floor 1e-10) + utterance mean-norm.
+//  Frontend: kaldi-style 80-bin log-mel frontend (25 ms window /
+//  10 ms hop, povey, preemphasis, DC cut, log floor 1e-10) +
+//  utterance mean-norm.
 // ============================================================
 #include "pvad_wrapper.h"
 
