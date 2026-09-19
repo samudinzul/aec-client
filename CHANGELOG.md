@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Missing voice-gate model now fails open.** A broken Silero
   handle previously read as eternal silence; it now nulls to
   gate-off with the correct UI notice.
+- **Enrollment monitor no longer echoes.** "Learn my voice" played
+  raw mic at full volume with no AEC running — speaker output looped
+  back into the mic as audible echo. The monitor is now a x0.3
+  sidetone: clearly audible, loop gain below feedback.
 - **Gentler gate dynamics.** 500 ms hangover (was 300 ms) bridges
   word pauses and keeps endings intact; the uncertain band between
   the open/close lines now leans open instead of just holding, so

@@ -1097,7 +1097,7 @@ static void PvadStopWorker() {
 
 // ---- One-tap enrollment session (mic-only + monitor) ----
 // Runs when the app itself is idle: opens just the mic at 16 kHz
-// (miniaudio resamples) plus a raw passthrough to Your speakers.
+// (miniaudio resamples) plus an attenuated sidetone to Your speakers.
 // No loopback, no AEC, no CABLE involved. Owned sessions tear down
 // on timer end/cancel; a user-started run is never touched.
 static void enroll_monitor_callback(ma_device*,
@@ -1106,7 +1106,14 @@ static void enroll_monitor_callback(ma_device*,
     int16_t* out = (int16_t*)pOutput;
     size_t avail = g_micRing.available();
     size_t n = avail < frameCount ? avail : frameCount;
-    if (n > 0) g_micRing.read(out, n);
+    if (n > 0) {
+        g_micRing.read(out, n);
+        // Sidetone, not full blast: no AEC runs during enrollment, so a
+        // x1.0 mic->speaker loop feeds back through the room as echo.
+        // x0.3 stays clearly audible while keeping the loop gain < 1.
+        for (size_t i = 0; i < n; i++)
+            out[i] = (int16_t)(out[i] * 0.3f);
+    }
     if (n < frameCount) memset(out + n, 0, (frameCount - n) * sizeof(int16_t));
 }
 
