@@ -1110,9 +1110,9 @@ static void enroll_monitor_callback(ma_device*,
         g_micRing.read(out, n);
         // Sidetone, not full blast: no AEC runs during enrollment, so a
         // x1.0 mic->speaker loop feeds back through the room as echo.
-        // x0.3 stays clearly audible while keeping the loop gain < 1.
+        // x0.5 stays clearly audible while halving the loop gain.
         for (size_t i = 0; i < n; i++)
-            out[i] = (int16_t)(out[i] * 0.3f);
+            out[i] = (int16_t)(out[i] * 0.5f);
     }
     if (n < frameCount) memset(out + n, 0, (frameCount - n) * sizeof(int16_t));
 }

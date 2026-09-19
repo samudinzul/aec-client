@@ -32,8 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate-off with the correct UI notice.
 - **Enrollment monitor no longer echoes.** "Learn my voice" played
   raw mic at full volume with no AEC running — speaker output looped
-  back into the mic as audible echo. The monitor is now a x0.3
-  sidetone: clearly audible, loop gain below feedback.
+  back into the mic as audible echo. The monitor is now a x0.5
+  sidetone: clearly audible, loop gain halved below feedback.
 - **Gentler gate dynamics.** 500 ms hangover (was 300 ms) bridges
   word pauses and keeps endings intact; the uncertain band between
   the open/close lines now leans open instead of just holding, so
