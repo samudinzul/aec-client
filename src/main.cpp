@@ -228,7 +228,7 @@ bool               g_vadCalWasRunning = false;  // restore idle after auto-start
 bool               g_calMonitor = false;  // one-shot: next StartAEC routes to speakers (calibration monitor)
 #define VAD_CAL_SECONDS 5
 float              g_vadGain = 1.0f;      // audio thread only
-int                g_vadHang = 0;         // audio thread only (300 ms hangover)
+int                g_vadHang = 0;         // audio thread only (500 ms hangover)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
 ma_data_converter  g_pvadResampler;       // engine rate -> 16 kHz for PVAD
@@ -780,9 +780,13 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     // Calibrated hysteresis (defaults 0.50/0.30). One-tap calibration
     // rewrites these from measured speech/silence probs — never drifting
     // mid-call, so the v1.3.1 adaptive-mute failure can't recur.
+    // Dynamics: 500 ms hangover (don't clip endings/pauses), fast
+    // attack (fully open in ~40 ms), gentle release, plus pre-open
+    // creep through the uncertain band so onsets are already partway
+    // open by the time the open line trips.
     const float kVadOpen = g_vadOpen.load(), kVadClose = g_vadClose.load();
     if (lastProb >= kVadOpen) {
-        g_vadHang = 30;
+        g_vadHang = 50;
         g_vadGain += (1.0f - g_vadGain) * 0.5f;
         if (g_vadGain > 0.99f) g_vadGain = 1.0f;
     } else if (lastProb <= kVadClose) {
@@ -792,8 +796,14 @@ static void VadGateApply(int16_t* cleaned, int fs) {
             g_vadGain += (0.0f - g_vadGain) * 0.15f;
             if (g_vadGain < 0.01f) g_vadGain = 0.0f;
         }
-    } else if (g_vadHang > 0) {
-        g_vadHang--;  // uncertain zone: hold, don't cut
+    } else {
+        // Uncertain band (prob ramping at an onset, or dipping
+        // mid-speech): hold the hangover and lean open — speech passes
+        // sooner, pauses don't chop. True silence still reads below
+        // the close line and releases as before.
+        if (g_vadHang > 0) g_vadHang--;
+        g_vadGain += (1.0f - g_vadGain) * 0.08f;
+        if (g_vadGain > 0.99f) g_vadGain = 1.0f;
     }
     // Identity layer (owner-only mode): the VAD above decides WHEN,
     // the worker's cosine decides WHO. Fail-open on any uncertainty —
@@ -1721,6 +1731,8 @@ void DrawVadSection() {
         ImGui::SetTooltip("After learning your voice, the gate also mutes OTHER\n"
                           "voices (TV, family, roommates) — only you pass through.\n"
                           "Your voiceprint never leaves this PC.\n"
+                          "Checks ~1/sec: speech starts always pass — muting\n"
+                          "only on a measured mismatch, never on timing.\n"
                           "Off by default; needs a voiceprint below to do anything.");
     if (g_pvadEnabled.load() && g_pvad) {
         if (g_pvadEnrolling.load()) {

@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Missing voice-gate model now fails open.** A broken Silero
   handle previously read as eternal silence; it now nulls to
   gate-off with the correct UI notice.
+- **Gentler gate dynamics.** 500 ms hangover (was 300 ms) bridges
+  word pauses and keeps endings intact; the uncertain band between
+  the open/close lines now leans open instead of just holding, so
+  onsets are partway through before the open line even trips.
+  True silence still releases as before.
 - **One-tap voice-gate calibration.** "Calibrate for my mic" works
   idle or running (auto-starts audio with monitor routing — you'll
   hear yourself with live meters, no CABLE needed; back to idle
