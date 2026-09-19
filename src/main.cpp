@@ -1108,11 +1108,14 @@ static void enroll_monitor_callback(ma_device*,
     size_t n = avail < frameCount ? avail : frameCount;
     if (n > 0) {
         g_micRing.read(out, n);
-        // Sidetone, not full blast: no AEC runs during enrollment, so a
-        // x1.0 mic->speaker loop feeds back through the room as echo.
-        // x0.5 stays clearly audible while halving the loop gain.
+        // Sidetone tracking the Microphone level: no AEC runs during
+        // enrollment, so a x1.0 mic->speaker loop feeds back through
+        // the room as echo (the calibration monitor can be loud only
+        // because AEC cancels that loop). x0.7 of the mic gain matches
+        // the calibration loudness within 3 dB while keeping margin.
+        float g = g_micGain.load() * 0.7f;
         for (size_t i = 0; i < n; i++)
-            out[i] = (int16_t)(out[i] * 0.5f);
+            out[i] = clamp_s16((int)(out[i] * g));
     }
     if (n < frameCount) memset(out + n, 0, (frameCount - n) * sizeof(int16_t));
 }
