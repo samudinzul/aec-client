@@ -26,6 +26,7 @@
 #include "localvqe_wrapper.h"
 #include "dtln_wrapper.h"
 #include "firered_wrapper.h"
+#include "pvad_wrapper.h"
 #include "silero_wrapper.h"
 
 #include <cstdio>
@@ -33,6 +34,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <chrono>
+#include <thread>
+#include <mutex>
 #include <vector>
 #include <string>
 #include <atomic>
@@ -193,6 +196,27 @@ EngineState g_engine;
 SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
 FireRedHandle*     g_firered = nullptr;  // alternate detector (re)created with g_vad
 std::atomic<int>   g_vadDetector{ 0 };  // 0 = Silero (default), 1 = FireRed (experimental)
+// Personalized gate (identity layer): lazy handle, worker-thread verify.
+// Audio thread touches ONLY the atomics below — never the wrapper mutex
+// (the worker can hold it ~90 ms per inference).
+PvadHandle*        g_pvad = nullptr;
+std::atomic<bool>  g_pvadEnabled{ false };  // persisted, default off
+std::atomic<bool>  g_pvadReady{ false };    // voiceprint present (cached)
+std::atomic<float> g_pvadMatch{ -2.0f };    // last worker cosine; < -1.5 = none yet
+std::atomic<float> g_pvadThreshold{ PVAD_DEFAULT_THRESHOLD };
+std::atomic<bool>  g_pvadEnrolling{ false };
+std::atomic<int>   g_pvadEnrollSamples{ 0 };
+std::thread        g_pvadThread;
+std::atomic<bool>  g_pvadRun{ false };
+std::mutex         g_pvadHistMtx;
+std::vector<float> g_pvadHist;  // mic history for worker snapshots (cap 3 s)
+#define PVAD_NEED_SAMPLES 128000   // 8 s enrollment
+#define PVAD_VERIFY_SAMPLES 32000  // 2 s verify window
+#define PVAD_HIST_CAP 48000        // 3 s history
+ma_device g_enrollMicDevice, g_enrollOutDevice;
+bool g_enrollMicOn = false, g_enrollMonOn = false;
+bool g_enrollOwnedAudio = false;  // enrollment opened devices itself
+Clock::time_point g_enrollStart;
 std::atomic<bool>  g_vadEnabled{ true };  // default ON, zero-click
 std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
@@ -200,6 +224,8 @@ float              g_vadGain = 1.0f;      // audio thread only
 int                g_vadHang = 0;         // audio thread only (300 ms hangover)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
+ma_data_converter  g_pvadResampler;       // engine rate -> 16 kHz for PVAD
+bool               g_pvadResamplerReady = false;
 ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
 ma_context g_context;
 static bool g_contextInitialized = false;
@@ -233,6 +259,8 @@ bool g_isFirstRun = false;      // no config file at launch: show the setup card
 bool g_sessionStartedOnce = false;  // setup card retires after first Start
 bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
+bool g_forgetArmed = false;     // Forget-my-voice two-step confirm
+Clock::time_point g_forgetArmTime;
 int  g_engineIndex = 1, g_sampleRateIndex = 1, g_filterIndex = 2;
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
@@ -506,7 +534,8 @@ void SaveSettings() {
        << (g_vadEnabled.load() ? 1 : 0) << "\n"
        << (g_listenToSelf ? 1 : 0) << "\n"
        << (g_advancedOpen ? 1 : 0) << "\n"
-       << g_vadDetector.load() << "\n";
+       << (g_vadDetector.load() ? 1 : 0) << "\n"
+       << (g_pvadEnabled.load() ? 1 : 0) << "\n";
 }
 
 void LoadSettings() {
@@ -558,6 +587,10 @@ void LoadSettings() {
         // New field — voice detector (0 Silero default, 1 FireRed)
         int vd = 0;
         if (f >> vd) g_vadDetector.store((vd == 1) ? 1 : 0);
+
+        // New field — owner-only voice defaults OFF if missing
+        int po = 0;
+        if (f >> po) g_pvadEnabled.store(po != 0);
     }
 }
 
@@ -669,6 +702,10 @@ static void VadReset() {
         ma_data_converter_uninit(&g_vadResampler, NULL);
         g_vadResamplerReady = false;
     }
+    if (g_pvadResamplerReady) {
+        ma_data_converter_uninit(&g_pvadResampler, NULL);
+        g_pvadResamplerReady = false;
+    }
     g_vadGain = 1.0f;
     g_vadHang = 0;
     g_vadProb.store(0.0f);
@@ -761,6 +798,17 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     } else if (g_vadHang > 0) {
         g_vadHang--;  // uncertain zone: hold, don't cut
     }
+    // Identity layer (owner-only mode): the VAD above decides WHEN,
+    // the worker's cosine decides WHO. Fail-open on any uncertainty —
+    // mute only on a measured mismatch. Atomics only here; the worker
+    // may hold the wrapper mutex for ~90 ms per check.
+    if (g_pvadEnabled.load() && g_pvadReady.load()) {
+        float m = g_pvadMatch.load();
+        if (m > -1.5f && m < g_pvadThreshold.load()) {
+            g_vadGain += (0.0f - g_vadGain) * 0.15f;
+            if (g_vadGain < 0.01f) g_vadGain = 0.0f;
+        }
+    }
     if (g_vadGain < 1.0f) {
         for (int i = 0; i < fs; i++)
             cleaned[i] = clamp_s16((int)((float)cleaned[i] * g_vadGain));
@@ -773,6 +821,20 @@ static void VadGateApply(int16_t* cleaned, int fs) {
 void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
     g_micRing.write((const int16_t*)pInput, frameCount);
+    // Owned enrollment (app idle — output_callback isn't running):
+    // feed + count here. The live path counts in output_callback.
+    if (g_pvadEnrolling.load() && !g_isRunning && g_pvad && g_enrollOwnedAudio) {
+        const int16_t* s = (const int16_t*)pInput;
+        uint32_t off = 0;
+        float tmp[1024];
+        while (off < frameCount) {
+            uint32_t n = frameCount - off > 1024 ? 1024 : frameCount - off;
+            for (uint32_t i = 0; i < n; i++) tmp[i] = s[off + i] / 32768.0f;
+            PvadFeedEnroll(g_pvad, tmp, (int)n);
+            g_pvadEnrollSamples.fetch_add((int)n);
+            off += n;
+        }
+    }
 }
 void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
@@ -801,6 +863,56 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
 
     g_micRing.read(micFrame, fs);
     g_refRing.read(refFrame, fs);
+
+    // PVAD taps raw mic (owner voice, pre-echo-removal): 16 kHz floats
+    // for history (worker verify) and enrollment. Bounded memcpy under
+    // a short lock; inference never happens here.
+    if (g_pvadEnabled.load() || g_pvadEnrolling.load()) {
+        int srNow = g_sampleRate.load();
+        if (srNow == 16000) {
+            float tmp[MAX_FRAME_SIZE];
+            for (int i = 0; i < fs; i++) tmp[i] = micFrame[i] / 32768.0f;
+            if (g_pvadEnabled.load()) {
+                std::lock_guard<std::mutex> lk(g_pvadHistMtx);
+                g_pvadHist.insert(g_pvadHist.end(), tmp, tmp + fs);
+                if ((int)g_pvadHist.size() > PVAD_HIST_CAP)
+                    g_pvadHist.erase(g_pvadHist.begin(),
+                        g_pvadHist.begin() + (g_pvadHist.size() - PVAD_HIST_CAP));
+            }
+            if (g_pvadEnrolling.load() && g_pvad) {
+                PvadFeedEnroll(g_pvad, tmp, fs);
+                g_pvadEnrollSamples.fetch_add(fs);
+            }
+        } else if (srNow == 48000) {
+            if (!g_pvadResamplerReady) {
+                ma_data_converter_config cfg = ma_data_converter_config_init(
+                    ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
+                if (ma_data_converter_init(&cfg, NULL, &g_pvadResampler) == MA_SUCCESS)
+                    g_pvadResamplerReady = true;
+            }
+            if (g_pvadResamplerReady) {
+                float f32[MAX_FRAME_SIZE];
+                for (int i = 0; i < fs; i++) f32[i] = micFrame[i] / 32768.0f;
+                float dn[MAX_FRAME_SIZE];
+                ma_uint64 inC = (ma_uint64)fs, outC = MAX_FRAME_SIZE;
+                if (ma_data_converter_process_pcm_frames(&g_pvadResampler, f32, &inC,
+                                                         dn, &outC) == MA_SUCCESS && outC > 0) {
+                    int got = (int)outC;
+                    if (g_pvadEnabled.load()) {
+                        std::lock_guard<std::mutex> lk(g_pvadHistMtx);
+                        g_pvadHist.insert(g_pvadHist.end(), dn, dn + got);
+                        if ((int)g_pvadHist.size() > PVAD_HIST_CAP)
+                            g_pvadHist.erase(g_pvadHist.begin(),
+                                g_pvadHist.begin() + (g_pvadHist.size() - PVAD_HIST_CAP));
+                    }
+                    if (g_pvadEnrolling.load() && g_pvad) {
+                        PvadFeedEnroll(g_pvad, dn, got);
+                        g_pvadEnrollSamples.fetch_add(got);
+                    }
+                }
+            }
+        }
+    }
 
     if (g_engine.type == ENGINE_SPEEX && g_engine.speex)
         AecCancelEcho(g_engine.speex, micFrame, refFrame, cleanedFrame, fs);
@@ -930,10 +1042,146 @@ void EnumerateDevices() {
 }
 
 // ============================================================
+//  Personalized gate (identity layer): worker-thread ECAPA verify.
+//  UI/worker threads only for Ensure/Verify; audio thread only
+//  memcpys 16 kHz mic floats into the history (never blocks on the
+//  wrapper mutex — inference stays on the worker).
+// ============================================================
+static void EnsurePvad() {
+    if (g_pvad) return;
+    g_pvad = PvadNew("models/ecapa-speaker-v1.onnx");
+    if (!g_pvad) return;
+    if (PvadLoad(g_pvad, "models/voiceprint.bin")) {
+        g_pvadReady.store(true);
+        g_pvadThreshold.store(PvadThreshold(g_pvad));
+    }
+}
+
+static void PvadWorker() {
+    std::vector<float> snap;
+    snap.reserve(PVAD_VERIFY_SAMPLES);
+    while (g_pvadRun.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (!g_pvadRun.load() || !g_isRunning ||
+            !g_pvadEnabled.load() || !g_pvadReady.load() || !g_pvad)
+            continue;
+        snap.clear();
+        {
+            std::lock_guard<std::mutex> lk(g_pvadHistMtx);
+            if ((int)g_pvadHist.size() < PVAD_VERIFY_SAMPLES) continue;
+            snap.assign(g_pvadHist.end() - PVAD_VERIFY_SAMPLES, g_pvadHist.end());
+        }
+        float m = PvadVerify(g_pvad, snap.data(), (int)snap.size());
+        if (m > -1.5f) g_pvadMatch.store(m);
+        std::this_thread::sleep_for(std::chrono::milliseconds(750));  // ~1 Hz
+    }
+}
+
+static void PvadStartWorker() {
+    if (g_pvadThread.joinable()) return;
+    g_pvadRun.store(true);
+    g_pvadThread = std::thread(PvadWorker);
+}
+
+static void PvadStopWorker() {
+    g_pvadRun.store(false);
+    if (g_pvadThread.joinable()) g_pvadThread.join();
+}
+
+// ---- One-tap enrollment session (mic-only + monitor) ----
+// Runs when the app itself is idle: opens just the mic at 16 kHz
+// (miniaudio resamples) plus a raw passthrough to Your speakers.
+// No loopback, no AEC, no CABLE involved. Owned sessions tear down
+// on timer end/cancel; a user-started run is never touched.
+static void enroll_monitor_callback(ma_device*,
+                                    void* pOutput, const void*,
+                                    ma_uint32 frameCount) {
+    int16_t* out = (int16_t*)pOutput;
+    size_t avail = g_micRing.available();
+    size_t n = avail < frameCount ? avail : frameCount;
+    if (n > 0) g_micRing.read(out, n);
+    if (n < frameCount) memset(out + n, 0, (frameCount - n) * sizeof(int16_t));
+}
+
+static void StopEnrollCapture() {
+    if (g_enrollMonOn) { ma_device_uninit(&g_enrollOutDevice); g_enrollMonOn = false; }
+    if (g_enrollMicOn) { ma_device_uninit(&g_enrollMicDevice); g_enrollMicOn = false; }
+    g_enrollOwnedAudio = false;
+}
+
+static bool StartEnrollCapture() {
+    if (g_captureDevices.empty() || g_micIndex >= (int)g_captureDevices.size()) {
+        snprintf(g_statusText, 128, "No microphone found");
+        return false;
+    }
+    g_micRing.reset();
+    ma_device_config micCfg = ma_device_config_init(ma_device_type_capture);
+    micCfg.capture.format = ma_format_s16;
+    micCfg.capture.channels = 1;
+    micCfg.sampleRate = 16000;  // PVAD eats 16 kHz; miniaudio resamples
+    micCfg.dataCallback = mic_callback;
+    micCfg.capture.pDeviceID = &g_captureDevices[g_micIndex].id;
+    if (ma_device_init(&g_context, &micCfg, &g_enrollMicDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Could not open microphone");
+        return false;
+    }
+    if (ma_device_start(&g_enrollMicDevice) != MA_SUCCESS) {
+        ma_device_uninit(&g_enrollMicDevice);
+        snprintf(g_statusText, 128, "Could not start microphone");
+        return false;
+    }
+    g_enrollMicOn = true;
+    // Monitor is a courtesy: hear yourself while enrolling. Silent
+    // fallback if the speakers can't open — enrollment continues.
+    if (!g_playbackDevices.empty() && g_refIndex < (int)g_playbackDevices.size()) {
+        ma_device_config outCfg = ma_device_config_init(ma_device_type_playback);
+        outCfg.playback.format = ma_format_s16;
+        outCfg.playback.channels = 1;
+        outCfg.sampleRate = 16000;
+        outCfg.dataCallback = enroll_monitor_callback;
+        outCfg.playback.pDeviceID = &g_playbackDevices[g_refIndex].id;
+        if (ma_device_init(&g_context, &outCfg, &g_enrollOutDevice) == MA_SUCCESS) {
+            if (ma_device_start(&g_enrollOutDevice) == MA_SUCCESS) {
+                g_enrollMonOn = true;
+            } else {
+                ma_device_uninit(&g_enrollOutDevice);
+            }
+        }
+    }
+    g_enrollStart = Clock::now();
+    g_enrollOwnedAudio = true;
+    return true;
+}
+
+// Forward declarations (defined below: main Start/Stop)
+void StartAEC();
+void StopAEC();
+
+// Begin enrollment: stop a running session first (owned mic-only +
+// monitor session needs the devices), then capture. Stays idle after
+// finalize — no auto-start.
+static bool PvadStartEnrollFlow() {
+    EnsurePvad();
+    if (!g_pvad) return false;
+    if (g_isRunning) StopAEC();
+    if (!StartEnrollCapture()) return false;
+    PvadBeginEnroll(g_pvad);
+    g_pvadEnrollSamples.store(0);
+    g_pvadEnrolling.store(true);
+    g_forgetArmed = false;
+    return true;
+}
+
+// ============================================================
 //  Start / Stop
 // ============================================================
 void StartAEC() {
     if (g_isRunning) return;
+    // An owned enrollment capture owns the mic — yield it first.
+    if (g_enrollOwnedAudio) {
+        g_pvadEnrolling.store(false);
+        StopEnrollCapture();
+    }
     if (g_captureDevices.empty() || g_playbackDevices.empty()) {
         snprintf(g_statusText, 128, "No devices found");
         return;
@@ -974,6 +1222,17 @@ void StartAEC() {
     g_micRing.reset();
     g_refRing.reset();
     VadReset();
+    if (g_pvadResamplerReady) {
+        ma_data_converter_uninit(&g_pvadResampler, NULL);
+        g_pvadResamplerReady = false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_pvadHistMtx);
+        g_pvadHist.clear();
+    }
+    g_pvadMatch.store(-2.0f);  // fail-open until first verification
+    g_pvadEnrolling.store(false);
+    g_pvadEnrollSamples.store(0);
     g_peakMic.store(0); g_peakRef.store(0); g_peakOut.store(0);
 
     int sr = g_sampleRate.load();
@@ -1025,6 +1284,10 @@ void StartAEC() {
 
     g_isRunning = true;
     g_sessionStart = Clock::now();
+    if (g_pvadEnabled.load()) {
+        EnsurePvad();  // no-op if the model file is absent
+        PvadStartWorker();
+    }
     const char* engineName =
         (g_engine.type == ENGINE_SPEEX) ? "SpeexDSP" :
         (g_engine.type == ENGINE_AEC3)  ? "AEC3" :
@@ -1036,6 +1299,9 @@ void StartAEC() {
 
 void StopAEC() {
     if (!g_isRunning) return;
+    PvadStopWorker();
+    g_pvadEnrolling.store(false);
+    StopEnrollCapture();  // no-op unless an owned session is open
     ma_device_uninit(&g_micDevice);
     ma_device_uninit(&g_loopbackDevice);
     ma_device_uninit(&g_outputDevice);
@@ -1339,6 +1605,98 @@ void DrawVadSection() {
     } else {
         ImGui::TextDisabled("Gate is off — everything passes through unchanged.");
     }
+
+    // ---- Owner-only voice (experimental personal gate) ----
+    ImGui::Spacing();
+    bool pvadOn = g_pvadEnabled.load();
+    if (ImGui::Checkbox("Only my voice (experimental)", &pvadOn)) {
+        EnsurePvad();
+        g_pvadEnabled.store(pvadOn && g_pvad != nullptr);
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("After learning your voice, the gate also mutes OTHER\n"
+                          "voices (TV, family, roommates) — only you pass through.\n"
+                          "Your voiceprint never leaves this PC.\n"
+                          "Off by default; needs a voiceprint below to do anything.");
+    if (g_pvadEnabled.load() && g_pvad) {
+        if (g_pvadEnrolling.load()) {
+            int pct = g_pvadEnrollSamples.load() * 100 / PVAD_NEED_SAMPLES;
+            if (pct > 100) pct = 100;
+            int secsLeft = 8 - (int)(std::chrono::duration_cast<std::chrono::seconds>(
+                Clock::now() - g_enrollStart).count());
+            if (secsLeft < 0) secsLeft = 0;
+            if (!g_enrollOwnedAudio) secsLeft = -1;  // live path: no timer
+            if (secsLeft >= 0)
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                                   "Listening… keep speaking (%d%%, %ds left)", pct, secsLeft);
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                                   "Listening… keep speaking normally (%d%%)", pct);
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                g_pvadEnrolling.store(false);
+                StopEnrollCapture();
+            }
+            // Finalize on the UI thread (embedding takes ~0.1-1 s).
+            if (g_pvadEnrollSamples.load() >= PVAD_NEED_SAMPLES) {
+                g_pvadEnrolling.store(false);
+                StopEnrollCapture();
+                if (PvadFinishEnroll(g_pvad) &&
+                    PvadSave(g_pvad, "models/voiceprint.bin")) {
+                    g_pvadReady.store(true);
+                    g_pvadThreshold.store(PvadThreshold(g_pvad));
+                    g_pvadMatch.store(-2.0f);
+                }
+            }
+        } else if (!g_pvadReady.load()) {
+            ImGui::TextDisabled("No voice learned yet.");
+            if (ImGui::Button("Learn my voice", ImVec2(160, 0))) {
+                PvadStartEnrollFlow();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Listens for 8 seconds (you'll hear yourself),\n"
+                                  "then saves your voiceprint on this PC.\n"
+                                  "Enroll in a quiet moment (no TV/music).");
+            ImGui::TextDisabled("Takes 8 seconds. Your voiceprint never leaves this PC.");
+        } else {
+            float m = g_pvadMatch.load();
+            if (m < -1.5f) {
+                ImGui::TextDisabled("Voice learned. Waiting for speech to check…");
+            } else if (m >= g_pvadThreshold.load()) {
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                                   "Voice learned. Last check: you (%.2f)", m);
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
+                                   "Voice learned. Last check: not you (%.2f) — muted", m);
+            }
+            if (ImGui::Button("Re-learn my voice", ImVec2(160, 0))) {
+                PvadStartEnrollFlow();
+            }
+            ImGui::SameLine();
+            if (!g_forgetArmed) {
+                if (ImGui::Button("Forget my voice", ImVec2(160, 0))) {
+                    g_forgetArmed = true;
+                    g_forgetArmTime = Clock::now();
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Deletes your voiceprint from this PC.");
+            } else {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    Clock::now() - g_forgetArmTime).count();
+                if (elapsed > 5) {
+                    g_forgetArmed = false;
+                } else if (ImGui::Button("Click again to confirm", ImVec2(160, 0))) {
+                    if (g_pvad) PvadClearVoiceprint(g_pvad);
+                    std::remove("models/voiceprint.bin");
+                    g_pvadReady.store(false);
+                    g_pvadMatch.store(-2.0f);
+                    g_forgetArmed = false;
+                }
+            }
+        }
+    } else if (pvadOn && !g_pvad) {
+        ImGui::TextDisabled("Voice model missing — owner check unavailable.");
+    }
 }
 
 void DrawAudioTab() {
@@ -1481,6 +1839,8 @@ void DrawAboutTab() {
     ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("LocalVQE      - LocalAI (Apache-2.0)");
     ImGui::BulletText("Silero VAD    - Silero Team (MIT)");
+    ImGui::BulletText("FireRed VAD   - Xiaohongshu (Apache-2.0)");
+    ImGui::BulletText("ECAPA voice   - SpeechBrain (Apache-2.0)");
     ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
@@ -1735,6 +2095,7 @@ int main(int, char**) {
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
     if (g_firered) { FireRedDestroy(g_firered); g_firered = nullptr; }
+    if (g_pvad) { PvadDestroy(g_pvad); g_pvad = nullptr; }
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

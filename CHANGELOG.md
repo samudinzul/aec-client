@@ -5,6 +5,50 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **First-run setup card + Advanced collapse.** Newcomers (no config
+  file) get a 3-step live checklist (mic, speakers, CABLE) that
+  retires after the first Start; engine/levels/gate live under an
+  "Advanced" header with no close-X (always visible, toggle only,
+  state remembered, open on reset). Returning users unaffected.
+- **Reference status line.** Live Levels reports "receiving speaker
+  audio" vs "silent (normal if nothing is playing…)" — informs,
+  never false-warns.
+- **Plain-language UI.** "Your microphone", "Your speakers",
+  "Send cleaned sound to", human engine descriptions, dev-only text
+  (filenames, check-ms, params) moved out; Mic/Output gains merged
+  into one "Microphone level"; "Custom" preset renamed
+  "Manual settings"; Output row hidden while self-monitoring; dead
+  rate combo replaced with "16 kHz (automatic)"; Start/Stop +
+  Live Levels visible on every tab.
+- **Alternate voice detector: FireRed Stream-VAD (experimental).**
+  The Voice gate section gains a visible "Voice detector" picker
+  (Silero default). FireRed decides every 10 ms (vs Silero's 32 ms),
+  costs ~0.07 ms/frame, and separates speech from silence more
+  sharply on captures (0.76/0.03 vs 0.62/0.22). New
+  `src/firered_wrapper.*` (kaldi fbank + CMVN frontend, carried
+  caches, reset on Start/Stop); choice persisted; gate thresholds,
+  fades, and hangover unchanged. Provenance + parity in
+  THIRD-PARTY.txt (fbank meanabs 0.0025, probs meanabs 5.4e-5 vs
+  golden files). Silero stays fully wired as fallback.
+- **Missing voice-gate model now fails open.** A broken Silero
+  handle previously read as eternal silence; it now nulls to
+  gate-off with the correct UI notice (same contract as FireRed).
+- **Owner-only voice gate PVAD (experimental, off by default).**
+  "Only my voice": one tap on "Learn my voice" opens a mic-only
+  session with live monitoring, counts down 8 seconds, and saves
+  your voiceprint — no need to Start first (running sessions stop
+  first, then enroll; idle stays idle after). A worker-thread ECAPA
+  check (~1 Hz) then also mutes OTHER voices (TV, family) — only
+  you pass. "Forget my voice" deletes the voiceprint (two-step
+  confirm). Timing stays with Silero/FireRed; identity only ever
+  mutes on measured mismatch (fail-open otherwise). New
+  `src/pvad_wrapper.*`; voiceprint stays on the PC, model untracked.
+  Harness: same-voice 0.840 vs cross-voice 0.673 (synth).
+
 ## [1.3.2] — 2026-09-18
 
 - **Download:** [AEC-Client-v1.3.2-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.3.2/AEC-Client-v1.3.2-win64.zip) (Windows 10/11 64-bit)

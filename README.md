@@ -71,11 +71,11 @@ No more headphones. No more echo. No dead-air noise.
 1. **Install [VB-CABLE](https://vb-audio.com/Cable/)** (free virtual audio cable). Reboot.
 2. **Download** the latest release from [Releases](https://github.com/samudinzul/aec-client/releases/latest) and extract it anywhere.
 3. **Run `aec_gui.exe`**.
-4. **Select your devices**:
-   - **Microphone** → your physical mic
-   - **Speaker Reference** → your physical speakers
-   - **Output** → `CABLE Input (VB-Audio Virtual Cable)`
-5. **Pick an engine** — WebRTC AEC3 or LocalVQE are good defaults.
+4. **Select your devices** (first run shows a 3-step checklist):
+   - **Your microphone** → your physical mic
+   - **Your speakers** → your physical speakers
+   - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
+5. **Pick an engine** under Advanced — WebRTC AEC3 or LocalVQE are good defaults.
 6. **Click Start**.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
@@ -89,12 +89,14 @@ Done. Talk normally with speakers on.
 
 ## Voice Gate
 
-After echo cancellation, a tiny neural network (Silero VAD, ~2 MB) checks for speech 30 times a second. Speech passes to Discord; silence is muted. No setup, no recording — it's on by default.
+After echo cancellation, a tiny neural network checks for speech many times a second. Speech passes to Discord; silence is muted. No setup, no recording — it's on by default.
 
 - Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = muted.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
 - Uncheck **Voice gate** in the Audio tab to pass original audio through.
-- Works at **16 and 48 kHz** (the model itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
+- **Voice detector** picker: **Silero** (proven default) or **FireRed** (experimental — decides faster and is stricter about what counts as speech).
+- **Only my voice** (experimental, off by default): one tap learns your voice (~8 s, you'll hear yourself), and the gate also mutes *other* voices — TV, family, roommates. Your voiceprint never leaves the PC.
+- Works at **16 and 48 kHz** (the detectors themselves are 16 kHz; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
 
 ---
 

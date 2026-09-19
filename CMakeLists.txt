@@ -47,6 +47,7 @@ add_executable(aec_gui
     src/localvqe_wrapper.cpp
     src/dtln_wrapper.cpp
     src/firered_wrapper.cpp
+    src/pvad_wrapper.cpp
     src/silero_wrapper.cpp
 )
 
@@ -218,6 +219,19 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/firered_cmvn.bin")
             "${CMAKE_SOURCE_DIR}/models/firered_cmvn.bin"
             "$<TARGET_FILE_DIR:aec_gui>/models/firered_cmvn.bin"
         COMMENT "Copying models/firered_cmvn.bin")
+endif()
+# ============================================================
+#  ECAPA speaker embedding for the owner-only voice gate
+#  (optional — feature reports "model missing" until vendored).
+#  vedk00/ecapa-voxceleb-speaker-embedding-onnx (Apache-2.0).
+#  Guarded so a fresh clone without it still builds.
+# ============================================================
+if(EXISTS "${CMAKE_SOURCE_DIR}/models/ecapa-speaker-v1.onnx")
+    add_custom_command(TARGET aec_gui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/models/ecapa-speaker-v1.onnx"
+            "$<TARGET_FILE_DIR:aec_gui>/models/ecapa-speaker-v1.onnx"
+        COMMENT "Copying models/ecapa-speaker-v1.onnx")
 endif()
 # TFLite runtime (optional, loaded at runtime by dtln_wrapper)
 foreach(_tflite_dll

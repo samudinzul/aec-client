@@ -58,6 +58,29 @@ AEC Client bundles the following open-source libraries:
     File (download on demand, not committed):
       models/silero_vad.onnx (sha256 1a153a22…)
 
+12. FireRed Stream-VAD (alternate voice-gate detector, experimental)
+    Upstream: FireRedTeam/FireRedVAD (Xiaohongshu, Apache-2.0),
+    streaming variant (~0.6M params, DFSMN, 16 kHz, 10 ms frames).
+    ONNX export via leospark/FireRedVAD-Engineering (MIT), validated
+    <1.19e-7 vs PyTorch by the exporter.
+    Files (download on demand, not committed):
+      models/model_with_caches.onnx (sha256 19fe5c62…)
+      models/model_with_caches.onnx.data (sha256 17cbbe1a…)
+      models/firered_cmvn.bin (80 global means + 80 inverse stds,
+        f32LE, generated from the official cmvn.ark with kaldiio and
+        cross-checked against the safetensors vectors to ~1e-7;
+        parity re-verified: fbank meanabs 0.0025, probs meanabs 5.4e-5
+        vs golden_stream.safetensors)
+
+13. ECAPA speaker embedding (owner-only voice gate, experimental)
+    Upstream: vedk00/ecapa-voxceleb-speaker-embedding-onnx (Apache-2.0,
+    mirror of speechbrain/spkrec-ecapa-voxceleb, 83 MB, 192-d).
+    Silero/FireRed keeps timing; ECAPA verifies identity ~1 Hz on a
+    worker thread. Voiceprint never leaves the PC
+    (models/voiceprint.bin, untracked, not shipped).
+    File (download on demand, not committed):
+      models/ecapa-speaker-v1.onnx (sha256 f46380bb…)
+
 Full license texts are available at the source URLs listed in the
 project repository:
 https://github.com/samudinzul/aec-client
