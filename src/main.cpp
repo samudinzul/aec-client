@@ -1679,10 +1679,9 @@ void DrawVadSection() {
                         g_vadCalMsgIsErr = false;
                     }
                 }
-                // Learn-my-voice contract: back to idle after, Start clickable.
-                // Only undo the auto-start — a session that was already
-                // running stays running.
-                if (!g_vadCalWasRunning && g_isRunning) StopAEC();
+                // Learn-my-voice contract: always back to idle after, Start
+                // clickable. Calibration is a setup action, not a session.
+                if (g_isRunning) StopAEC();
             }
         } else {
             float openT = g_vadOpen.load(), closeT = g_vadClose.load();
@@ -1694,8 +1693,8 @@ void DrawVadSection() {
                                   "Reset restores 0.50/0.30.");
             // Step-process like Learn my voice: works idle (auto-starts
             // the session) or running; 5 s listen, then a kept result
-            // with Re-calibrate. Back to idle after when it auto-started
-            // (Start clickable again); an already-running session stays up.
+            // with Re-calibrate. Always back to idle after (Start
+            // clickable again) — like enrollment, not a session.
             const char* calLabel = custom ? "Re-calibrate" : "Calibrate for my mic";
             if (ImGui::Button(calLabel, ImVec2(180, 0))) {
                 g_vadCalWasRunning = g_isRunning;
