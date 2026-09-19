@@ -16,10 +16,10 @@ the CMake post-build step; install them with `pacman` per `README.md`.)
 
 ## How each file is used by the build (`CMakeLists.txt`)
 
-- `libs/libaec.a` → linked into `aec_gui.exe` (`target_link_libraries`, line 65).
-- `libs/aec.dll` → copied next to `aec_gui.exe` by the post-build step (line 95).
+- `libs/libaec.a` → linked into `aec_gui.exe` (`target_link_libraries`, line 67).
+- `libs/aec.dll` → copied next to `aec_gui.exe` by the post-build step (line 97).
 - `libs/tensorflowlite_c.dll` (or `libs/libtensorflowlite_c.dll`) → copied next to
-  `aec_gui.exe` if present (lines 194–202); the DTLN wrapper loads it at runtime,
+  `aec_gui.exe` if present (lines 237–247); the DTLN wrapper loads it at runtime,
   no link-time dependency.
 
 ## Regenerating `libaec.a` / `aec.def` (MSYS2 UCRT64 bash, from repo root)
