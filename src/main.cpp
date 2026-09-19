@@ -25,6 +25,7 @@
 #include "nkf_wrapper.h"
 #include "localvqe_wrapper.h"
 #include "dtln_wrapper.h"
+#include "firered_wrapper.h"
 #include "silero_wrapper.h"
 
 #include <cstdio>
@@ -190,6 +191,8 @@ EngineState g_engine;
 //  UI only reads the atomics.
 // ============================================================
 SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
+FireRedHandle*     g_firered = nullptr;  // alternate detector (re)created with g_vad
+std::atomic<int>   g_vadDetector{ 0 };  // 0 = Silero (default), 1 = FireRed (experimental)
 std::atomic<bool>  g_vadEnabled{ true };  // default ON, zero-click
 std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
@@ -502,7 +505,8 @@ void SaveSettings() {
        << (g_minimizeToTray ? 1 : 0) << "\n"
        << (g_vadEnabled.load() ? 1 : 0) << "\n"
        << (g_listenToSelf ? 1 : 0) << "\n"
-       << (g_advancedOpen ? 1 : 0) << "\n";
+       << (g_advancedOpen ? 1 : 0) << "\n"
+       << g_vadDetector.load() << "\n";
 }
 
 void LoadSettings() {
@@ -550,6 +554,10 @@ void LoadSettings() {
         // New field — Advanced open state (defaults set above)
         int ao = g_advancedOpen ? 1 : 0;
         if (f >> ao) g_advancedOpen = (ao != 0);
+
+        // New field — voice detector (0 Silero default, 1 FireRed)
+        int vd = 0;
+        if (f >> vd) g_vadDetector.store((vd == 1) ? 1 : 0);
     }
 }
 
@@ -638,15 +646,25 @@ void ReinitEngine() {
         g_engine.type = ENGINE_DTLN;
     }
 
-    // Voice gate model is rate-agnostic (16 kHz direct, 48 kHz via
+    // Voice gate models are rate-agnostic (16 kHz direct, 48 kHz via
     // internal downsample in VadGateApply).
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
     g_vad = SileroNew("models/silero_vad.onnx");
+    // Fail-open: a broken Silero handle (missing model) must read as
+    // gate-off, never as eternal silence. Null it when unusable.
+    if (g_vad && strcmp(SileroLastError(g_vad), "ok") != 0) {
+        SileroDestroy(g_vad);
+        g_vad = nullptr;
+    }
+    if (g_firered) { FireRedDestroy(g_firered); g_firered = nullptr; }
+    g_firered = FireRedNew("models/model_with_caches.onnx", "models/firered_cmvn.bin");
+    // FireRedNew returns null on failure already — missing files stay gate-off.
 }
 
 // Reset VAD state + gate. Call on Start/Stop/engine change (audio idle).
 static void VadReset() {
     if (g_vad) SileroReset(g_vad);
+    if (g_firered) FireRedReset(g_firered);
     if (g_vadResamplerReady) {
         ma_data_converter_uninit(&g_vadResampler, NULL);
         g_vadResamplerReady = false;
@@ -657,14 +675,22 @@ static void VadReset() {
 }
 
 // Audio-thread gate. Called from output_callback after AEC, before
-// metering so meters show what Discord hears. Lock-free, no allocation:
-// 512-sample inference runs inline (< 1 ms). Pure neural decision with
-// fixed hysteresis — open at 0.50, close at 0.30 (uncertain band holds
-// the last decision). Same pair on every engine. ~30 ms fade open,
-// ~50 ms fade to hard mute, 300 ms hangover against clipping word tails.
+// metering so meters show what Discord hears. Lock-free, no allocation.
+// Detector (Silero 32 ms cadence / FireRed 10 ms cadence) feeds a pure
+// neural decision with fixed hysteresis — open at 0.50, close at 0.30
+// (uncertain band holds the last decision). Same pair on every engine.
+// ~30 ms fade open, ~50 ms fade to hard mute, 300 ms hangover against
+// clipping word tails.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
-    if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
+    bool useFireRed = (g_vadDetector.load() == 1);
+    if (useFireRed) {
+        if (!g_firered || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
+            g_vadGain = 1.0f;
+            g_vadHang = 0;
+            return;
+        }
+    } else if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
         g_vadGain = 1.0f;
         g_vadHang = 0;
         return;
@@ -699,7 +725,18 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     static float lastProb = 0.0f;
     float prob = 0.0f;
     auto t0 = Clock::now();
-    if (SileroPush(g_vad, feed, feedN, &prob)) {
+    if (useFireRed) {
+        // 10 ms hops: one fresh prob per audio frame at 16 kHz.
+        for (int off = 0; off + FIRERED_HOP <= feedN; off += FIRERED_HOP) {
+            if (FireRedPush(g_firered, feed + off, FIRERED_HOP, &prob)) {
+                lastProb = prob;
+                g_vadProb.store(prob);
+            }
+        }
+        float ms = (float)std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now() - t0).count() / 1000.0f;
+        g_vadMs.store(ms);
+    } else if (SileroPush(g_vad, feed, feedN, &prob)) {
         lastProb = prob;
         g_vadProb.store(prob);
         float ms = (float)std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1273,7 +1310,22 @@ void DrawVadSection() {
             "After echo removal, the app listens for speech many times a second.\n"
             "Speech passes through; silence is muted. No setup, no recording.");
 
-    if (!g_vad) {
+    int detector = g_vadDetector.load();
+    const char* detectors[] = { "Silero", "FireRed (experimental)" };
+    ImGui::TextUnformatted("Voice detector");
+    ImGui::SameLine(190.0f);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::Combo("##detector", &detector, detectors, IM_ARRAYSIZE(detectors))) {
+        g_vadDetector.store(detector);
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Which listener drives the gate above.\n"
+                          "Silero is the proven default; FireRed is newer\n"
+                          "and stricter about what counts as speech.");
+
+    bool detOk = (detector == 1) ? (g_firered != nullptr) : (g_vad != nullptr);
+    if (!detOk) {
         ImGui::TextDisabled("Voice detector is missing its data file — gate is off.");
         ImGui::TextDisabled("Reinstall the app or see About for details.");
     } else if (enabled) {
@@ -1467,9 +1519,10 @@ void DrawUI() {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Idle");
 
     // Voice-gate pill: SPEAKING lights up on any speech, SILENT when muted.
-    // Visible from every tab while the gate can act (16 or 48 kHz).
+    // Visible from every tab while the active detector can act (16 or 48 kHz).
     int vadSr = g_sampleRate.load();
-    if (g_vad && g_vadEnabled.load() && (vadSr == 16000 || vadSr == 48000)) {
+    bool vadReady = (g_vadDetector.load() == 1) ? (g_firered != nullptr) : (g_vad != nullptr);
+    if (vadReady && g_vadEnabled.load() && (vadSr == 16000 || vadSr == 48000)) {
         bool speaking = g_vadProb.load() >= 0.5f;
         ImGui::SameLine();
         DrawStatusDot(speaking);
@@ -1681,6 +1734,7 @@ int main(int, char**) {
     if (g_engine.localvqe) LocalVqeDestroy(g_engine.localvqe);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
+    if (g_firered) { FireRedDestroy(g_firered); g_firered = nullptr; }
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;
