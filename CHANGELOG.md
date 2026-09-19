@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Missing voice-gate model now fails open.** A broken Silero
   handle previously read as eternal silence; it now nulls to
   gate-off with the correct UI notice.
+- **One-tap voice-gate calibration.** "Calibrate for my mic" listens
+  5 s while you speak and sets open/close thresholds from measured
+  probs (quiet mics land ~0.20/0.12, loud mics stay ~0.45/0.27);
+  rejects flat/silent takes with a keep-old message. Persisted,
+  Reset restores 0.50/0.30, re-calibrate after mic/engine switch.
+  Bounded one-shot — no mid-call drift, so the v1.3.1 adaptive-mute
+  failure can't recur.
 - **Owner-only voice gate PVAD (experimental, off by default).**
   "Only my voice": one tap on "Learn my voice" opens a mic-only
   session with live monitoring, counts down 8 seconds, and saves

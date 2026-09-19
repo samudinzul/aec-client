@@ -59,7 +59,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Live level meters** with peak-hold
 - **Presets** for common scenarios (Discord, Low CPU, High Quality, Noisy Room)
 - **Clock-drift correction** — stable over long calls
-- **Voice gate** — a tiny neural network mutes silence, passes speech (16/48 kHz, on by default, one checkbox)
+- **Voice gate** — a tiny neural network mutes silence, passes speech (16/48 kHz, on by default, one checkbox + one-tap mic calibration)
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
@@ -94,6 +94,7 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 - Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = muted.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
 - Uncheck **Voice gate** in the Audio tab to pass original audio through.
+- **Calibrate for my mic** (under Voice gate, while running): speak normally 5 s — sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
 - **Only my voice** (experimental, off by default): one tap learns your voice (~8 s, you'll hear yourself), and the gate also mutes *other* voices — TV, family, roommates. Your voiceprint never leaves the PC.
 - Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
 

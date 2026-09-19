@@ -217,6 +217,14 @@ Clock::time_point g_enrollStart;
 std::atomic<bool>  g_vadEnabled{ true };  // default ON, zero-click
 std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
+std::atomic<float> g_vadOpen{ 0.50f };    // calibrated open threshold (persisted)
+std::atomic<float> g_vadClose{ 0.30f };   // calibrated close threshold (persisted)
+std::atomic<bool>  g_vadCalibrating{ false };  // one-tap calibration in progress
+Clock::time_point  g_vadCalStart;          // UI thread only
+std::vector<float> g_vadCalSamples;        // UI thread only (prob samples)
+std::string        g_vadCalMsg;            // result / error line, UI thread only
+bool               g_vadCalMsgIsErr = false;
+#define VAD_CAL_SECONDS 5
 float              g_vadGain = 1.0f;      // audio thread only
 int                g_vadHang = 0;         // audio thread only (300 ms hangover)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
@@ -532,7 +540,9 @@ void SaveSettings() {
        << (g_listenToSelf ? 1 : 0) << "\n"
        << (g_advancedOpen ? 1 : 0) << "\n"
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
-       << (g_pvadEnabled.load() ? 1 : 0) << "\n";
+       << (g_pvadEnabled.load() ? 1 : 0) << "\n"
+       << g_vadOpen.load() << "\n"
+       << g_vadClose.load() << "\n";
 }
 
 void LoadSettings() {
@@ -588,6 +598,14 @@ void LoadSettings() {
         // New field — owner-only voice defaults OFF if missing
         int po = 0;
         if (f >> po) g_pvadEnabled.store(po != 0);
+        // New fields — calibrated gate thresholds (defaults 0.50/0.30)
+        float vo = 0.50f, vc = 0.30f;
+        if (f >> vo) {
+            if (vo >= 0.10f && vo <= 0.90f) g_vadOpen.store(vo);
+            if (f >> vc) {
+                if (vc >= 0.05f && vc < g_vadOpen.load()) g_vadClose.store(vc);
+            }
+        }
     }
 }
 
@@ -598,6 +616,11 @@ void ResetToDefaults() {
     g_preprocessEnabled = false;
     g_minimizeToTray = true;
     g_vadEnabled.store(true);
+    g_vadOpen.store(0.50f);
+    g_vadClose.store(0.30f);
+    g_vadCalibrating.store(false);
+    g_vadCalSamples.clear();
+    g_vadCalMsg.clear();
     g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
@@ -751,10 +774,10 @@ static void VadGateApply(int16_t* cleaned, int fs) {
             Clock::now() - t0).count() / 1000.0f;
         g_vadMs.store(ms);
     }
-    // Fixed hysteresis: open at 0.50, close at 0.30. Between the lines
-    // the last decision holds (plus hangover), so quiet speech is never
-    // cut by a drifting close line.
-    const float kVadOpen = 0.50f, kVadClose = 0.30f;
+    // Calibrated hysteresis (defaults 0.50/0.30). One-tap calibration
+    // rewrites these from measured speech/silence probs — never drifting
+    // mid-call, so the v1.3.1 adaptive-mute failure can't recur.
+    const float kVadOpen = g_vadOpen.load(), kVadClose = g_vadClose.load();
     if (lastProb >= kVadOpen) {
         g_vadHang = 30;
         g_vadGain += (1.0f - g_vadGain) * 0.5f;
@@ -1552,12 +1575,104 @@ void DrawVadSection() {
         ImGui::TextDisabled("Reinstall the app or see About for details.");
     } else if (enabled) {
         float prob = g_vadProb.load();
-        DrawInlineDot(prob >= 0.5f);
+        float open = g_vadOpen.load();
+        DrawInlineDot(prob >= open);
         ImGui::SameLine();
-        if (prob >= 0.5f)
+        if (prob >= open)
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Speaking (%.2f)", prob);
         else
             ImGui::TextDisabled("Silent (%.2f)", prob);
+        // One-tap calibration: 5 s of normal speech sets open/close from
+        // measured probs. Bounded + persisted — no mid-call drift.
+        if (g_vadCalibrating.load()) {
+            g_vadCalSamples.push_back(prob);
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                Clock::now() - g_vadCalStart).count();
+            int left = VAD_CAL_SECONDS - (int)(elapsed / 1000);
+            if (left < 0) left = 0;
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                "Calibrating… keep speaking normally (%ds left)", left);
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+                g_vadCalibrating.store(false);
+                g_vadCalSamples.clear();
+                g_vadCalMsg.clear();
+            }
+            if (elapsed >= VAD_CAL_SECONDS * 1000) {
+                g_vadCalibrating.store(false);
+                // Percentiles of what the detector actually saw.
+                std::vector<float> s = g_vadCalSamples;
+                g_vadCalSamples.clear();
+                if (s.size() < 30) {
+                    g_vadCalMsg = "Too few samples — try again while running.";
+                    g_vadCalMsgIsErr = true;
+                } else {
+                    std::sort(s.begin(), s.end());
+                    auto pct = [&](float p) { return s[(size_t)(p * (s.size() - 1))]; };
+                    float p10 = pct(0.10f), p50 = pct(0.50f), p90 = pct(0.90f);
+                    if (p90 < 0.25f || (p90 - p10) < 0.10f) {
+                        char buf[160];
+                        snprintf(buf, sizeof(buf),
+                            "Didn't hear clear speech (peak %.2f) — kept %.2f/%.2f. "
+                            "Move closer / turn up, then retry.",
+                            p90, (double)g_vadOpen.load(), (double)g_vadClose.load());
+                        g_vadCalMsg = buf;
+                        g_vadCalMsgIsErr = true;
+                    } else {
+                        float openT = (p10 + p50) * 0.5f;
+                        if (openT < 0.18f) openT = 0.18f;
+                        if (openT > 0.65f) openT = 0.65f;
+                        float closeT = openT * 0.6f;
+                        if (closeT < 0.10f) closeT = 0.10f;
+                        if (closeT > 0.45f) closeT = 0.45f;
+                        if (closeT > openT - 0.05f) closeT = openT - 0.05f;
+                        g_vadOpen.store(openT);
+                        g_vadClose.store(closeT);
+                        SaveSettings();
+                        char buf[160];
+                        snprintf(buf, sizeof(buf),
+                            "Calibrated for this mic: open %.2f close %.2f "
+                            "(speech %.2f, quiet %.2f).",
+                            (double)openT, (double)closeT, (double)p50, (double)p10);
+                        g_vadCalMsg = buf;
+                        g_vadCalMsgIsErr = false;
+                    }
+                }
+            }
+        } else {
+            float openT = g_vadOpen.load(), closeT = g_vadClose.load();
+            bool custom = (fabsf(openT - 0.50f) > 0.005f || fabsf(closeT - 0.30f) > 0.005f);
+            ImGui::TextDisabled("Sensitivity: %s (%.2f/%.2f)",
+                custom ? "calibrated" : "normal", (double)openT, (double)closeT);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Open/close lines. Calibrate rewrites them;\n"
+                                  "Reset restores 0.50/0.30.");
+            bool canCal = g_isRunning && g_vad != nullptr;
+            if (!canCal) ImGui::BeginDisabled();
+            if (ImGui::Button("Calibrate for my mic", ImVec2(180, 0))) {
+                g_vadCalSamples.clear();
+                g_vadCalSamples.reserve(400);
+                g_vadCalMsg.clear();
+                g_vadCalStart = Clock::now();
+                g_vadCalibrating.store(true);
+            }
+            if (!canCal) ImGui::EndDisabled();
+            if (!canCal && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Press Start first — calibration listens to the live detector.");
+            ImGui::SameLine();
+            if (custom && ImGui::Button("Reset", ImVec2(80, 0))) {
+                g_vadOpen.store(0.50f);
+                g_vadClose.store(0.30f);
+                g_vadCalMsg.clear();
+                SaveSettings();
+            }
+            if (!g_vadCalMsg.empty()) {
+                if (g_vadCalMsgIsErr)
+                    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", g_vadCalMsg.c_str());
+                else
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", g_vadCalMsg.c_str());
+            }
+            ImGui::TextDisabled("Tip: re-calibrate after switching mic or engine.");
+        }
     } else {
         ImGui::TextDisabled("Gate is off — everything passes through unchanged.");
     }
@@ -1837,7 +1952,7 @@ void DrawUI() {
     // Visible from every tab while the gate can act (16 or 48 kHz).
     int vadSr = g_sampleRate.load();
     if (g_vad && g_vadEnabled.load() && (vadSr == 16000 || vadSr == 48000)) {
-        bool speaking = g_vadProb.load() >= 0.5f;
+        bool speaking = g_vadProb.load() >= g_vadOpen.load();
         ImGui::SameLine();
         DrawStatusDot(speaking);
         ImGui::SameLine();
