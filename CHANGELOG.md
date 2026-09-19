@@ -62,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/pvad_wrapper.*`; voiceprint stays on the PC, model untracked.
   Harness: same-voice 0.840 vs cross-voice 0.673 (synth).
 
+### Fixed
+
+- **Mic/out no longer die while the speakers are idle.** The output
+  path waited for loopback frames that never come when nothing plays,
+  so CABLE-output sessions sat dead (frozen meters included) until
+  sound played on the speakers. Missing ref now reads as digital
+  silence — which is what "nothing playing" means to the AEC.
+
 ## [1.3.2] — 2026-09-18
 
 - **Download:** [AEC-Client-v1.3.2-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.3.2/AEC-Client-v1.3.2-win64.zip) (Windows 10/11 64-bit)

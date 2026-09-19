@@ -859,7 +859,13 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     if (g_refRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
         g_refRing.skip(g_refRing.available() - DRIFT_TARGET);
 
-    if (g_micRing.available() < (size_t)fs || g_refRing.available() < (size_t)fs) {
+    // Loopback starves while the speakers are idle (no frames flow),
+    // so never stall the mic path on it: missing ref reads as digital
+    // silence, which is exactly what "nothing playing" means to the
+    // AEC. (CABLE-output sessions looked dead until sound played on
+    // the speakers; monitor sessions never starved because they always
+    // drive the speakers — same bug, masked.)
+    if (g_micRing.available() < (size_t)fs) {
         memset(out, 0, frameCount * sizeof(int16_t));
         return;
     }
@@ -869,7 +875,10 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     int16_t cleanedFrame[MAX_FRAME_SIZE];
 
     g_micRing.read(micFrame, fs);
-    g_refRing.read(refFrame, fs);
+    if (g_refRing.available() < (size_t)fs)
+        memset(refFrame, 0, fs * sizeof(int16_t));  // speakers idle: silent ref
+    else
+        g_refRing.read(refFrame, fs);
 
     // PVAD taps raw mic (owner voice, pre-echo-removal): 16 kHz floats
     // for history (worker verify) and enrollment. Bounded memcpy under
