@@ -2051,18 +2051,22 @@ void DrawUI() {
 
     ImGui::Spacing();
 
+    static int activeTab = 0;  // frame-local: which tab is open (footer buttons follow it)
     if (ImGui::BeginTabBar("MainTabs")) {
         if (ImGui::BeginTabItem("Audio")) {
+            activeTab = 0;
             ImGui::Spacing();
             DrawAudioTab();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Appearance")) {
+            activeTab = 1;
             ImGui::Spacing();
             DrawAppearanceTab();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("About")) {
+            activeTab = 2;
             ImGui::Spacing();
             DrawAboutTab();
             ImGui::EndTabItem();
@@ -2070,9 +2074,9 @@ void DrawUI() {
         ImGui::EndTabBar();
     }
 
-    // Footer on every tab: Start / Stop + status + Live Levels,
-    // so you can stop or watch levels without switching back to Audio.
-    {
+    // Footer buttons (Start / Reset) live on the Audio tab only.
+    // Live Levels below stay visible on every tab while running.
+    if (activeTab == 0) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();

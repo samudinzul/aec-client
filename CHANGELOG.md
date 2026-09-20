@@ -70,14 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   virtual cable is installed), and both voice-gate ticks — Push down
   silence + Only my voice — come back unticked (a kept voiceprint is
   preserved, just disabled). Advanced collapses for a simple landing.
+- **Footer buttons live on the Audio tab only.** Start/Reset no
+  longer show under Appearance/About; Live Levels still do.
 
 - **Mic/out no longer die while the speakers are idle.** The output
   path waited for loopback frames that never come when nothing plays,
   so CABLE-output sessions sat dead (frozen meters included) until
   sound played on the speakers. Missing ref now reads as digital
   silence — which is what "nothing playing" means to the AEC.
-- **Gate ducking fixed with a silence floor.** The voice gate used to
-  ride the output gain to full mute on every prob wobble (audible
+- **Gate ducking fixed with a silence floor.** The voice gate used to  ride the output gain to full mute on every prob wobble (audible
   pumping on all engines, piling onto engine ducking in double-talk).
   Silence now shelves to −12 dB instead of mute, release needs ~160 ms
   of firm "silent" before fading, and the uncertain band leans open
