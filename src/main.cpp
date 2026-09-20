@@ -639,8 +639,8 @@ void ResetToDefaults() {
     g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
-    g_advancedOpen = true;  // resetting users want the full controls
-    g_advInitDone = false;  // re-apply the default next frame
+    g_advancedOpen = false;  // reset lands simple: Advanced collapsed
+    g_advInitDone = false;  // re-apply the persisted default next frame
     g_sampleRate.store(48000);
     g_selectedEngine.store(ENGINE_AEC3);
     g_filterLengthMs.store(50);
