@@ -612,7 +612,13 @@ void LoadSettings() {
     }
 }
 
+// Forward: stopping live/owned audio before reconfiguring (defined below).
+void StopAEC();
+static void StopEnrollCapture();
+
 void ResetToDefaults() {
+    if (g_isRunning) StopAEC();  // never reconfigure live devices
+    if (g_enrollOwnedAudio) { g_pvadEnrolling.store(false); StopEnrollCapture(); }
     g_micIndex = 0; g_refIndex = 0;
     // Send-cleaned-sound-to lands on CABLE Input (index 0 only if no
     // virtual cable is installed).
@@ -643,6 +649,7 @@ void ResetToDefaults() {
     LoadWallpaperByIndex(0);
     UpdateTrayIcon();
     SaveSettings();
+    snprintf(g_statusText, 128, "Defaults restored — press Start");
 }
 
 void ApplyPreset(int idx) {
