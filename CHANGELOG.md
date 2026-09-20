@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reset to defaults now lands clean.** "Send cleaned sound to"
+  picks CABLE Input (index 0 only if no virtual cable is installed),
+  and both voice-gate ticks — Push down silence + Only my voice —
+  come back unticked (a kept voiceprint is preserved, just disabled).
+
 - **Mic/out no longer die while the speakers are idle.** The output
   path waited for loopback frames that never come when nothing plays,
   so CABLE-output sessions sat dead (frozen meters included) until

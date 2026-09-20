@@ -613,12 +613,17 @@ void LoadSettings() {
 }
 
 void ResetToDefaults() {
-    g_micIndex = 0; g_refIndex = 0; g_outIndex = 0;
+    g_micIndex = 0; g_refIndex = 0;
+    // Send-cleaned-sound-to lands on CABLE Input (index 0 only if no
+    // virtual cable is installed).
+    int cable = FindCableInputIndex();
+    g_outIndex = (cable >= 0) ? cable : 0;
     g_engineIndex = 1; g_sampleRateIndex = 1; g_filterIndex = 2;
     g_presetIndex = 1;
     g_preprocessEnabled = false;
     g_minimizeToTray = true;
-    g_vadEnabled.store(true);
+    g_vadEnabled.store(false);   // Push-down-silence defaults OFF after reset
+    g_pvadEnabled.store(false);  // Only-my-voice defaults OFF after reset (voiceprint kept)
     g_vadOpen.store(0.50f);
     g_vadClose.store(0.30f);
     g_vadCalibrating.store(false);
