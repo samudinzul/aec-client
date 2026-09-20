@@ -69,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so CABLE-output sessions sat dead (frozen meters included) until
   sound played on the speakers. Missing ref now reads as digital
   silence — which is what "nothing playing" means to the AEC.
+- **Gate ducking fixed with a silence floor.** The voice gate used to
+  ride the output gain to full mute on every prob wobble (audible
+  pumping on all engines, piling onto engine ducking in double-talk).
+  Silence now shelves to −12 dB instead of mute, release needs ~160 ms
+  of firm "silent" before fading, and the uncertain band leans open
+  half as hard. Tradeoff: faint background passes at −12 dB.
 
 ## [1.3.2] — 2026-09-18
 

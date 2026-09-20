@@ -35,7 +35,7 @@ AEC Client routes your microphone through one of **five acoustic echo cancellati
 ```
 Microphone ─────────────────┐
                              ├─→ AEC Engine ─→ Voice gate ─→ VB-CABLE ─→ Discord
-Speakers (loopback) ────────┘                   (speech passes, silence muted)
+Speakers (loopback) ────────┘                   (speech passes, silence pushed down)
 ```
 
 No more headphones. No more echo. No dead-air noise.
@@ -59,7 +59,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Live level meters** with peak-hold
 - **Presets** for common scenarios (Discord, Low CPU, High Quality, Noisy Room)
 - **Clock-drift correction** — stable over long calls
-- **Voice gate** — a tiny neural network mutes silence, passes speech (16/48 kHz, on by default, one checkbox + one-tap mic calibration)
+- **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz, on by default, one checkbox + one-tap mic calibration)
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
@@ -89,13 +89,13 @@ Done. Talk normally with speakers on.
 
 ## Voice Gate
 
-After echo cancellation, a tiny neural network checks for speech many times a second. Speech passes to Discord; silence is muted. No setup, no recording — it's on by default.
+After echo cancellation, a tiny neural network checks for speech many times a second. Speech passes to Discord; silence is pushed down (−12 dB, not muted — so the level never pumps). No setup, no recording — it's on by default.
 
-- Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = muted.
+- Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = pushed down.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
 - Uncheck **Voice gate** in the Audio tab to pass original audio through.
 - **Calibrate for my mic** (under Voice gate, idle or running): starts audio if needed (you'll hear yourself, live meters, no CABLE needed), you speak normally 5 s, then back to idle — press Start to use it. Sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
-- **Only my voice** (experimental, off by default): one tap learns your voice (~8 s, you'll hear yourself), and the gate also mutes *other* voices — TV, family, roommates. Your voiceprint never leaves the PC.
+- **Only my voice** (experimental, off by default): one tap learns your voice (~8 s, you'll hear yourself), and the gate also pushes down *other* voices — TV, family, roommates. Your voiceprint never leaves the PC.
 - Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — Speex and the neural engines run at 16000 (locked); AEC3 offers 16000 or 48000.
 
 ---

@@ -186,7 +186,7 @@ EngineState g_engine;
 
 // ============================================================
 //  Silero voice gate (neural VAD -> fixed gate -> output)
-//  Post-AEC: speech passes, silence is muted on every engine.
+//  Post-AEC: speech passes, silence is pushed down on every engine.
 //  SpeexDSP runs at 16 kHz only so the detector eats natively.
 //  Live at 16 kHz direct and 48 kHz via internal downsample
 //  (feed only). g_vadGain/g_vadHang live on the audio thread;
@@ -229,6 +229,7 @@ bool               g_calMonitor = false;  // one-shot: next StartAEC routes to s
 #define VAD_CAL_SECONDS 5
 float              g_vadGain = 1.0f;      // audio thread only
 int                g_vadHang = 0;         // audio thread only (500 ms hangover)
+int                g_vadCloseVotes = 0;   // audio thread only (debounced release)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
 ma_data_converter  g_pvadResampler;       // engine rate -> 16 kHz for PVAD
@@ -723,21 +724,21 @@ static void VadReset() {
     }
     g_vadGain = 1.0f;
     g_vadHang = 0;
+    g_vadCloseVotes = 0;
     g_vadProb.store(0.0f);
 }
 
 // Audio-thread gate. Called from output_callback after AEC, before
 // metering so meters show what Discord hears. Lock-free, no allocation.
-// Detector (Silero, 32 ms cadence) feeds a pure
-// neural decision with fixed hysteresis — open at 0.50, close at 0.30
-// (uncertain band holds the last decision). Same pair on every engine.
-// ~30 ms fade open, ~50 ms fade to hard mute, 300 ms hangover against
-// clipping word tails.
+// Detector (Silero, 32 ms cadence) feeds calibrated open/close lines.
+// Same pair on every engine. Anti-ducking: -12 dB silence floor (never
+// mute), debounced release, 500 ms hangover against clipping tails.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
     if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
         g_vadGain = 1.0f;
         g_vadHang = 0;
+        g_vadCloseVotes = 0;
         return;
     }
     static float fbuf[MAX_FRAME_SIZE];
@@ -754,6 +755,7 @@ static void VadGateApply(int16_t* cleaned, int fs) {
             if (ma_data_converter_init(&cfg, NULL, &g_vadResampler) != MA_SUCCESS) {
                 g_vadGain = 1.0f;
                 g_vadHang = 0;
+                g_vadCloseVotes = 0;
                 return;  // fail-open
             }
             g_vadResamplerReady = true;
@@ -780,40 +782,46 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     // Calibrated hysteresis (defaults 0.50/0.30). One-tap calibration
     // rewrites these from measured speech/silence probs — never drifting
     // mid-call, so the v1.3.1 adaptive-mute failure can't recur.
-    // Dynamics: 500 ms hangover (don't clip endings/pauses), fast
-    // attack (fully open in ~40 ms), gentle release, plus pre-open
-    // creep through the uncertain band so onsets are already partway
-    // open by the time the open line trips.
+    // Anti-ducking dynamics: silence falls to a -12 dB floor (never
+    // mute, so gain swings stay small), release needs ~160 ms of firm
+    // "silent" before fading (flicker holds instead of chopping),
+    // 500 ms hangover keeps endings/pauses, and the uncertain band
+    // leans gently open so onsets are partway through at trip time.
     const float kVadOpen = g_vadOpen.load(), kVadClose = g_vadClose.load();
+    static const float kVadFloor = 0.25f;  // -12 dB silence shelf
+    static const int kCloseVotesNeed = 5;  // consecutive close frames before fade
     if (lastProb >= kVadOpen) {
         g_vadHang = 50;
+        g_vadCloseVotes = 0;
         g_vadGain += (1.0f - g_vadGain) * 0.5f;
         if (g_vadGain > 0.99f) g_vadGain = 1.0f;
     } else if (lastProb <= kVadClose) {
         if (g_vadHang > 0) {
             g_vadHang--;
-        } else {
-            g_vadGain += (0.0f - g_vadGain) * 0.15f;
-            if (g_vadGain < 0.01f) g_vadGain = 0.0f;
+        } else if (++g_vadCloseVotes >= kCloseVotesNeed) {
+            g_vadGain += (kVadFloor - g_vadGain) * 0.15f;
+            if (g_vadGain < kVadFloor + 0.01f) g_vadGain = kVadFloor;
         }
+        // else: debouncing — hold, don't chop on flicker
     } else {
         // Uncertain band (prob ramping at an onset, or dipping
-        // mid-speech): hold the hangover and lean open — speech passes
-        // sooner, pauses don't chop. True silence still reads below
-        // the close line and releases as before.
+        // mid-speech): cancel any pending fade, hold the hangover,
+        // lean gently open. True silence still reads below the close
+        // line and shelves to the floor as before.
+        g_vadCloseVotes = 0;
         if (g_vadHang > 0) g_vadHang--;
-        g_vadGain += (1.0f - g_vadGain) * 0.08f;
+        g_vadGain += (1.0f - g_vadGain) * 0.04f;
         if (g_vadGain > 0.99f) g_vadGain = 1.0f;
     }
     // Identity layer (owner-only mode): the VAD above decides WHEN,
     // the worker's cosine decides WHO. Fail-open on any uncertainty —
-    // mute only on a measured mismatch. Atomics only here; the worker
+    // push down only on a measured mismatch. Atomics only here; the worker
     // may hold the wrapper mutex for ~90 ms per check.
     if (g_pvadEnabled.load() && g_pvadReady.load()) {
         float m = g_pvadMatch.load();
         if (m > -1.5f && m < g_pvadThreshold.load()) {
-            g_vadGain += (0.0f - g_vadGain) * 0.15f;
-            if (g_vadGain < 0.01f) g_vadGain = 0.0f;
+            g_vadGain += (kVadFloor - g_vadGain) * 0.15f;
+            if (g_vadGain < kVadFloor + 0.01f) g_vadGain = kVadFloor;
         }
     }
     if (g_vadGain < 1.0f) {
@@ -943,7 +951,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
-    // Silero voice gate: speech passes, silence muted (16 + 48 kHz).
+    // Silero voice gate: speech passes, silence pushed down (16 + 48 kHz).
     VadGateApply(cleanedFrame, fs);
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
@@ -1593,14 +1601,14 @@ void DrawVadSection() {
     ImGui::SeparatorText("Voice gate");
 
     bool enabled = g_vadEnabled.load();
-    if (ImGui::Checkbox("Mute when no speech (neural voice detector)", &enabled)) {
+    if (ImGui::Checkbox("Push down silence (neural voice detector)", &enabled)) {
         g_vadEnabled.store(enabled);
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "After echo removal, the app listens for speech many times a second.\n"
-            "Speech passes through; silence is muted. No setup, no recording.");
+            "Speech passes through; silence is pushed down (-12 dB). No setup, no recording.");
 
     if (!g_vad) {
         ImGui::TextDisabled("Voice detector is missing its data file — gate is off.");
@@ -1746,10 +1754,10 @@ void DrawVadSection() {
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("After learning your voice, the gate also mutes OTHER\n"
+        ImGui::SetTooltip("After learning your voice, the gate also pushes down OTHER\n"
                           "voices (TV, family, roommates) — only you pass through.\n"
                           "Your voiceprint never leaves this PC.\n"
-                          "Checks ~1/sec: speech starts always pass — muting\n"
+                          "Checks ~1/sec: speech starts always pass — pushing down\n"
                           "only on a measured mismatch, never on timing.\n"
                           "Off by default; needs a voiceprint below to do anything.");
     if (g_pvadEnabled.load() && g_pvad) {
@@ -1800,7 +1808,7 @@ void DrawVadSection() {
                                    "Voice learned. Last check: you (%.2f)", m);
             } else {
                 ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
-                                   "Voice learned. Last check: not you (%.2f) — muted", m);
+                                   "Voice learned. Last check: not you (%.2f) — lowered", m);
             }
             if (ImGui::Button("Re-learn my voice", ImVec2(160, 0))) {
                 PvadStartEnrollFlow();
@@ -1956,7 +1964,7 @@ void DrawAboutTab() {
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
     ImGui::BulletText("Five AEC engines: SpeexDSP, WebRTC AEC3, NKF-AEC, LocalVQE v1.4-AEC, DTLN-AEC 512");
-    ImGui::BulletText("Voice gate — neural speech detector mutes silence");
+    ImGui::BulletText("Voice gate — neural speech detector pushes silence down");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -2010,7 +2018,7 @@ void DrawUI() {
     else
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Idle");
 
-    // Voice-gate pill: SPEAKING lights up on any speech, SILENT when muted.
+    // Voice-gate pill: SPEAKING lights up on any speech, SILENT when lowered.
     // Visible from every tab while the gate can act (16 or 48 kHz).
     int vadSr = g_sampleRate.load();
     if (g_vad && g_vadEnabled.load() && (vadSr == 16000 || vadSr == 48000)) {
@@ -2025,7 +2033,7 @@ void DrawUI() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Green SPEAKING = speech going to Discord\n"
-                "Grey SILENT = gate muted (no speech)\n"
+                "Grey SILENT = gate lowered (no speech)\n"
                 "Detail lives under Audio → Voice gate");
     }
 
