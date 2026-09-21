@@ -109,9 +109,9 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 | Engine | Voice quality | Double-talk | CPU | Sample Rate | Latency | Best For |
 |--------|---------------|-------------|-----|-------------|---------|----------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Strongest echo removal |
-| **NKF-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Recommended default — most natural voice |
-| **DTLN-AEC 512** | ⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Cleanest output in noisy rooms (needs models) |
+| **WebRTC AEC3** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Strongest echo removal |
+| **NKF-AEC** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Recommended default — most natural voice |
+| **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Cleanest output in noisy rooms (needs models) |
 | **LocalVQE v1.4-AEC** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~32 ms | Legacy — fails double-talk, avoid for calls |
 | **SpeexDSP** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Legacy — fails double-talk, avoid for calls |
 
