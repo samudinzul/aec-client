@@ -5,6 +5,21 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **AEC3 loud-speaker caveat documented, not coded.** Live testing:
+  speakers much louder than the mic make AEC3's suppressor read
+  double-talk as "all echo" and clamp the human voice (ratio-driven
+  suppressor, no identity concept — the industry-wide #1 AEC failure
+  mode). No code lever exists in the packaged WebRTC API (config
+  struct published, no setter), so the fix is guidance: gain
+  structure first (speakers down, mic up/closer), NKF second
+  (least near-end distortion by design). Picker tooltip, Quick
+  Start, and ranking footnote updated; 5/5 stands, qualified by
+  level.
+
 ## [1.5.0] — 2026-09-21
 
 - **Download:** [AEC-Client-v1.5.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.5.0/AEC-Client-v1.5.0-win64.zip) (Windows 10/11 64-bit)

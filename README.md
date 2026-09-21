@@ -75,7 +75,10 @@ No more headphones. No more echo. No dead-air noise.
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
 5. **Pick an engine** under Advanced — NKF-AEC is the default; AEC3 is the quality pick, DTLN-AEC adds noise removal.
-6. **Click Start**.
+6. **Click Start**. Keep speakers at a moderate volume — very loud
+   speakers make any canceller mistake your voice for echo (AEC3 will
+   cut you mid-sentence in double-talk). If the room must be loud,
+   use NKF-AEC instead.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
    - **Echo Cancellation**: **OFF**
@@ -115,7 +118,7 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 | **LocalVQE v1.4-AEC** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~32 ms | Legacy — fails double-talk, avoid for calls |
 | **SpeexDSP** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Legacy — fails double-talk, avoid for calls |
 
-*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 double-talk 5/5 is bare AEC3, and stays. AEC3 trades naturalness for suppression muscle — its suppressor leaves voices sounding processed/cleaned; pick NKF for the most natural voice.*
+*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 double-talk 5/5 is bare AEC3, and stays. AEC3 trades naturalness for suppression muscle — its suppressor leaves voices sounding processed/cleaned; pick NKF for the most natural voice. Loud-speaker caveat: AEC3's 5/5 assumes sane levels — its suppressor works on echo-to-voice ratio per band, so speakers much louder than your mic read as "all echo" and your voice gets clamped in double-talk (no identity concept; Meta measured a 39% double-talk gap vs their Beryl canceller). Gain-structure first (speakers down, mic up/closer), NKF second — it distorts near-end speech the least by design.*
 
 **In short:** stay on **NKF** (the default) for the most natural voice at the lowest CPU. Switch to **DTLN** when the room is noisy — it removes noise too. Switch to **AEC3** when echo is winning (loud speakers, echoey room) and you accept a more processed sound for maximum double-talk muscle. Leave the legacy engines off unless nothing else runs on your hardware.
 

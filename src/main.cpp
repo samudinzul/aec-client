@@ -1593,7 +1593,8 @@ void DrawEngineSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "SpeexDSP = lightest on CPU, phone quality (16 kHz automatic)\n"
-            "AEC3 = strongest echo suppression, voice sounds processed, more CPU\n"
+            "AEC3 = strongest echo suppression, voice sounds processed, more CPU.\n"
+            "Very loud speakers make it mistake your voice for echo — lower them or use NKF\n"
             "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
@@ -1620,7 +1621,8 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "AEC3 = strongest echo suppression, voice sounds processed, more CPU\n"
+            "AEC3 = strongest echo suppression, voice sounds processed, more CPU.\n"
+            "Very loud speakers make it mistake your voice for echo — lower them or use NKF\n"
             "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
     }
