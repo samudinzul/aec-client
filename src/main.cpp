@@ -1577,7 +1577,7 @@ void DrawEngineSection() {
     if (g_showLegacyEngines) {
     const char* engines[] = {
         "SpeexDSP (lightest on CPU)",
-        "WebRTC AEC3 (best quality)",
+        "WebRTC AEC3 (strongest echo cut)",
         "NKF-AEC (recommended default)",
         "LocalVQE v1.4-AEC (natural voice)",
         "DTLN-AEC 512 (cleanest output)"
@@ -1593,7 +1593,7 @@ void DrawEngineSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "SpeexDSP = lightest on CPU, phone quality (16 kHz automatic)\n"
-            "AEC3 = best voice, more CPU\n"
+            "AEC3 = strongest echo suppression, voice sounds processed, more CPU\n"
             "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
@@ -1602,7 +1602,7 @@ void DrawEngineSection() {
     // double-talk voice-preservation test and live under the toggle below.
     static const int kShown[] = { ENGINE_AEC3, ENGINE_NKF, ENGINE_DTLN };
     static const char* kShownNames[] = {
-        "WebRTC AEC3 (best quality)",
+        "WebRTC AEC3 (strongest echo cut)",
         "NKF-AEC (recommended default)",
         "DTLN-AEC 512 (cleanest output)"
     };
@@ -1620,7 +1620,7 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "AEC3 = best voice, more CPU\n"
+            "AEC3 = strongest echo suppression, voice sounds processed, more CPU\n"
             "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
     }

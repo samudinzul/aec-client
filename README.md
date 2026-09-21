@@ -45,7 +45,7 @@ No more headphones. No more echo. No dead-air noise.
 ## Features
 
 - **5 selectable AEC engines** in one app (3 recommended + 2 legacy):
-  - **WebRTC AEC3** — best voice quality, same engine used by Chrome and Google Meet
+  - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed, less natural)
   - **NKF-AEC** — experimental neural Kalman filter (ICASSP 2023)
   - **DTLN-AEC 512** — dual-LSTM echo + noise canceller (ICASSP 2021, needs model files)
   - Legacy, hidden by default (weaker on double-talk): **LocalVQE v1.4-AEC**, **SpeexDSP**
@@ -103,13 +103,13 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 | Engine | Voice quality | Double-talk | CPU | Sample Rate | Latency | Best For |
 |--------|---------------|-------------|-----|-------------|---------|----------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Best overall quality |
-| **NKF-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Recommended default — preservation + low CPU |
-| **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Cleanest output in noisy rooms (needs models) |
+| **WebRTC AEC3** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Strongest echo removal |
+| **NKF-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Recommended default — most natural voice |
+| **DTLN-AEC 512** | ⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Cleanest output in noisy rooms (needs models) |
 | **LocalVQE v1.4-AEC** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~32 ms | Legacy — fails double-talk, avoid for calls |
 | **SpeexDSP** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Legacy — fails double-talk, avoid for calls |
 
-*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 5/5 above is bare AEC3, and stays.*
+*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 double-talk 5/5 is bare AEC3, and stays. AEC3 trades naturalness for suppression muscle — its suppressor leaves voices sounding processed/cleaned; pick NKF for the most natural voice.*
 
 ---
 

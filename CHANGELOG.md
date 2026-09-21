@@ -42,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cut (it duplicated the new Discord NKF settings). Four preset
   slots, each distinct; pre-cut configs remap again (Low CPU→
   Discord, old Noisy→new Noisy) via preset generation 3.
+- **AEC3 dethroned on naturalness.** Its suppressor leaves voices
+  sounding processed/cleaned, so Voice drops to 4 and DTLN (worst
+  near-end quality of the three at AECMOS-Other 3.73) to 3; NKF
+  takes "most natural voice". AEC3 keeps double-talk 5 and the
+  "strongest echo removal" crown — muscle, not beauty.
 
 ## [1.4.0] — 2026-09-20
 
