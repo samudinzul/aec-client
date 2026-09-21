@@ -17,8 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   struct published, no setter), so the fix is guidance: gain
   structure first (speakers down, mic up/closer), NKF second
   (least near-end distortion by design). Picker tooltip, Quick
-  Start, and ranking footnote updated; 5/5 stands, qualified by
-  level.
+  Start, and ranking footnote updated; DTLN's noise-suppression 5/5
+  stands, AEC3's echo-removal edge is level-qualified.
+
+### Changed
+
+- **Ranking columns renamed to outcomes.** "Voice quality /
+  Double-talk" become "Voice preservation / Noise suppression":
+  preservation is governed by the hardest case (double-talk), and
+  only DTLN actually removes background noise — every other engine
+  is echo-only, with LocalVQE's single star deliberate (keeps room
+  sound by design).
 
 ## [1.5.0] — 2026-09-21
 
