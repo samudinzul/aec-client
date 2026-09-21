@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full-band returns when the room allows). "High Quality" is cut —
   it duplicated Discord's settings and only confused; old configs
   remap (HQ→Discord) via a new preset-generation trailer field.
+- **NKF is the default engine.** "Discord (recommended)" runs NKF
+  @16 kHz; fresh installs and Reset land there too. "Low CPU" is
+  cut (it duplicated the new Discord NKF settings). Four preset
+  slots, each distinct; pre-cut configs remap again (Low CPU→
+  Discord, old Noisy→new Noisy) via preset generation 3.
 
 ## [1.4.0] — 2026-09-20
 

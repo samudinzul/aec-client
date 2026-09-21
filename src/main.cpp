@@ -171,17 +171,17 @@ struct Preset {
 
 static const Preset PRESETS[] = {
     { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
-    { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
+    { "Discord (recommended)",2, 0, 0, false, 1.00f, 1.00f },
     // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
     // means faster convergence per band where voice lives, and long
     // reverb tails are a convergence race. Full-band returns when
     // the room allows it.
     { "Echo-Heavy Room",      1, 0, 2, false, 1.00f, 1.00f },
-    { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
     { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
 };
 // "High Quality" was cut (it duplicated Discord's settings and only
-// confused): five slots, each with a distinct config.
+// confused); "Low CPU" went with it (it duplicated the new Discord
+// NKF settings): four slots, each with a distinct config.
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
 // ============================================================
@@ -247,8 +247,8 @@ SpscRing<4096> g_micRing, g_refRing;
 bool g_isRunning = false;
 Clock::time_point g_sessionStart;
 
-std::atomic<int>   g_sampleRate(48000);
-std::atomic<int>   g_selectedEngine(ENGINE_AEC3);
+std::atomic<int>   g_sampleRate(16000);
+std::atomic<int>   g_selectedEngine(ENGINE_NKF);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
 std::atomic<float> g_micGain(1.0f);
@@ -274,7 +274,7 @@ bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
 bool g_forgetArmed = false;     // Forget-my-voice two-step confirm
 Clock::time_point g_forgetArmTime;
-int  g_engineIndex = 1, g_sampleRateIndex = 1, g_filterIndex = 2;
+int  g_engineIndex = 2, g_sampleRateIndex = 0, g_filterIndex = 2;
 bool g_showLegacyEngines = false;  // reveal SpeexDSP + LocalVQE in the engine picker (persisted)
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
@@ -553,8 +553,8 @@ void SaveSettings() {
        << g_vadOpen.load() << "\n"
        << g_vadClose.load() << "\n"
        << (g_showLegacyEngines ? 1 : 0) << "\n"
-       << 0 << "\n"  // retired: cleanup toggle, always-on for AEC3 now (kept for file alignment)
-       << 2 << "\n";  // preset layout generation (2 = no High Quality)
+       << 0 << "\n"  // retired: nuked DEC-toggle slot (kept for file alignment)
+       << 3 << "\n";  // preset layout generation (3 = no HQ, no Low CPU)
 }
 
 void LoadSettings() {
@@ -631,7 +631,7 @@ void LoadSettings() {
             g_sampleRateIndex = 1;
             g_sampleRate.store(48000);
         }
-        // (Retired field: cleanup-toggle slot, always 0. Read to keep
+        // (Retired field: nuked DEC-toggle slot, always 0. Read to keep
         // old and new config files positionally aligned.)
         int dc_skip = 0;
         if (f >> dc_skip) { (void)dc_skip; }
@@ -644,6 +644,13 @@ void LoadSettings() {
         if (pgen == 1) {
             if (g_presetIndex == 2) g_presetIndex = 1;  // HQ ≈ Discord
             else if (g_presetIndex > 2 && g_presetIndex <= 5) g_presetIndex -= 1;
+        }
+        // "Low CPU" was cut (it duplicated the NKF Discord): pre-cut
+        // layouts slide again (3→Discord which is the same NKF engine,
+        // 4→Noisy Room). Current files skip both remaps.
+        if (pgen <= 2) {
+            if (g_presetIndex == 3) g_presetIndex = 1;  // Low CPU ≈ Discord (both NKF)
+            else if (g_presetIndex == 4) g_presetIndex = 3;
         }
         if (g_presetIndex < 0 || g_presetIndex >= PRESET_COUNT) g_presetIndex = 1;
     }
@@ -661,7 +668,7 @@ void ResetToDefaults() {
     // virtual cable is installed).
     int cable = FindCableInputIndex();
     g_outIndex = (cable >= 0) ? cable : 0;
-    g_engineIndex = 1; g_sampleRateIndex = 1; g_filterIndex = 2;
+    g_engineIndex = 2; g_sampleRateIndex = 0; g_filterIndex = 2;  // NKF @16 kHz = Discord preset
     g_showLegacyEngines = false;  // reset lands simple: recommended engines only
     g_presetIndex = 1;
     g_preprocessEnabled = false;
@@ -679,8 +686,8 @@ void ResetToDefaults() {
     g_outputGain.store(1.0f);
     g_advancedOpen = false;  // reset lands simple: Advanced collapsed
     g_advInitDone = false;  // re-apply the persisted default next frame
-    g_sampleRate.store(48000);
-    g_selectedEngine.store(ENGINE_AEC3);
+    g_sampleRate.store(16000);
+    g_selectedEngine.store(ENGINE_NKF);
     g_filterLengthMs.store(50);
     g_enablePreprocess.store(false);
     g_wallpaperIndex = 0;
@@ -1570,8 +1577,8 @@ void DrawEngineSection() {
     if (g_showLegacyEngines) {
     const char* engines[] = {
         "SpeexDSP (lightest on CPU)",
-        "WebRTC AEC3 (best quality, recommended)",
-        "NKF-AEC (light, preserves voice)",
+        "WebRTC AEC3 (best quality)",
+        "NKF-AEC (recommended default)",
         "LocalVQE v1.4-AEC (natural voice)",
         "DTLN-AEC 512 (cleanest output)"
     };
@@ -1586,8 +1593,8 @@ void DrawEngineSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "SpeexDSP = lightest on CPU, phone quality (16 kHz automatic)\n"
-            "AEC3 = best voice, more CPU (recommended)\n"
-            "NKF-AEC = light neural engine, best voice preservation (16 kHz automatic)\n"
+            "AEC3 = best voice, more CPU\n"
+            "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
     } else {
@@ -1595,8 +1602,8 @@ void DrawEngineSection() {
     // double-talk voice-preservation test and live under the toggle below.
     static const int kShown[] = { ENGINE_AEC3, ENGINE_NKF, ENGINE_DTLN };
     static const char* kShownNames[] = {
-        "WebRTC AEC3 (best quality, recommended)",
-        "NKF-AEC (light, preserves voice)",
+        "WebRTC AEC3 (best quality)",
+        "NKF-AEC (recommended default)",
         "DTLN-AEC 512 (cleanest output)"
     };
     int comboIdx = 0;
@@ -1613,8 +1620,8 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "AEC3 = best voice, more CPU (recommended)\n"
-            "NKF-AEC = light neural engine, best voice preservation (16 kHz automatic)\n"
+            "AEC3 = best voice, more CPU\n"
+            "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
     }
     if (ImGui::Checkbox("Show legacy engines (SpeexDSP, LocalVQE — weaker on double-talk)", &g_showLegacyEngines)) {

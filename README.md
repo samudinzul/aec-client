@@ -56,7 +56,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Optional system tray** — runs in the background like a real utility
 - **Device filtering** — virtual cables hidden from Mic/Reference dropdowns
 - **Live level meters** with peak-hold
-- **Presets** for common scenarios (Discord, Echo-Heavy Room, Low CPU, Noisy Room)
+- **Presets** for common scenarios (Discord, Echo-Heavy Room, Noisy Room)
 - **Clock-drift correction** — stable over long calls
 - **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz, on by default, one checkbox + one-tap mic calibration)
 - **Wallpaper customization**
@@ -74,7 +74,7 @@ No more headphones. No more echo. No dead-air noise.
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** under Advanced — WebRTC AEC3 is the default; DTLN-AEC adds noise removal.
+5. **Pick an engine** under Advanced — NKF-AEC is the default; AEC3 is the quality pick, DTLN-AEC adds noise removal.
 6. **Click Start**.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
@@ -103,8 +103,8 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 | Engine | Voice quality | Double-talk | CPU | Sample Rate | Latency | Best For |
 |--------|---------------|-------------|-----|-------------|---------|----------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Best overall — default choice |
-| **NKF-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Best voice preservation, lowest CPU of the passing engines |
+| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Best overall quality |
+| **NKF-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Recommended default — preservation + low CPU |
 | **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Cleanest output in noisy rooms (needs models) |
 | **LocalVQE v1.4-AEC** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~32 ms | Legacy — fails double-talk, avoid for calls |
 | **SpeexDSP** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Legacy — fails double-talk, avoid for calls |
