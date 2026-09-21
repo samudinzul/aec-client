@@ -117,6 +117,8 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 *Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 double-talk 5/5 is bare AEC3, and stays. AEC3 trades naturalness for suppression muscle — its suppressor leaves voices sounding processed/cleaned; pick NKF for the most natural voice.*
 
+**In short:** stay on **NKF** (the default) for the most natural voice at the lowest CPU. Switch to **DTLN** when the room is noisy — it removes noise too. Switch to **AEC3** when echo is winning (loud speakers, echoey room) and you accept a more processed sound for maximum double-talk muscle. Leave the legacy engines off unless nothing else runs on your hardware.
+
 ---
 
 ## Runtime Dependencies
