@@ -172,9 +172,9 @@ struct Preset {
 static const Preset PRESETS[] = {
     { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
-    { "Low CPU",              0, 0, 0, false, 1.00f, 1.00f },
+    { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
     { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
-    { "Noisy Room",           0, 0, 3, false, 1.20f, 1.00f },
+    { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
     { "Echo-Heavy Room",      1, 1, 2, false, 1.00f, 1.00f },
 };
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
@@ -270,6 +270,7 @@ bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
 bool g_forgetArmed = false;     // Forget-my-voice two-step confirm
 Clock::time_point g_forgetArmTime;
 int  g_engineIndex = 1, g_sampleRateIndex = 1, g_filterIndex = 2;
+bool g_showLegacyEngines = false;  // reveal SpeexDSP + LocalVQE in the engine picker (persisted)
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
 bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
@@ -545,7 +546,8 @@ void SaveSettings() {
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
        << (g_pvadEnabled.load() ? 1 : 0) << "\n"
        << g_vadOpen.load() << "\n"
-       << g_vadClose.load() << "\n";
+       << g_vadClose.load() << "\n"
+       << (g_showLegacyEngines ? 1 : 0) << "\n";
 }
 
 void LoadSettings() {
@@ -609,6 +611,18 @@ void LoadSettings() {
                 if (vc >= 0.05f && vc < g_vadOpen.load()) g_vadClose.store(vc);
             }
         }
+        // New field — legacy engines hidden unless explicitly shown
+        int le = 0;
+        if (f >> le) g_showLegacyEngines = (le != 0);
+        // A saved legacy engine with the toggle off lands on AEC3 —
+        // no stranded configs pointing at a hidden engine.
+        if (!g_showLegacyEngines &&
+            (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_LOCALVQE)) {
+            g_engineIndex = ENGINE_AEC3;
+            g_selectedEngine.store(ENGINE_AEC3);
+            g_sampleRateIndex = 1;
+            g_sampleRate.store(48000);
+        }
     }
 }
 
@@ -625,6 +639,7 @@ void ResetToDefaults() {
     int cable = FindCableInputIndex();
     g_outIndex = (cable >= 0) ? cable : 0;
     g_engineIndex = 1; g_sampleRateIndex = 1; g_filterIndex = 2;
+    g_showLegacyEngines = false;  // reset lands simple: recommended engines only
     g_presetIndex = 1;
     g_preprocessEnabled = false;
     g_minimizeToTray = true;
@@ -660,6 +675,10 @@ void ApplyPreset(int idx) {
     g_sampleRateIndex  = p.sampleRateIdx;
     g_filterIndex      = p.filterIdx;
     g_preprocessEnabled= false;  // retired: gate does the silencing
+    // A preset pointing at a hidden legacy engine reveals the list —
+    // the picker must show what's running.
+    if ((p.engine == ENGINE_SPEEX || p.engine == ENGINE_LOCALVQE) && !g_showLegacyEngines)
+        g_showLegacyEngines = true;
 
     static const int rates[] = { 16000, 48000 };
     static const int filters[] = { 30, 50, 80, 120, 200 };
@@ -1525,6 +1544,7 @@ void DrawEngineSection() {
     ImGui::TextUnformatted("Engine");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
+    if (g_showLegacyEngines) {
     const char* engines[] = {
         "SpeexDSP (lightest on CPU)",
         "WebRTC AEC3 (best quality, recommended)",
@@ -1547,6 +1567,40 @@ void DrawEngineSection() {
             "NKF-AEC = experimental neural engine (16 kHz automatic)\n"
             "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
             "DTLN-AEC 512 = neural echo + noise removal (16 kHz automatic)");
+    } else {
+    // Recommended engines only: SpeexDSP + LocalVQE failed the
+    // double-talk voice-preservation test and live under the toggle below.
+    static const int kShown[] = { ENGINE_AEC3, ENGINE_NKF, ENGINE_DTLN };
+    static const char* kShownNames[] = {
+        "WebRTC AEC3 (best quality, recommended)",
+        "NKF-AEC (experimental)",
+        "DTLN-AEC 512 (neural)"
+    };
+    int comboIdx = 0;
+    for (int i = 0; i < 3; i++)
+        if (kShown[i] == g_engineIndex) { comboIdx = i; break; }
+    if (ImGui::Combo("##engine", &comboIdx, kShownNames, 3)) {
+        g_engineIndex = kShown[comboIdx];
+        g_selectedEngine.store(g_engineIndex);
+        if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
+            g_sampleRateIndex = 0;
+            g_sampleRate.store(16000);
+        }
+        MarkPresetCustom();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "AEC3 = best voice, more CPU (recommended)\n"
+            "NKF-AEC = experimental neural engine (16 kHz automatic)\n"
+            "DTLN-AEC 512 = neural echo + noise removal (16 kHz automatic)");
+    }
+    if (ImGui::Checkbox("Show legacy engines (SpeexDSP, LocalVQE — weaker on double-talk)", &g_showLegacyEngines)) {
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "SpeexDSP and LocalVQE cut your voice during double-talk\n"
+            "(both talk at once). Hidden by default; tick to reveal.");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);

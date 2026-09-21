@@ -30,7 +30,7 @@
 
 ## What It Does
 
-AEC Client routes your microphone through one of **five acoustic echo cancellation engines**, subtracts the sound coming from your speakers, and outputs a clean, echo-free signal to a virtual audio cable. Any voice app can then use that clean signal as its microphone input.
+AEC Client routes your microphone through one of **three recommended acoustic echo cancellation engines** (plus two legacy engines under a toggle), subtracts the sound coming from your speakers, and outputs a clean, echo-free signal to a virtual audio cable. Any voice app can then use that clean signal as its microphone input.
 
 ```
 Microphone ─────────────────┐
@@ -44,12 +44,11 @@ No more headphones. No more echo. No dead-air noise.
 
 ## Features
 
-- **5 selectable AEC engines** in one app:
+- **5 selectable AEC engines** in one app (3 recommended + 2 legacy):
   - **WebRTC AEC3** — best voice quality, same engine used by Chrome and Google Meet
-  - **LocalVQE v1.4-AEC** — echo-only neural model; preserves voice, room tone, and background noise
-  - **SpeexDSP** — extremely lightweight, phone quality, lowest CPU
   - **NKF-AEC** — experimental neural Kalman filter (ICASSP 2023)
   - **DTLN-AEC 512** — dual-LSTM echo + noise canceller (ICASSP 2021, needs model files)
+  - Legacy, hidden by default (weaker on double-talk): **LocalVQE v1.4-AEC**, **SpeexDSP**
 - **Low CPU usage** — under 2% on a typical desktop
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -75,7 +74,7 @@ No more headphones. No more echo. No dead-air noise.
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** under Advanced — WebRTC AEC3 or LocalVQE are good defaults.
+5. **Pick an engine** under Advanced — WebRTC AEC3 is the default; DTLN-AEC adds noise removal.
 6. **Click Start**.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
@@ -104,11 +103,11 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 | Engine | Voice quality | Double-talk | CPU | Sample Rate | Latency | Best For |
 |--------|---------------|-------------|-----|-------------|---------|----------|
-| **WebRTC AEC3** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Best overall |
-| **DTLN-AEC 512** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
-| **LocalVQE v1.4-AEC** | ⭐⭐⭐⭐ | ⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
+| **WebRTC AEC3** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Best overall |
+| **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Neural echo + noise (needs models) |
+| **LocalVQE v1.4-AEC** (legacy) | ⭐⭐⭐⭐ | ⭐⭐⭐ | Very low | 16 kHz only | ~32 ms | Natural voice, neural |
 | **NKF-AEC** | ⭐⭐⭐ | ⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Experimental neural |
-| **SpeexDSP** | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Low-power hardware |
+| **SpeexDSP** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Low-power hardware |
 
 *Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Ranks are research-based (published challenge scores, algorithm design, in-app listening) — your ears outrank this table.*
 

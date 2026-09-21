@@ -5,6 +5,17 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Legacy engines demoted.** SpeexDSP and LocalVQE failed the
+  double-talk voice-preservation test (your voice gets cut when both
+  sides talk at once), so the engine picker now shows AEC3 / NKF /
+  DTLN by default. A "Show legacy engines" tick under the picker
+  reveals them; saved legacy configs land on AEC3 unless the tick is
+  on. "Low CPU" preset moved to NKF, "Noisy Room" to DTLN.
+
 ## [1.4.0] — 2026-09-20
 
 - **Download:** [AEC-Client-v1.4.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.4.0/AEC-Client-v1.4.0-win64.zip) (Windows 10/11 64-bit)
