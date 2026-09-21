@@ -173,8 +173,16 @@ struct Preset {
 static const Preset PRESETS[] = {
     { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
+    // High Quality = Discord's settings today (AEC3 ignores the filter
+    // slot, 48 kHz is already max). Kept as a named flagship slot;
+    // its distinct config arrives with the DEC pairing after the
+    // live test (48 kHz + residual cleanup).
     { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
-    { "Echo-Heavy Room",      1, 1, 2, false, 1.00f, 1.00f },
+    // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
+    // means faster convergence per band where voice lives, and long
+    // reverb tails are a convergence race. Full-band returns when
+    // the room (or the DEC tick) allows it.
+    { "Echo-Heavy Room",      1, 0, 2, false, 1.00f, 1.00f },
     { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
     { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
 };

@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same ranking (AEC3 group, then NKF, then DTLN) — a saved
   preset index from an older config may point at a renamed slot;
   re-pick once.
+- **Presets minimally de-generalized.** "Echo-Heavy Room" now runs
+  AEC3 at 16 kHz (faster per-band convergence for long reverb tails;
+  full-band returns when the room allows). "High Quality" honestly
+  shares "Discord" settings today — its distinct config (48 kHz +
+  residual cleanup) is staged on the DEC live test.
 
 ## [1.4.0] — 2026-09-20
 
