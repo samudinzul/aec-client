@@ -173,10 +173,10 @@ struct Preset {
 static const Preset PRESETS[] = {
     { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
-    { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
     { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
-    { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
     { "Echo-Heavy Room",      1, 1, 2, false, 1.00f, 1.00f },
+    { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
+    { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
 };
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -1661,9 +1661,9 @@ void DrawEngineSection() {
     const char* engines[] = {
         "SpeexDSP (lightest on CPU)",
         "WebRTC AEC3 (best quality, recommended)",
-        "NKF-AEC (experimental)",
+        "NKF-AEC (light, preserves voice)",
         "LocalVQE v1.4-AEC (natural voice)",
-        "DTLN-AEC 512 (neural)"
+        "DTLN-AEC 512 (cleanest output)"
     };
     if (ImGui::Combo("##engine", &g_engineIndex, engines, IM_ARRAYSIZE(engines))) {
         g_selectedEngine.store(g_engineIndex);
@@ -1677,17 +1677,17 @@ void DrawEngineSection() {
         ImGui::SetTooltip(
             "SpeexDSP = lightest on CPU, phone quality (16 kHz automatic)\n"
             "AEC3 = best voice, more CPU (recommended)\n"
-            "NKF-AEC = experimental neural engine (16 kHz automatic)\n"
+            "NKF-AEC = light neural engine, best voice preservation (16 kHz automatic)\n"
             "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
-            "DTLN-AEC 512 = neural echo + noise removal (16 kHz automatic)");
+            "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
     } else {
     // Recommended engines only: SpeexDSP + LocalVQE failed the
     // double-talk voice-preservation test and live under the toggle below.
     static const int kShown[] = { ENGINE_AEC3, ENGINE_NKF, ENGINE_DTLN };
     static const char* kShownNames[] = {
         "WebRTC AEC3 (best quality, recommended)",
-        "NKF-AEC (experimental)",
-        "DTLN-AEC 512 (neural)"
+        "NKF-AEC (light, preserves voice)",
+        "DTLN-AEC 512 (cleanest output)"
     };
     int comboIdx = 0;
     for (int i = 0; i < 3; i++)
@@ -1704,8 +1704,8 @@ void DrawEngineSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "AEC3 = best voice, more CPU (recommended)\n"
-            "NKF-AEC = experimental neural engine (16 kHz automatic)\n"
-            "DTLN-AEC 512 = neural echo + noise removal (16 kHz automatic)");
+            "NKF-AEC = light neural engine, best voice preservation (16 kHz automatic)\n"
+            "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
     }
     if (ImGui::Checkbox("Show legacy engines (SpeexDSP, LocalVQE — weaker on double-talk)", &g_showLegacyEngines)) {
         SaveSettings();
@@ -1764,12 +1764,12 @@ void DrawEngineSection() {
     } else if (g_engineIndex == ENGINE_AEC3) {
         ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
-        ImGui::TextDisabled("Experimental neural engine. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Light neural engine, best voice preservation. Runs at 16 kHz automatically.");
     } else if (g_engineIndex == ENGINE_LOCALVQE) {
         ImGui::TextDisabled("Removes only echo — your voice and room sound stay natural.");
         ImGui::TextDisabled("Runs at 16 kHz automatically. Very light on CPU.");
     } else if (g_engineIndex == ENGINE_DTLN) {
-        ImGui::TextDisabled("Neural echo + noise removal. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Cleanest output — neural echo + noise removal. Runs at 16 kHz automatically.");
         ImGui::TextDisabled("Needs an extra download — see About for details.");
     }
 

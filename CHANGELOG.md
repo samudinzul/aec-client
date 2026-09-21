@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   speaker reference through a GRU mask, 16 kHz native (resampled
   at 48 kHz, +~10 ms latency). Fails open without its model file; spike under
   live double-talk test — keep or nuke on results.
+- **Engine ranking refreshed from research + testing.** NKF promoted
+  above DTLN on voice preservation (AECMOS-Other 4.02 vs 3.73,
+  Jiang et al. ICASSP 2023); DTLN keeps the cleanliness crown
+  (AECMOS-Echo 4.31, plus noise removal). Legacy rows demoted on
+  stars to match the failed double-talk test. Presets reordered to
+  the same ranking (AEC3 group, then NKF, then DTLN) — a saved
+  preset index from an older config may point at a renamed slot;
+  re-pick once.
 
 ## [1.4.0] — 2026-09-20
 
