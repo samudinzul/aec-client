@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on. "Low CPU" preset moved to NKF, "Noisy Room" to DTLN.
 - **Neural residual cleanup (experimental, off by default).**
   Microsoft's AEC-Challenge ICASSP 2022 DEC baseline (MIT, 5.2 MB)
-  as an opt-in post-engine polisher: engine output + speaker
-  reference through a GRU mask, 16 kHz native (resampled at 48 kHz,
-  +~10 ms latency). Fails open without its model file; spike under
+  as an opt-in post-AEC3 polisher (AEC3-only tick): AEC3 output +
+  speaker reference through a GRU mask, 16 kHz native (resampled
+  at 48 kHz, +~10 ms latency). Fails open without its model file; spike under
   live double-talk test — keep or nuke on results.
 
 ## [1.4.0] — 2026-09-20

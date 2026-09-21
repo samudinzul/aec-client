@@ -794,8 +794,8 @@ static void VadReset() {
 }
 
 // Audio-thread DEC residual cleanup. Called from output_callback after
-// the engine, before the voice gate, so meters show what Discord hears.
-// Post-engine polisher: (engine output, far-end ref) through the DEC
+// AEC3, before the voice gate, so meters show what Discord hears.
+// Post-AEC3 polisher: (AEC3 output, far-end ref) through the DEC
 // baseline mask. 16 kHz direct; at 48 kHz both channels ride miniaudio
 // down/up through 16 kHz (voice band survives round-trip; the model
 // only ever sees 16 kHz). Fail-open everywhere: missing model, bad
@@ -803,6 +803,7 @@ static void VadReset() {
 static void DecCleanupApply(int16_t* cleaned, const int16_t* ref, int fs) {
     int sr = g_sampleRate.load();
     if (!g_dec || !g_decEnabled.load()) return;
+    if (g_engineIndex != ENGINE_AEC3) return;  // AEC3-only feature
     if (sr == 16000) {
         if (fs != 160) return;  // 16 kHz engine frame discipline
         static float cl[160], rf[160], polished[160];
@@ -1715,18 +1716,20 @@ void DrawEngineSection() {
             "(both talk at once). Hidden by default; tick to reveal.");
 
     bool decOn = g_decEnabled.load();
+    if (g_engineIndex == ENGINE_AEC3) {
     if (ImGui::Checkbox("Neural residual cleanup (experimental)", &decOn)) {
         g_decEnabled.store(decOn);
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Post-engine echo polisher (DEC baseline): a tiny neural net\n"
-            "re-masks the engine output against the speaker reference.\n"
+            "Post-AEC3 echo polisher (DEC baseline): a tiny neural net\n"
+            "re-masks the AEC3 output against the speaker reference.\n"
             "Adds ~10 ms latency. Off by default; needs its model file.");
     if (decOn && !g_dec) {
-        ImGui::TextDisabled("Cleanup model missing — passing engine output through.");
+        ImGui::TextDisabled("Cleanup model missing — passing AEC3 output through.");
         ImGui::TextDisabled("See MODELS.md for the download.");
+    }
     }
 
     ImGui::TextUnformatted("Sample Rate");

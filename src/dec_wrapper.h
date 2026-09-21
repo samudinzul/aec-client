@@ -7,8 +7,8 @@ extern "C" {
 typedef struct DecHandle DecHandle;
 
 // Streaming Microsoft AEC-Challenge ICASSP 2022 DEC baseline
-// (MIT) via ONNX Runtime (already linked). Post-engine residual
-// echo cleanup: engine output + far-end reference in, polished
+// (MIT) via ONNX Runtime (already linked). Post-AEC3 residual
+// echo cleanup: AEC3 output + far-end reference in, polished
 // output out. 16 kHz mono float32, 160 samples (10 ms hop) per
 // call — matches the app's 16 kHz engine frame exactly.
 //
