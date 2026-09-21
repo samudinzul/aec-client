@@ -25,6 +25,7 @@ Missing files degrade gracefully (see Notes) — the build works without them.
 | File | Size | Feature | Download from |
 |------|------|---------|---------------|
 | `ecapa-speaker-v1.onnx` | ~83 MB | "Only my voice" owner gate (ECAPA embedding, Apache-2.0) | [vedk00/ecapa-voxceleb-speaker-embedding-onnx](https://huggingface.co/vedk00/ecapa-voxceleb-speaker-embedding-onnx/resolve/main/model/ecapa-speaker-v1.onnx) |
+| `dec-baseline-icassp2022.onnx` | ~5.2 MB | "Neural residual cleanup" post-engine polisher (DEC baseline, MIT) | [microsoft/AEC-Challenge baseline/icassp2022](https://github.com/microsoft/AEC-Challenge/raw/main/baseline/icassp2022/dec-baseline-model-icassp2022.onnx) |
 
 ## Runtime library (in `libs/`)
 
@@ -57,6 +58,10 @@ curl -L -o models/dtln_aec_512_2.tflite \
 # ECAPA speaker embedding for "Only my voice" (~83 MB, Apache-2.0)
 curl -L -o models/ecapa-speaker-v1.onnx \
   "https://huggingface.co/vedk00/ecapa-voxceleb-speaker-embedding-onnx/resolve/main/model/ecapa-speaker-v1.onnx"
+
+# DEC baseline residual cleanup (~5.2 MB, MIT)
+curl -L -o models/dec-baseline-icassp2022.onnx \
+  "https://github.com/microsoft/AEC-Challenge/raw/main/baseline/icassp2022/dec-baseline-model-icassp2022.onnx"
 ```
 
 ## Verification (SHA-256 — five v1.3.2 files plus Unreleased additions)
@@ -68,6 +73,7 @@ b6e43138588a83bfe903ab5e143b4020b91c1e1629f5a575ac5855ff0003c731  localvqe-v1.4-
 1d46987c5d3b4b7a555b054947fa4ae19e38999d3500cbb2cb10d8b9005f81d0  nkf.onnx
 1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3  silero_vad.onnx  (matches upstream v6.2.1)
 f46380bbaeddb929fb3a10ab63a4b1877a50e3d1e5fdd55a1b618d5651d3f64e  ecapa-speaker-v1.onnx
+4436ee4f80e5f1d0299196bd7057137a3cad7cac324409dce7540f2a113bb931  dec-baseline-icassp2022.onnx
 ```
 
 Check with: `sha256sum models/*`
@@ -83,6 +89,9 @@ Check with: `sha256sum models/*`
   passes through unchanged.
 - Without `ecapa-speaker-v1.onnx`, "Only my voice" reports the voice model
   as missing and the owner check stays unavailable; everything else works.
+- Without `dec-baseline-icassp2022.onnx`, "Neural residual cleanup"
+  reports the model as missing and engine output passes through; the
+  checkbox stays off the audio path until vendored.
 - `models/voiceprint.bin` is generated locally by "Learn my voice" — never
   committed, never shipped, deletable via "Forget my voice".
 - The release script (`scripts/make-release.sh`) hard-requires the five
