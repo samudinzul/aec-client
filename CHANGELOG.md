@@ -31,9 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-pick once.
 - **Presets minimally de-generalized.** "Echo-Heavy Room" now runs
   AEC3 at 16 kHz (faster per-band convergence for long reverb tails;
-  full-band returns when the room allows). "High Quality" honestly
-  shares "Discord" settings today — its distinct config (48 kHz +
-  residual cleanup) is staged on the DEC live test.
+  full-band returns when the room allows). "High Quality" is cut —
+  it duplicated Discord's settings and only confused; old configs
+  remap (HQ→Discord) via a new preset-generation trailer field.
 
 ## [1.4.0] — 2026-09-20
 

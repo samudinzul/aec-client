@@ -173,11 +173,6 @@ struct Preset {
 static const Preset PRESETS[] = {
     { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
     { "Discord (recommended)",1, 1, 2, false, 1.00f, 1.00f },
-    // High Quality = Discord's settings today (AEC3 ignores the filter
-    // slot, 48 kHz is already max). Kept as a named flagship slot;
-    // its distinct config arrives with the DEC pairing after the
-    // live test (48 kHz + residual cleanup).
-    { "High Quality",         1, 1, 4, false, 1.00f, 1.00f },
     // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
     // means faster convergence per band where voice lives, and long
     // reverb tails are a convergence race. Full-band returns when
@@ -186,6 +181,8 @@ static const Preset PRESETS[] = {
     { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
     { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
 };
+// "High Quality" was cut (it duplicated Discord's settings and only
+// confused): five slots, each with a distinct config.
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
 // ============================================================
@@ -565,7 +562,8 @@ void SaveSettings() {
        << g_vadOpen.load() << "\n"
        << g_vadClose.load() << "\n"
        << (g_showLegacyEngines ? 1 : 0) << "\n"
-       << (g_decEnabled.load() ? 1 : 0) << "\n";
+       << (g_decEnabled.load() ? 1 : 0) << "\n"
+       << 2 << "\n";  // preset layout generation (2 = no High Quality)
 }
 
 void LoadSettings() {
@@ -597,6 +595,7 @@ void LoadSettings() {
         if (f >> wp) g_wallpaperIndex = wp;
         int pi = -1;
         if (f >> pi) g_presetIndex = pi;
+        int pgen = 1;  // preset layout generation (value read at end of file)
 
         // New field — default true if missing (backward compat with old config)
         int mt = 1;
@@ -644,6 +643,17 @@ void LoadSettings() {
         // New field — DEC residual cleanup defaults OFF if missing
         int dc = 0;
         if (f >> dc) g_decEnabled.store(dc != 0);
+        // New field — preset layout generation (missing = pre-cut layout
+        // that still had "High Quality" at index 2).
+        if (f >> pgen) { (void)pgen; }
+        // "High Quality" was cut: generation-1 indices slide down
+        // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
+        // separate fields, unaffected. Anything else lands on Discord.
+        if (pgen == 1) {
+            if (g_presetIndex == 2) g_presetIndex = 1;  // HQ ≈ Discord
+            else if (g_presetIndex > 2 && g_presetIndex <= 5) g_presetIndex -= 1;
+        }
+        if (g_presetIndex < 0 || g_presetIndex >= PRESET_COUNT) g_presetIndex = 1;
     }
 }
 

@@ -56,7 +56,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Optional system tray** — runs in the background like a real utility
 - **Device filtering** — virtual cables hidden from Mic/Reference dropdowns
 - **Live level meters** with peak-hold
-- **Presets** for common scenarios (Discord, Low CPU, High Quality, Noisy Room)
+- **Presets** for common scenarios (Discord, Echo-Heavy Room, Low CPU, Noisy Room)
 - **Clock-drift correction** — stable over long calls
 - **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz, on by default, one checkbox + one-tap mic calibration)
 - **Wallpaper customization**
