@@ -84,6 +84,12 @@ No more headphones. No more echo. No dead-air noise.
 
 Done. Talk normally with speakers on.
 
+> **SmartScreen on first launch?** The app is unsigned (no paid
+> code-signing certificate), so Windows may show **"Windows protected
+> your PC"**. This is expected: click **More info → Run anyway**.
+> Every release is built straight from the public source in this repo
+> — audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
+
 ---
 
 ## Voice Gate
