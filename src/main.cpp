@@ -239,7 +239,7 @@ int                g_vadCloseVotes = 0;   // audio thread only (debounced releas
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
 DecHandle*         g_dec = nullptr;      // (re)created in ReinitEngine; nulled when unusable
-std::atomic<bool>  g_decEnabled{ false };  // residual cleanup, default OFF (experimental)
+                                             // cleanup runs automatically on AEC3, no toggle
 ma_data_converter  g_decDown;            // 48 kHz -> 16 kHz for the DEC cleaned feed
 bool               g_decDownReady = false;   // (un)init with the audio idle
 ma_data_converter  g_decDownRef;         // 48 kHz -> 16 kHz for the DEC ref feed (separate filter state)
@@ -562,7 +562,7 @@ void SaveSettings() {
        << g_vadOpen.load() << "\n"
        << g_vadClose.load() << "\n"
        << (g_showLegacyEngines ? 1 : 0) << "\n"
-       << (g_decEnabled.load() ? 1 : 0) << "\n"
+       << 0 << "\n"  // retired: cleanup toggle, always-on for AEC3 now (kept for file alignment)
        << 2 << "\n";  // preset layout generation (2 = no High Quality)
 }
 
@@ -640,9 +640,10 @@ void LoadSettings() {
             g_sampleRateIndex = 1;
             g_sampleRate.store(48000);
         }
-        // New field — DEC residual cleanup defaults OFF if missing
-        int dc = 0;
-        if (f >> dc) g_decEnabled.store(dc != 0);
+        // (Retired field: cleanup-toggle slot, always 0. Read to keep
+        // old and new config files positionally aligned.)
+        int dc_skip = 0;
+        if (f >> dc_skip) { (void)dc_skip; }
         // New field — preset layout generation (missing = pre-cut layout
         // that still had "High Quality" at index 2).
         if (f >> pgen) { (void)pgen; }
@@ -676,7 +677,6 @@ void ResetToDefaults() {
     g_minimizeToTray = true;
     g_vadEnabled.store(false);   // Push-down-silence defaults OFF after reset
     g_pvadEnabled.store(false);  // Only-my-voice defaults OFF after reset (voiceprint kept)
-    g_decEnabled.store(false);   // Residual cleanup defaults OFF after reset
     g_vadOpen.store(0.50f);
     g_vadClose.store(0.30f);
     g_vadCalibrating.store(false);
@@ -820,8 +820,8 @@ static void VadReset() {
 // frame size, or a rejected mask leaves cleaned[] untouched.
 static void DecCleanupApply(int16_t* cleaned, const int16_t* ref, int fs) {
     int sr = g_sampleRate.load();
-    if (!g_dec || !g_decEnabled.load()) return;
-    if (g_engineIndex != ENGINE_AEC3) return;  // AEC3-only feature
+    if (!g_dec) return;
+    if (g_engineIndex != ENGINE_AEC3) return;  // AEC3-only cleanup, always on
     if (sr == 16000) {
         if (fs != 160) return;  // 16 kHz engine frame discipline
         static float cl[160], rf[160], polished[160];
@@ -1733,21 +1733,11 @@ void DrawEngineSection() {
             "SpeexDSP and LocalVQE cut your voice during double-talk\n"
             "(both talk at once). Hidden by default; tick to reveal.");
 
-    bool decOn = g_decEnabled.load();
-    if (g_engineIndex == ENGINE_AEC3) {
-    if (ImGui::Checkbox("Neural residual cleanup (experimental)", &decOn)) {
-        g_decEnabled.store(decOn);
-        SaveSettings();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "Post-AEC3 echo polisher (DEC baseline): a tiny neural net\n"
-            "re-masks the AEC3 output against the speaker reference.\n"
-            "Adds ~10 ms latency. Off by default; needs its model file.");
-    if (decOn && !g_dec) {
-        ImGui::TextDisabled("Cleanup model missing — passing AEC3 output through.");
+    // DEC cleanup runs automatically on AEC3 (no toggle): the notice
+    // below only appears when its model file is missing.
+    if (g_engineIndex == ENGINE_AEC3 && !g_dec) {
+        ImGui::TextDisabled("Residual-cleanup model missing — passing AEC3 output through.");
         ImGui::TextDisabled("See MODELS.md for the download.");
-    }
     }
 
     ImGui::TextUnformatted("Sample Rate");
@@ -1780,7 +1770,8 @@ void DrawEngineSection() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("SpeexDSP only - how much echo to cancel (ms)");
     } else if (g_engineIndex == ENGINE_AEC3) {
-        ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
+        ImGui::TextDisabled(g_dec ? "AEC3 tunes itself + neural residual cleanup."
+                                  : "AEC3 tunes itself — no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
         ImGui::TextDisabled("Light neural engine, best voice preservation. Runs at 16 kHz automatically.");
     } else if (g_engineIndex == ENGINE_LOCALVQE) {
