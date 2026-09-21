@@ -23,11 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Ranking columns renamed to outcomes.** "Voice quality /
-  Double-talk" become "Voice preservation / Noise suppression":
-  preservation is governed by the hardest case (double-talk), and
-  only DTLN actually removes background noise — every other engine
-  is echo-only, with LocalVQE's single star deliberate (keeps room
-  sound by design).
+  Double-talk" become "Voice preservation / Echo removal" (a brief
+  "Noise suppression" stint was dropped — it made echo-only engines
+  look broken at a job they were never hired for; DTLN's denoising
+  stays in its Best-For line). Preservation is governed by the
+  hardest case (double-talk).
 
 ## [1.5.0] — 2026-09-21
 
