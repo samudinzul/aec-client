@@ -15,12 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DTLN by default. A "Show legacy engines" tick under the picker
   reveals them; saved legacy configs land on AEC3 unless the tick is
   on. "Low CPU" preset moved to NKF, "Noisy Room" to DTLN.
-- **Neural residual cleanup on AEC3 (experimental).**
-  Microsoft's AEC-Challenge ICASSP 2022 DEC baseline (MIT, 5.2 MB)
-  runs automatically after AEC3 — no toggle: AEC3 output + speaker
-  reference through a GRU mask, 16 kHz native (resampled at 48 kHz,
-  +~10 ms latency). Fails open without its model file; spike under
-  live double-talk test — keep or nuke on results.
+- **DEC baseline residual cleanup spiked then nuked.** Harness-promising
+  (29 dB echo cut on synth) but failed live (aggressive voice cut
+  with AEC3) and failed isolation: on echo-free speech it keeps 17%
+  with silent ref and 0.07% with active ref — the cascade sees
+  (cleaned output, live speakers) exactly when AEC3 already did its
+  job, and slams the mask shut. Full revert of wrapper, UI, docs,
+  weights (FireRed treatment). Lesson: a full-AEC mask is the wrong
+  shape for a post-AEC polisher; residual work needs a model trained
+  for residual, not a repurposed echo canceller.
 - **Engine ranking refreshed from research + testing.** NKF promoted
   above DTLN on voice preservation (AECMOS-Other 4.02 vs 3.73,
   Jiang et al. ICASSP 2023); DTLN keeps the cleanliness crown

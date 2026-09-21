@@ -27,7 +27,6 @@
 #include "dtln_wrapper.h"
 #include "pvad_wrapper.h"
 #include "silero_wrapper.h"
-#include "dec_wrapper.h"
 
 #include <cstdio>
 #include <cmath>
@@ -176,7 +175,7 @@ static const Preset PRESETS[] = {
     // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
     // means faster convergence per band where voice lives, and long
     // reverb tails are a convergence race. Full-band returns when
-    // the room (or the DEC tick) allows it.
+    // the room allows it.
     { "Echo-Heavy Room",      1, 0, 2, false, 1.00f, 1.00f },
     { "Low CPU",              2, 0, 0, false, 1.00f, 1.00f },
     { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
@@ -238,14 +237,6 @@ int                g_vadHang = 0;         // audio thread only (500 ms hangover)
 int                g_vadCloseVotes = 0;   // audio thread only (debounced release)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
-DecHandle*         g_dec = nullptr;      // (re)created in ReinitEngine; nulled when unusable
-                                             // cleanup runs automatically on AEC3, no toggle
-ma_data_converter  g_decDown;            // 48 kHz -> 16 kHz for the DEC cleaned feed
-bool               g_decDownReady = false;   // (un)init with the audio idle
-ma_data_converter  g_decDownRef;         // 48 kHz -> 16 kHz for the DEC ref feed (separate filter state)
-bool               g_decDownRefReady = false;
-ma_data_converter  g_decUp;              // 16 kHz -> 48 kHz for the DEC return
-bool               g_decUpReady = false;
 ma_data_converter  g_pvadResampler;       // engine rate -> 16 kHz for PVAD
 bool               g_pvadResamplerReady = false;
 ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
@@ -769,16 +760,9 @@ void ReinitEngine() {
     // Voice gate models are rate-agnostic (16 kHz direct, 48 kHz via
     // internal downsample in VadGateApply).
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
-    if (g_dec) { DecDestroy(g_dec); g_dec = nullptr; }
     g_vad = SileroNew("models/silero_vad.onnx");
     // Fail-open: a broken handle (missing model) must read as gate-off,
     // never as eternal silence. Null it when unusable.
-    // DEC residual cleanup likewise: rate-agnostic via internal
-    // resampling in DecCleanupApply. Nulled when unusable so the
-    // audio path can skip it with a single branch.
-    if (g_dec) { DecDestroy(g_dec); g_dec = nullptr; }
-    g_dec = DecNew("models/dec-baseline-icassp2022.onnx");
-    if (g_dec && !DecUsable(g_dec)) { DecDestroy(g_dec); g_dec = nullptr; }
 }
 
 // Reset VAD state + gate. Call on Start/Stop/engine change (audio idle).
@@ -796,95 +780,6 @@ static void VadReset() {
     g_vadHang = 0;
     g_vadCloseVotes = 0;
     g_vadProb.store(0.0f);
-    if (g_dec) DecReset(g_dec);
-    if (g_decDownReady) {
-        ma_data_converter_uninit(&g_decDown, NULL);
-        g_decDownReady = false;
-    }
-    if (g_decDownRefReady) {
-        ma_data_converter_uninit(&g_decDownRef, NULL);
-        g_decDownRefReady = false;
-    }
-    if (g_decUpReady) {
-        ma_data_converter_uninit(&g_decUp, NULL);
-        g_decUpReady = false;
-    }
-}
-
-// Audio-thread DEC residual cleanup. Called from output_callback after
-// AEC3, before the voice gate, so meters show what Discord hears.
-// Post-AEC3 polisher: (AEC3 output, far-end ref) through the DEC
-// baseline mask. 16 kHz direct; at 48 kHz both channels ride miniaudio
-// down/up through 16 kHz (voice band survives round-trip; the model
-// only ever sees 16 kHz). Fail-open everywhere: missing model, bad
-// frame size, or a rejected mask leaves cleaned[] untouched.
-static void DecCleanupApply(int16_t* cleaned, const int16_t* ref, int fs) {
-    int sr = g_sampleRate.load();
-    if (!g_dec) return;
-    if (g_engineIndex != ENGINE_AEC3) return;  // AEC3-only cleanup, always on
-    if (sr == 16000) {
-        if (fs != 160) return;  // 16 kHz engine frame discipline
-        static float cl[160], rf[160], polished[160];
-        for (int i = 0; i < 160; i++) {
-            cl[i] = cleaned[i] / 32768.0f;
-            rf[i] = ref[i] / 32768.0f;
-        }
-        if (!DecProcess(g_dec, cl, rf, polished, 160)) return;  // bypass: keep engine output
-        for (int i = 0; i < 160; i++) {
-            float v = polished[i] * 32768.0f;
-            if (v > 32767.0f) v = 32767.0f;
-            if (v < -32768.0f) v = -32768.0f;
-            cleaned[i] = (int16_t)v;
-        }
-    } else if (sr == 48000) {
-        if (fs != 480) return;
-        if (!g_decDownReady) {
-            ma_data_converter_config cfg = ma_data_converter_config_init(
-                ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
-            if (ma_data_converter_init(&cfg, NULL, &g_decDown) != MA_SUCCESS)
-                return;  // fail-open
-            g_decDownReady = true;
-        }
-        if (!g_decDownRefReady) {
-            ma_data_converter_config cfg = ma_data_converter_config_init(
-                ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
-            if (ma_data_converter_init(&cfg, NULL, &g_decDownRef) != MA_SUCCESS)
-                return;  // fail-open
-            g_decDownRefReady = true;
-        }
-        if (!g_decUpReady) {
-            ma_data_converter_config cfg = ma_data_converter_config_init(
-                ma_format_f32, ma_format_f32, 1, 1, 16000, 48000);
-            if (ma_data_converter_init(&cfg, NULL, &g_decUp) != MA_SUCCESS)
-                return;  // fail-open
-            g_decUpReady = true;
-        }
-        static float cl48[MAX_FRAME_SIZE], rf48[MAX_FRAME_SIZE];
-        static float cl16[192], rf16[192], polished16[192], polished48[MAX_FRAME_SIZE];
-        for (int i = 0; i < fs; i++) {
-            cl48[i] = cleaned[i] / 32768.0f;
-            rf48[i] = ref[i] / 32768.0f;
-        }
-        ma_uint64 inC = (ma_uint64)fs, outC = 192;
-        if (ma_data_converter_process_pcm_frames(&g_decDown, cl48, &inC, cl16, &outC)
-                != MA_SUCCESS || outC < 160)
-            return;
-        inC = (ma_uint64)fs; outC = 192;
-        if (ma_data_converter_process_pcm_frames(&g_decDownRef, rf48, &inC, rf16, &outC)
-                != MA_SUCCESS || outC < 160)
-            return;
-        if (!DecProcess(g_dec, cl16, rf16, polished16, 160)) return;  // bypass
-        inC = 160; outC = MAX_FRAME_SIZE;
-        if (ma_data_converter_process_pcm_frames(&g_decUp, polished16, &inC, polished48, &outC)
-                != MA_SUCCESS || outC < (ma_uint64)fs)
-            return;
-        for (int i = 0; i < fs; i++) {
-            float v = polished48[i] * 32768.0f;
-            if (v > 32767.0f) v = 32767.0f;
-            if (v < -32768.0f) v = -32768.0f;
-            cleaned[i] = (int16_t)v;
-        }
-    }
 }
 
 // Audio-thread gate. Called from output_callback after AEC, before
@@ -1109,9 +1004,6 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         DtlnProcess(g_engine.dtln, micFrame, refFrame, cleanedFrame, fs);
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
-
-    // DEC neural residual cleanup (experimental, off by default).
-    DecCleanupApply(cleanedFrame, refFrame, fs);
 
     // Silero voice gate: speech passes, silence pushed down (16 + 48 kHz).
     VadGateApply(cleanedFrame, fs);
@@ -1733,13 +1625,6 @@ void DrawEngineSection() {
             "SpeexDSP and LocalVQE cut your voice during double-talk\n"
             "(both talk at once). Hidden by default; tick to reveal.");
 
-    // DEC cleanup runs automatically on AEC3 (no toggle): the notice
-    // below only appears when its model file is missing.
-    if (g_engineIndex == ENGINE_AEC3 && !g_dec) {
-        ImGui::TextDisabled("Residual-cleanup model missing — passing AEC3 output through.");
-        ImGui::TextDisabled("See MODELS.md for the download.");
-    }
-
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
@@ -1770,8 +1655,7 @@ void DrawEngineSection() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("SpeexDSP only - how much echo to cancel (ms)");
     } else if (g_engineIndex == ENGINE_AEC3) {
-        ImGui::TextDisabled(g_dec ? "AEC3 tunes itself + neural residual cleanup."
-                                  : "AEC3 tunes itself — no extra settings.");
+        ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
         ImGui::TextDisabled("Light neural engine, best voice preservation. Runs at 16 kHz automatically.");
     } else if (g_engineIndex == ENGINE_LOCALVQE) {
@@ -2442,7 +2326,6 @@ int main(int, char**) {
     if (g_engine.localvqe) LocalVqeDestroy(g_engine.localvqe);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
-    if (g_dec) { DecDestroy(g_dec); g_dec = nullptr; }
     if (g_pvad) { PvadDestroy(g_pvad); g_pvad = nullptr; }
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);

@@ -109,7 +109,7 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 | **LocalVQE v1.4-AEC** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~32 ms | Legacy — fails double-talk, avoid for calls |
 | **SpeexDSP** (legacy) | ⭐⭐⭐ | ⭐⭐ | Very low | 16 kHz only | ~30 ms | Legacy — fails double-talk, avoid for calls |
 
-*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table.*
+*Voice quality = how natural your voice sounds (single-talk). Double-talk = your voice preserved when both sides speak at once, echo removal breaking ties. Legacy rows failed our double-talk preservation test (voice cut when both talk). NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 5/5 above is bare AEC3, and stays.*
 
 ---
 

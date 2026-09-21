@@ -48,7 +48,6 @@ add_executable(aec_gui
     src/dtln_wrapper.cpp
     src/pvad_wrapper.cpp
     src/silero_wrapper.cpp
-    src/dec_wrapper.cpp
 )
 
 target_include_directories(aec_gui PRIVATE
@@ -192,25 +191,6 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx")
             "$<TARGET_FILE_DIR:aec_gui>/models/silero_vad.onnx"
         COMMENT "Copying models/silero_vad.onnx")
 endif()
-# ============================================================
-#  DEC baseline residual-echo cleanup (optional, experimental —
-#  checkbox reports "model missing" until vendored). Microsoft
-#  AEC-Challenge ICASSP 2022 baseline (MIT, ~5.2 MB).
-#  Guarded so a fresh clone without it still builds.
-# ============================================================
-if(EXISTS "${CMAKE_SOURCE_DIR}/models/dec-baseline-icassp2022.onnx")
-    add_custom_command(TARGET aec_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/models/dec-baseline-icassp2022.onnx"
-            "$<TARGET_FILE_DIR:aec_gui>/models/dec-baseline-icassp2022.onnx"
-        COMMENT "Copying models/dec-baseline-icassp2022.onnx")
-endif()
-# ============================================================
-#  ECAPA speaker embedding for the owner-only voice gate
-#  (optional — feature reports "model missing" until vendored).
-#  vedk00/ecapa-voxceleb-speaker-embedding-onnx (Apache-2.0).
-#  Guarded so a fresh clone without it still builds.
-# ============================================================
 if(EXISTS "${CMAKE_SOURCE_DIR}/models/ecapa-speaker-v1.onnx")
     add_custom_command(TARGET aec_gui POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

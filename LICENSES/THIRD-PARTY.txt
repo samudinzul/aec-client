@@ -67,14 +67,6 @@ AEC Client bundles the following open-source libraries:
     File (download on demand, not committed):
       models/ecapa-speaker-v1.onnx (sha256 f46380bb…)
 
-13. DEC baseline residual-echo cleanup (experimental)
-    Upstream: microsoft/AEC-Challenge baseline/icassp2022 (MIT,
-    5.2 MB, 16 kHz, 20 ms window / 10 ms hop, 2xGRU-322 mask).
-    Runs automatically after AEC3
-    (AEC3 output + speaker reference in, masked output out).
-    File (committed, ships only if promoted from experimental):
-      models/dec-baseline-icassp2022.onnx (sha256 4436ee4f…)
-
 Full license texts are available at the source URLs listed in the
 project repository:
 https://github.com/samudinzul/aec-client
