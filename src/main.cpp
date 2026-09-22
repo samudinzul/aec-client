@@ -1325,25 +1325,6 @@ void DrawEngineSection() {
     }
 
     ImGui::EndDisabled();
-
-    // Noise reduction: extra WebRTC suppression (Moderate) on top of echo
-    // removal. DTLN already removes noise itself, so the box is hidden
-    // there — never a dead control. Live-togglable: the engine restarts
-    // for a split second, same path as switching presets mid-call.
-    if (g_engineIndex != ENGINE_DTLN) {
-        bool ns = g_noiseReduction.load();
-        if (ImGui::Checkbox("Noise reduction", &ns)) {
-            g_noiseReduction.store(ns);
-            MarkPresetCustom();
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Extra cut of background hiss and fan noise on top of echo removal.\n"
-                               "Takes effect immediately — the engine restarts for a split second.\n"
-                               "DTLN already removes noise itself, so this box only shows\n"
-                               "for WebRTC AEC3 and NKF-AEC.");
-    }
 }
 
 void DrawGainsSection() {
@@ -1552,6 +1533,26 @@ void DrawAudioTab() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("One-click setups for common uses.\n"
                           "Changing anything by hand switches this to Manual settings.");
+
+    // Noise reduction: extra WebRTC suppression (Moderate) on top of echo
+    // removal. Always visible (not behind Advanced); hidden on DTLN, which
+    // already removes noise itself — never a dead control. Live-togglable:
+    // the engine restarts for a split second, same path as switching
+    // presets mid-call.
+    if (g_engineIndex != ENGINE_DTLN) {
+        bool ns = g_noiseReduction.load();
+        if (ImGui::Checkbox("Noise reduction", &ns)) {
+            g_noiseReduction.store(ns);
+            MarkPresetCustom();
+            SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Extra cut of background hiss and fan noise on top of echo removal.\n"
+                               "Takes effect immediately — the engine restarts for a split second.\n"
+                               "DTLN already removes noise itself, so this box only shows\n"
+                               "for WebRTC AEC3 and NKF-AEC.");
+    }
 
     ImGui::Spacing();
     DrawDevicesSection();

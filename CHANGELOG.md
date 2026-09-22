@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Noise reduction checkbox (Advanced → Engine).** Extra WebRTC
+- **Noise reduction checkbox (Audio tab, under the preset picker).** Extra WebRTC
   background-noise suppression (Moderate: hiss, fans) on top of echo
   removal for WebRTC AEC3 and NKF-AEC — off by default, live-togglable
   (the engine restarts for a split second, same path as switching
