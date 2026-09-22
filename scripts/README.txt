@@ -53,6 +53,10 @@ TIPS
 ----
 - CPU-sensitive? NKF-AEC is lightest (experimental); DTLN and AEC3 are
   both moderate — all well under 2% on a typical desktop either way.
+- Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
+  loops your voice back into the mic — NKF adapts live and is the most
+  sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
+  for mic tests.
 - If echo comes back after a long call, click Stop then Start.
 - If your voice sounds processed or robotic on AEC3, stay on the
   default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
