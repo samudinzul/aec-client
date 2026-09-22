@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-22
+
+- **Download:** [AEC-Client-v1.6.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.6.0/AEC-Client-v1.6.0-win64.zip) (Windows 10/11 64-bit)
+
 ### Added
 
 - **Noise reduction checkbox (Audio tab, under the preset picker).** Extra WebRTC
@@ -17,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself. Persisted in the retired preprocess config slot, so
   `aec_config.txt` stays positionally aligned; presets leave it alone,
   Reset-to-defaults turns it off.
+
+### Removed
+
+- **SpeexDSP and LocalVQE engines cut.** Both failed the double-talk
+  voice-preservation test (your voice gets cut when both sides talk at
+  once), same as the earlier legacy demotion — now removed outright.
+  Old configs pointing at them auto-remap to WebRTC AEC3 on load, so
+  nothing breaks; the picker shows the three engines that earn their
+  slot: WebRTC AEC3, NKF-AEC, DTLN-AEC. 1,028 files and ~326k lines of
+  vendored code (GGML tree, SpeexDSP sources, models) dropped from the
+  repo.
+- **Owner-only voice gate (PVAD/ECAPA) layer removed.** The
+  speaker-recognition gate that only ever enabled itself for one
+  enrolled voice is gone: sources, model paths, enrollment flow, and
+  all UI. The regular Silero voice gate ("Push down silence") is
+  unchanged on every engine.
 
 ### Fixed
 
