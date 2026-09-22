@@ -35,18 +35,11 @@ target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 set(NKF_DIR ${CMAKE_SOURCE_DIR}/third_party/REAL_TIME_NKF_AEC/c)
 set(NKF_DLL ${NKF_DIR}/build/libnkf_aec.dll)
 
-set(LOCALVQE_DIR    ${CMAKE_SOURCE_DIR}/third_party/LocalVQE)
-set(LOCALVQE_GGML   ${LOCALVQE_DIR}/ggml)
-set(LOCALVQE_BIN    ${LOCALVQE_GGML}/build/bin)
-set(LOCALVQE_IMPLIB ${LOCALVQE_GGML}/build/liblocalvqe.dll.a)
-
 add_executable(aec_gui
     src/main.cpp
     src/aec3_wrapper.cpp
     src/nkf_wrapper.cpp
-    src/localvqe_wrapper.cpp
     src/dtln_wrapper.cpp
-    src/pvad_wrapper.cpp
     src/silero_wrapper.cpp
 )
 
@@ -54,7 +47,6 @@ target_include_directories(aec_gui PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${NKF_DIR}
-    ${LOCALVQE_GGML}
     ${MSYS2_ROOT}/include/onnxruntime
     ${MSYS2_ROOT}/include/webrtc-audio-processing-1
 )
@@ -63,9 +55,7 @@ target_link_libraries(aec_gui PRIVATE
     imgui
     glfw
     OpenGL::GL
-    ${CMAKE_SOURCE_DIR}/libs/libaec.a
     ${NKF_DLL}
-    ${LOCALVQE_IMPLIB}
     ${MSYS2_ROOT}/lib/libwebrtc-audio-processing-1.dll.a
     onnxruntime
 )
@@ -93,18 +83,7 @@ endforeach()
 add_custom_command(TARGET aec_gui POST_BUILD
     # Our own engine DLLs
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/libs/aec.dll
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${NKF_DLL}
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${LOCALVQE_BIN}/liblocalvqe.dll
-        $<TARGET_FILE_DIR:aec_gui>
-
-    # GGML runtime (all CPU backend variants)
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${LOCALVQE_BIN}
         $<TARGET_FILE_DIR:aec_gui>
 
     # MSYS2 runtime — direct deps
@@ -153,9 +132,6 @@ add_custom_command(TARGET aec_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/models/nkf.onnx
         $<TARGET_FILE_DIR:aec_gui>/models/nkf.onnx
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/models/localvqe-v1.4-aec-200K-f32.gguf
-        $<TARGET_FILE_DIR:aec_gui>/models/localvqe-v1.4-aec-200K-f32.gguf
 
     COMMENT "Copying runtime DLLs and models"
 )
@@ -190,13 +166,6 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx")
             "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx"
             "$<TARGET_FILE_DIR:aec_gui>/models/silero_vad.onnx"
         COMMENT "Copying models/silero_vad.onnx")
-endif()
-if(EXISTS "${CMAKE_SOURCE_DIR}/models/ecapa-speaker-v1.onnx")
-    add_custom_command(TARGET aec_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/models/ecapa-speaker-v1.onnx"
-            "$<TARGET_FILE_DIR:aec_gui>/models/ecapa-speaker-v1.onnx"
-        COMMENT "Copying models/ecapa-speaker-v1.onnx")
 endif()
 # TFLite runtime (optional, loaded at runtime by dtln_wrapper)
 foreach(_tflite_dll

@@ -60,30 +60,5 @@ third_party/imgui/misc/
 third_party/imgui/.github/
 third_party/imgui/imgui_demo.cpp
 
-# ImGui optional folders (not needed for build)
-third_party/imgui/examples/
-third_party/imgui/docs/
-third_party/imgui/misc/
-third_party/imgui/.github/
-third_party/imgui/imgui_demo.cpp
-
-# LocalVQE build artifacts (rebuilt by users)
-third_party/LocalVQE/ggml/build/
-
-# LocalVQE — only keep ggml C++ source needed to build
-third_party/LocalVQE/demo/
-third_party/LocalVQE/pytorch/
-third_party/LocalVQE/web/
-third_party/LocalVQE/obs-plugin/
-third_party/LocalVQE/.github/
-third_party/LocalVQE/ggml/tests/
-third_party/LocalVQE/ggml/fuzz/
-third_party/LocalVQE/ggml/patches/
-third_party/LocalVQE/ggml/scripts/
-third_party/LocalVQE/ggml/docker/
-third_party/LocalVQE/ggml/cmake/
-third_party/LocalVQE/ggml/vendor/ggml/docs/
-third_party/LocalVQE/ggml/vendor/ggml/examples/
-third_party/LocalVQE/ggml/vendor/ggml/tests/
-third_party/LocalVQE/ggml/vendor/ggml/examples/
-third_party/LocalVQE/ggml/vendor/ggml/.github/
+# Runtime UI state (never ship)
+imgui.ini

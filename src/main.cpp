@@ -20,12 +20,9 @@
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
-#include "libaec.h"
 #include "aec3_wrapper.h"
 #include "nkf_wrapper.h"
-#include "localvqe_wrapper.h"
 #include "dtln_wrapper.h"
-#include "pvad_wrapper.h"
 #include "silero_wrapper.h"
 
 #include <cstdio>
@@ -146,13 +143,14 @@ struct SpscRing {
 // ============================================================
 //  Engine abstraction
 // ============================================================
-enum EngineType { ENGINE_SPEEX = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_LOCALVQE = 3, ENGINE_DTLN = 4 };
+// Numeric values keep their historical meaning so saved aec_config.txt
+// indices keep loading: 0 (SpeexDSP) and 3 (LocalVQE) were retired and
+// remap to AEC3 on load.
+enum EngineType { ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4 };
 struct EngineState {
-    EngineType  type  = ENGINE_SPEEX;
-    Aec*        speex = nullptr;
+    EngineType  type  = ENGINE_AEC3;
     Aec3Handle* aec3  = nullptr;
     NkfHandle*  nkf   = nullptr;
-    LocalVqeHandle* localvqe = nullptr;
     DtlnHandle* dtln  = nullptr;
 };
 
@@ -192,34 +190,11 @@ EngineState g_engine;
 // ============================================================
 //  Silero voice gate (neural VAD -> fixed gate -> output)
 //  Post-AEC: speech passes, silence is pushed down on every engine.
-//  SpeexDSP runs at 16 kHz only so the detector eats natively.
 //  Live at 16 kHz direct and 48 kHz via internal downsample
 //  (feed only). g_vadGain/g_vadHang live on the audio thread;
 //  UI only reads the atomics.
 // ============================================================
 SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
-// Personalized gate (identity layer): lazy handle, worker-thread verify.
-// Audio thread touches ONLY the atomics below — never the wrapper mutex
-// (the worker can hold it ~90 ms per inference).
-PvadHandle*        g_pvad = nullptr;
-std::atomic<bool>  g_pvadEnabled{ false };  // persisted, default off
-std::atomic<bool>  g_pvadReady{ false };    // voiceprint present (cached)
-std::atomic<float> g_pvadMatch{ -2.0f };    // last worker cosine; < -1.5 = none yet
-std::atomic<float> g_pvadThreshold{ PVAD_DEFAULT_THRESHOLD };
-std::atomic<bool>  g_pvadEnrolling{ false };
-std::atomic<int>   g_pvadEnrollSamples{ 0 };
-std::string        g_pvadMsg;  // UI thread only — why "Only my voice" refused to enable
-std::thread        g_pvadThread;
-std::atomic<bool>  g_pvadRun{ false };
-std::mutex         g_pvadHistMtx;
-std::vector<float> g_pvadHist;  // mic history for worker snapshots (cap 3 s)
-#define PVAD_NEED_SAMPLES 128000   // 8 s enrollment
-#define PVAD_VERIFY_SAMPLES 32000  // 2 s verify window
-#define PVAD_HIST_CAP 48000        // 3 s history
-ma_device g_enrollMicDevice, g_enrollOutDevice;
-bool g_enrollMicOn = false, g_enrollMonOn = false;
-bool g_enrollOwnedAudio = false;  // enrollment opened devices itself
-Clock::time_point g_enrollStart;
 std::atomic<bool>  g_vadEnabled{ true };  // default ON, zero-click
 std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
@@ -238,8 +213,6 @@ int                g_vadHang = 0;         // audio thread only (500 ms hangover)
 int                g_vadCloseVotes = 0;   // audio thread only (debounced release)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
-ma_data_converter  g_pvadResampler;       // engine rate -> 16 kHz for PVAD
-bool               g_pvadResamplerReady = false;
 ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
 ma_context g_context;
 static bool g_contextInitialized = false;
@@ -273,10 +246,7 @@ bool g_isFirstRun = false;      // no config file at launch: show the setup card
 bool g_sessionStartedOnce = false;  // setup card retires after first Start
 bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
-bool g_forgetArmed = false;     // Forget-my-voice two-step confirm
-Clock::time_point g_forgetArmTime;
 int  g_engineIndex = 2, g_sampleRateIndex = 0, g_filterIndex = 2;
-bool g_showLegacyEngines = false;  // reveal SpeexDSP + LocalVQE in the engine picker (persisted)
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
 bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
@@ -550,10 +520,10 @@ void SaveSettings() {
        << (g_listenToSelf ? 1 : 0) << "\n"
        << (g_advancedOpen ? 1 : 0) << "\n"
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
-       << (g_pvadEnabled.load() ? 1 : 0) << "\n"
+       << 0 << "\n"  // retired: owner-only voice gate (PVAD/ECAPA nuked)
        << g_vadOpen.load() << "\n"
        << g_vadClose.load() << "\n"
-       << (g_showLegacyEngines ? 1 : 0) << "\n"
+       << 0 << "\n"  // retired: show-legacy-engines toggle (SpeexDSP + LocalVQE nuked)
        << 0 << "\n"  // retired: nuked DEC-toggle slot (kept for file alignment)
        << 3 << "\n";  // preset layout generation (3 = no HQ, no Low CPU)
 }
@@ -573,10 +543,15 @@ void LoadSettings() {
         // out-of-range index land on 48 kHz — no stranded configs.
         if (g_sampleRateIndex == 0) { g_sampleRate.store(16000); }
         else { g_sampleRateIndex = 1; g_sampleRate.store(48000); }
-        // SpeexDSP is 16 kHz only now: old Speex-at-48 kHz configs land
-        // on 16 kHz automatically (gate eats natively there).
-        if (g_engineIndex == ENGINE_SPEEX) { g_sampleRateIndex = 0; g_sampleRate.store(16000); }
-        if (g_engineIndex < ENGINE_SPEEX || g_engineIndex > ENGINE_DTLN)
+        // Retired engines (SpeexDSP=0, LocalVQE=3): remap to AEC3 so old
+        // configs never point at a deleted engine.
+        if (g_engineIndex == 0 || g_engineIndex == 3) {
+            g_engineIndex = ENGINE_AEC3;
+            g_sampleRateIndex = 1;
+            g_sampleRate.store(48000);
+        }
+        if (g_engineIndex != ENGINE_AEC3 && g_engineIndex != ENGINE_NKF &&
+            g_engineIndex != ENGINE_DTLN)
             g_engineIndex = ENGINE_AEC3;
         g_selectedEngine.store(g_engineIndex);
         g_enablePreprocess.store(g_preprocessEnabled);
@@ -609,9 +584,9 @@ void LoadSettings() {
         // old and new config files positionally aligned.)
         int vd_skip = 0;
         if (f >> vd_skip) { (void)vd_skip; }
-        // New field — owner-only voice defaults OFF if missing
-        int po = 0;
-        if (f >> po) g_pvadEnabled.store(po != 0);
+        // (Retired field: owner-only voice gate, always 0. Kept aligned.)
+        int po_skip = 0;
+        if (f >> po_skip) { (void)po_skip; }
         // New fields — calibrated gate thresholds (defaults 0.50/0.30)
         float vo = 0.50f, vc = 0.30f;
         if (f >> vo) {
@@ -620,18 +595,9 @@ void LoadSettings() {
                 if (vc >= 0.05f && vc < g_vadOpen.load()) g_vadClose.store(vc);
             }
         }
-        // New field — legacy engines hidden unless explicitly shown
-        int le = 0;
-        if (f >> le) g_showLegacyEngines = (le != 0);
-        // A saved legacy engine with the toggle off lands on AEC3 —
-        // no stranded configs pointing at a hidden engine.
-        if (!g_showLegacyEngines &&
-            (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_LOCALVQE)) {
-            g_engineIndex = ENGINE_AEC3;
-            g_selectedEngine.store(ENGINE_AEC3);
-            g_sampleRateIndex = 1;
-            g_sampleRate.store(48000);
-        }
+        // (Retired field: show-legacy-engines toggle, always 0. Kept aligned.)
+        int le_skip = 0;
+        if (f >> le_skip) { (void)le_skip; }
         // (Retired field: nuked DEC-toggle slot, always 0. Read to keep
         // old and new config files positionally aligned.)
         int dc_skip = 0;
@@ -659,29 +625,24 @@ void LoadSettings() {
 
 // Forward: stopping live/owned audio before reconfiguring (defined below).
 void StopAEC();
-static void StopEnrollCapture();
 
 void ResetToDefaults() {
     if (g_isRunning) StopAEC();  // never reconfigure live devices
-    if (g_enrollOwnedAudio) { g_pvadEnrolling.store(false); StopEnrollCapture(); }
     g_micIndex = 0; g_refIndex = 0;
     // Send-cleaned-sound-to lands on CABLE Input (index 0 only if no
     // virtual cable is installed).
     int cable = FindCableInputIndex();
     g_outIndex = (cable >= 0) ? cable : 0;
     g_engineIndex = 2; g_sampleRateIndex = 0; g_filterIndex = 2;  // NKF @16 kHz = Discord preset
-    g_showLegacyEngines = false;  // reset lands simple: recommended engines only
     g_presetIndex = 1;
     g_preprocessEnabled = false;
     g_minimizeToTray = true;
     g_vadEnabled.store(false);   // Push-down-silence defaults OFF after reset
-    g_pvadEnabled.store(false);  // Only-my-voice defaults OFF after reset (voiceprint kept)
     g_vadOpen.store(0.50f);
     g_vadClose.store(0.30f);
     g_vadCalibrating.store(false);
     g_vadCalSamples.clear();
     g_vadCalMsg.clear();
-    g_pvadMsg.clear();
     g_vadCalWasRunning = false;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -707,10 +668,6 @@ void ApplyPreset(int idx) {
     g_sampleRateIndex  = p.sampleRateIdx;
     g_filterIndex      = p.filterIdx;
     g_preprocessEnabled= false;  // retired: gate does the silencing
-    // A preset pointing at a hidden legacy engine reveals the list —
-    // the picker must show what's running.
-    if ((p.engine == ENGINE_SPEEX || p.engine == ENGINE_LOCALVQE) && !g_showLegacyEngines)
-        g_showLegacyEngines = true;
 
     static const int rates[] = { 16000, 48000 };
     static const int filters[] = { 30, 50, 80, 120, 200 };
@@ -728,17 +685,15 @@ void ApplyPreset(int idx) {
 //  Engine init
 // ============================================================
 void ReinitEngine() {
-    if (g_engine.speex) { AecDestroy(g_engine.speex); g_engine.speex = nullptr; }
     if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3); g_engine.aec3  = nullptr; }
     if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
-    if (g_engine.localvqe) { LocalVqeDestroy(g_engine.localvqe); g_engine.localvqe = nullptr; }
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
-    // SpeexDSP joins the 16 kHz-only club: the voice gate eats natively
-    // instead of off a downsampled feed, which is where it under-scored.
-    if (eng == ENGINE_SPEEX || eng == ENGINE_NKF || eng == ENGINE_LOCALVQE || eng == ENGINE_DTLN) {
+    // NKF and DTLN run 16 kHz only (the voice gate eats natively instead
+    // of off a downsampled feed, which is where they under-scored).
+    if (eng == ENGINE_NKF || eng == ENGINE_DTLN) {
         g_sampleRate.store(16000);
         g_sampleRateIndex = 0;
     }
@@ -746,21 +701,12 @@ void ReinitEngine() {
     int sr = g_sampleRate.load();
     int fs = frameSizeForRate(sr);
 
-    if (eng == ENGINE_SPEEX) {
-        int filterLen = sr * g_filterLengthMs.load() / 1000;
-        // Preprocess (cleanup) permanently off: the Silero gate does the
-        // silencing now, and the two stacked sounded aggressive.
-        g_engine.speex = AecNew(fs, filterLen, sr, false);
-        g_engine.type  = ENGINE_SPEEX;
-    } else if (eng == ENGINE_AEC3) {
+    if (eng == ENGINE_AEC3) {
         g_engine.aec3 = Aec3New(sr, fs);
         g_engine.type = ENGINE_AEC3;
     } else if (eng == ENGINE_NKF) {
         g_engine.nkf = NkfNew("models/nkf.onnx");
         g_engine.type = ENGINE_NKF;
-    } else if (eng == ENGINE_LOCALVQE) {
-        g_engine.localvqe = LocalVqeNew("models/localvqe-v1.4-aec-200K-f32.gguf");
-        g_engine.type = ENGINE_LOCALVQE;
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_512");
         g_engine.type = ENGINE_DTLN;
@@ -780,10 +726,6 @@ static void VadReset() {
     if (g_vadResamplerReady) {
         ma_data_converter_uninit(&g_vadResampler, NULL);
         g_vadResamplerReady = false;
-    }
-    if (g_pvadResamplerReady) {
-        ma_data_converter_uninit(&g_pvadResampler, NULL);
-        g_pvadResamplerReady = false;
     }
     g_vadGain = 1.0f;
     g_vadHang = 0;
@@ -876,17 +818,6 @@ static void VadGateApply(int16_t* cleaned, int fs) {
         g_vadGain += (1.0f - g_vadGain) * 0.04f;
         if (g_vadGain > 0.99f) g_vadGain = 1.0f;
     }
-    // Identity layer (owner-only mode): the VAD above decides WHEN,
-    // the worker's cosine decides WHO. Fail-open on any uncertainty —
-    // push down only on a measured mismatch. Atomics only here; the worker
-    // may hold the wrapper mutex for ~90 ms per check.
-    if (g_pvadEnabled.load() && g_pvadReady.load()) {
-        float m = g_pvadMatch.load();
-        if (m > -1.5f && m < g_pvadThreshold.load()) {
-            g_vadGain += (kVadFloor - g_vadGain) * 0.15f;
-            if (g_vadGain < kVadFloor + 0.01f) g_vadGain = kVadFloor;
-        }
-    }
     if (g_vadGain < 1.0f) {
         for (int i = 0; i < fs; i++)
             cleaned[i] = clamp_s16((int)((float)cleaned[i] * g_vadGain));
@@ -899,20 +830,6 @@ static void VadGateApply(int16_t* cleaned, int fs) {
 void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
     g_micRing.write((const int16_t*)pInput, frameCount);
-    // Owned enrollment (app idle — output_callback isn't running):
-    // feed + count here. The live path counts in output_callback.
-    if (g_pvadEnrolling.load() && !g_isRunning && g_pvad && g_enrollOwnedAudio) {
-        const int16_t* s = (const int16_t*)pInput;
-        uint32_t off = 0;
-        float tmp[1024];
-        while (off < frameCount) {
-            uint32_t n = frameCount - off > 1024 ? 1024 : frameCount - off;
-            for (uint32_t i = 0; i < n; i++) tmp[i] = s[off + i] / 32768.0f;
-            PvadFeedEnroll(g_pvad, tmp, (int)n);
-            g_pvadEnrollSamples.fetch_add((int)n);
-            off += n;
-        }
-    }
 }
 void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
@@ -951,64 +868,10 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     else
         g_refRing.read(refFrame, fs);
 
-    // PVAD taps raw mic (owner voice, pre-echo-removal): 16 kHz floats
-    // for history (worker verify) and enrollment. Bounded memcpy under
-    // a short lock; inference never happens here.
-    if (g_pvadEnabled.load() || g_pvadEnrolling.load()) {
-        int srNow = g_sampleRate.load();
-        if (srNow == 16000) {
-            float tmp[MAX_FRAME_SIZE];
-            for (int i = 0; i < fs; i++) tmp[i] = micFrame[i] / 32768.0f;
-            if (g_pvadEnabled.load()) {
-                std::lock_guard<std::mutex> lk(g_pvadHistMtx);
-                g_pvadHist.insert(g_pvadHist.end(), tmp, tmp + fs);
-                if ((int)g_pvadHist.size() > PVAD_HIST_CAP)
-                    g_pvadHist.erase(g_pvadHist.begin(),
-                        g_pvadHist.begin() + (g_pvadHist.size() - PVAD_HIST_CAP));
-            }
-            if (g_pvadEnrolling.load() && g_pvad) {
-                PvadFeedEnroll(g_pvad, tmp, fs);
-                g_pvadEnrollSamples.fetch_add(fs);
-            }
-        } else if (srNow == 48000) {
-            if (!g_pvadResamplerReady) {
-                ma_data_converter_config cfg = ma_data_converter_config_init(
-                    ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
-                if (ma_data_converter_init(&cfg, NULL, &g_pvadResampler) == MA_SUCCESS)
-                    g_pvadResamplerReady = true;
-            }
-            if (g_pvadResamplerReady) {
-                float f32[MAX_FRAME_SIZE];
-                for (int i = 0; i < fs; i++) f32[i] = micFrame[i] / 32768.0f;
-                float dn[MAX_FRAME_SIZE];
-                ma_uint64 inC = (ma_uint64)fs, outC = MAX_FRAME_SIZE;
-                if (ma_data_converter_process_pcm_frames(&g_pvadResampler, f32, &inC,
-                                                         dn, &outC) == MA_SUCCESS && outC > 0) {
-                    int got = (int)outC;
-                    if (g_pvadEnabled.load()) {
-                        std::lock_guard<std::mutex> lk(g_pvadHistMtx);
-                        g_pvadHist.insert(g_pvadHist.end(), dn, dn + got);
-                        if ((int)g_pvadHist.size() > PVAD_HIST_CAP)
-                            g_pvadHist.erase(g_pvadHist.begin(),
-                                g_pvadHist.begin() + (g_pvadHist.size() - PVAD_HIST_CAP));
-                    }
-                    if (g_pvadEnrolling.load() && g_pvad) {
-                        PvadFeedEnroll(g_pvad, dn, got);
-                        g_pvadEnrollSamples.fetch_add(got);
-                    }
-                }
-            }
-        }
-    }
-
-    if (g_engine.type == ENGINE_SPEEX && g_engine.speex)
-        AecCancelEcho(g_engine.speex, micFrame, refFrame, cleanedFrame, fs);
-    else if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
+    if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
         Aec3CancelEcho(g_engine.aec3, micFrame, refFrame, cleanedFrame, fs);
     else if (g_engine.type == ENGINE_NKF && g_engine.nkf)
         NkfProcess(g_engine.nkf, micFrame, refFrame, cleanedFrame, fs);
-    else if (g_engine.type == ENGINE_LOCALVQE && g_engine.localvqe)
-        LocalVqeProcess(g_engine.localvqe, micFrame, refFrame, cleanedFrame, fs);
     else if (g_engine.type == ENGINE_DTLN && g_engine.dtln)
         DtlnProcess(g_engine.dtln, micFrame, refFrame, cleanedFrame, fs);
     else
@@ -1125,148 +988,7 @@ void EnumerateDevices() {
         g_outIndex = (cable >= 0) ? cable : 0;
     }
 
-    BuildDisplayIndices();
-}
-
-// ============================================================
-//  Personalized gate (identity layer): worker-thread ECAPA verify.
-//  UI/worker threads only for Ensure/Verify; audio thread only
-//  memcpys 16 kHz mic floats into the history (never blocks on the
-//  wrapper mutex — inference stays on the worker).
-// ============================================================
-static void EnsurePvad() {
-    if (g_pvad) return;
-    g_pvad = PvadNew("models/ecapa-speaker-v1.onnx");
-    if (!g_pvad) return;
-    if (PvadLoad(g_pvad, "models/voiceprint.bin")) {
-        g_pvadReady.store(true);
-        g_pvadThreshold.store(PvadThreshold(g_pvad));
-    }
-}
-
-static void PvadWorker() {
-    std::vector<float> snap;
-    snap.reserve(PVAD_VERIFY_SAMPLES);
-    while (g_pvadRun.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        if (!g_pvadRun.load() || !g_isRunning ||
-            !g_pvadEnabled.load() || !g_pvadReady.load() || !g_pvad)
-            continue;
-        snap.clear();
-        {
-            std::lock_guard<std::mutex> lk(g_pvadHistMtx);
-            if ((int)g_pvadHist.size() < PVAD_VERIFY_SAMPLES) continue;
-            snap.assign(g_pvadHist.end() - PVAD_VERIFY_SAMPLES, g_pvadHist.end());
-        }
-        float m = PvadVerify(g_pvad, snap.data(), (int)snap.size());
-        if (m > -1.5f) g_pvadMatch.store(m);
-        std::this_thread::sleep_for(std::chrono::milliseconds(750));  // ~1 Hz
-    }
-}
-
-static void PvadStartWorker() {
-    if (g_pvadThread.joinable()) return;
-    g_pvadRun.store(true);
-    g_pvadThread = std::thread(PvadWorker);
-}
-
-static void PvadStopWorker() {
-    g_pvadRun.store(false);
-    if (g_pvadThread.joinable()) g_pvadThread.join();
-}
-
-// ---- One-tap enrollment session (mic-only + monitor) ----
-// Runs when the app itself is idle: opens just the mic at 16 kHz
-// (miniaudio resamples) plus an attenuated sidetone to Your speakers.
-// No loopback, no AEC, no CABLE involved. Owned sessions tear down
-// on timer end/cancel; a user-started run is never touched.
-static void enroll_monitor_callback(ma_device*,
-                                    void* pOutput, const void*,
-                                    ma_uint32 frameCount) {
-    int16_t* out = (int16_t*)pOutput;
-    size_t avail = g_micRing.available();
-    size_t n = avail < frameCount ? avail : frameCount;
-    if (n > 0) {
-        g_micRing.read(out, n);
-        // Sidetone tracking the Microphone level: no AEC runs during
-        // enrollment, so a x1.0 mic->speaker loop feeds back through
-        // the room as echo (the calibration monitor can be loud only
-        // because AEC cancels that loop). x0.7 of the mic gain matches
-        // the calibration loudness within 3 dB while keeping margin.
-        float g = g_micGain.load() * 0.7f;
-        for (size_t i = 0; i < n; i++)
-            out[i] = clamp_s16((int)(out[i] * g));
-    }
-    if (n < frameCount) memset(out + n, 0, (frameCount - n) * sizeof(int16_t));
-}
-
-static void StopEnrollCapture() {
-    if (g_enrollMonOn) { ma_device_uninit(&g_enrollOutDevice); g_enrollMonOn = false; }
-    if (g_enrollMicOn) { ma_device_uninit(&g_enrollMicDevice); g_enrollMicOn = false; }
-    g_enrollOwnedAudio = false;
-}
-
-static bool StartEnrollCapture() {
-    if (g_captureDevices.empty() || g_micIndex >= (int)g_captureDevices.size()) {
-        snprintf(g_statusText, 128, "No microphone found");
-        return false;
-    }
-    g_micRing.reset();
-    ma_device_config micCfg = ma_device_config_init(ma_device_type_capture);
-    micCfg.capture.format = ma_format_s16;
-    micCfg.capture.channels = 1;
-    micCfg.sampleRate = 16000;  // PVAD eats 16 kHz; miniaudio resamples
-    micCfg.dataCallback = mic_callback;
-    micCfg.capture.pDeviceID = &g_captureDevices[g_micIndex].id;
-    if (ma_device_init(&g_context, &micCfg, &g_enrollMicDevice) != MA_SUCCESS) {
-        snprintf(g_statusText, 128, "Could not open microphone");
-        return false;
-    }
-    if (ma_device_start(&g_enrollMicDevice) != MA_SUCCESS) {
-        ma_device_uninit(&g_enrollMicDevice);
-        snprintf(g_statusText, 128, "Could not start microphone");
-        return false;
-    }
-    g_enrollMicOn = true;
-    // Monitor is a courtesy: hear yourself while enrolling. Silent
-    // fallback if the speakers can't open — enrollment continues.
-    if (!g_playbackDevices.empty() && g_refIndex < (int)g_playbackDevices.size()) {
-        ma_device_config outCfg = ma_device_config_init(ma_device_type_playback);
-        outCfg.playback.format = ma_format_s16;
-        outCfg.playback.channels = 1;
-        outCfg.sampleRate = 16000;
-        outCfg.dataCallback = enroll_monitor_callback;
-        outCfg.playback.pDeviceID = &g_playbackDevices[g_refIndex].id;
-        if (ma_device_init(&g_context, &outCfg, &g_enrollOutDevice) == MA_SUCCESS) {
-            if (ma_device_start(&g_enrollOutDevice) == MA_SUCCESS) {
-                g_enrollMonOn = true;
-            } else {
-                ma_device_uninit(&g_enrollOutDevice);
-            }
-        }
-    }
-    g_enrollStart = Clock::now();
-    g_enrollOwnedAudio = true;
-    return true;
-}
-
-// Forward declarations (defined below: main Start/Stop)
-void StartAEC();
-void StopAEC();
-
-// Begin enrollment: stop a running session first (owned mic-only +
-// monitor session needs the devices), then capture. Stays idle after
-// finalize — no auto-start.
-static bool PvadStartEnrollFlow() {
-    EnsurePvad();
-    if (!g_pvad) return false;
-    if (g_isRunning) StopAEC();
-    if (!StartEnrollCapture()) return false;
-    PvadBeginEnroll(g_pvad);
-    g_pvadEnrollSamples.store(0);
-    g_pvadEnrolling.store(true);
-    g_forgetArmed = false;
-    return true;
+BuildDisplayIndices();
 }
 
 // ============================================================
@@ -1274,11 +996,6 @@ static bool PvadStartEnrollFlow() {
 // ============================================================
 void StartAEC() {
     if (g_isRunning) return;
-    // An owned enrollment capture owns the mic — yield it first.
-    if (g_enrollOwnedAudio) {
-        g_pvadEnrolling.store(false);
-        StopEnrollCapture();
-    }
     if (g_captureDevices.empty() || g_playbackDevices.empty()) {
         snprintf(g_statusText, 128, "No devices found");
         return;
@@ -1309,10 +1026,6 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load NKF model");
         return;
     }
-    if (g_engine.type == ENGINE_LOCALVQE && !g_engine.localvqe) {
-        snprintf(g_statusText, 128, "Failed to load LocalVQE model");
-        return;
-    }
     if (g_engine.type == ENGINE_DTLN && !g_engine.dtln) {
         snprintf(g_statusText, 128, "Failed to load DTLN model");
         return;
@@ -1321,17 +1034,6 @@ void StartAEC() {
     g_micRing.reset();
     g_refRing.reset();
     VadReset();
-    if (g_pvadResamplerReady) {
-        ma_data_converter_uninit(&g_pvadResampler, NULL);
-        g_pvadResamplerReady = false;
-    }
-    {
-        std::lock_guard<std::mutex> lk(g_pvadHistMtx);
-        g_pvadHist.clear();
-    }
-    g_pvadMatch.store(-2.0f);  // fail-open until first verification
-    g_pvadEnrolling.store(false);
-    g_pvadEnrollSamples.store(0);
     g_peakMic.store(0); g_peakRef.store(0); g_peakOut.store(0);
 
     int sr = g_sampleRate.load();
@@ -1383,24 +1085,15 @@ void StartAEC() {
 
     g_isRunning = true;
     g_sessionStart = Clock::now();
-    if (g_pvadEnabled.load()) {
-        EnsurePvad();  // no-op if the model file is absent
-        PvadStartWorker();
-    }
     const char* engineName =
-        (g_engine.type == ENGINE_SPEEX) ? "SpeexDSP" :
-        (g_engine.type == ENGINE_AEC3)  ? "AEC3" :
-        (g_engine.type == ENGINE_NKF)   ? "NKF-AEC" :
-        (g_engine.type == ENGINE_DTLN)  ? "DTLN-AEC" : "LocalVQE";
+        (g_engine.type == ENGINE_AEC3) ? "AEC3" :
+        (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
     snprintf(g_statusText, 128, "Running (%d Hz, %s)%s", sr, engineName,
              (g_listenToSelf || g_calMonitor) ? " [monitor]" : "");
 }
 
 void StopAEC() {
     if (!g_isRunning) return;
-    PvadStopWorker();
-    g_pvadEnrolling.store(false);
-    StopEnrollCapture();  // no-op unless an owned session is open
     ma_device_uninit(&g_micDevice);
     ma_device_uninit(&g_loopbackDevice);
     ma_device_uninit(&g_outputDevice);
@@ -1576,33 +1269,6 @@ void DrawEngineSection() {
     ImGui::TextUnformatted("Engine");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
-    if (g_showLegacyEngines) {
-    const char* engines[] = {
-        "SpeexDSP (lightest on CPU)",
-        "WebRTC AEC3 (strongest echo cut)",
-        "NKF-AEC (recommended default)",
-        "LocalVQE v1.4-AEC (natural voice)",
-        "DTLN-AEC 512 (cleanest output)"
-    };
-    if (ImGui::Combo("##engine", &g_engineIndex, engines, IM_ARRAYSIZE(engines))) {
-        g_selectedEngine.store(g_engineIndex);
-        if (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
-            g_sampleRateIndex = 0;
-            g_sampleRate.store(16000);
-        }
-        MarkPresetCustom();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "SpeexDSP = lightest on CPU, phone quality (16 kHz automatic)\n"
-            "AEC3 = strongest echo suppression, voice sounds processed, more CPU.\n"
-            "Very loud speakers make it mistake your voice for echo — lower them or use NKF\n"
-            "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
-            "LocalVQE = natural voice, keeps room sound (16 kHz automatic)\n"
-            "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
-    } else {
-    // Recommended engines only: SpeexDSP + LocalVQE failed the
-    // double-talk voice-preservation test and live under the toggle below.
     static const int kShown[] = { ENGINE_AEC3, ENGINE_NKF, ENGINE_DTLN };
     static const char* kShownNames[] = {
         "WebRTC AEC3 (strongest echo cut)",
@@ -1627,21 +1293,13 @@ void DrawEngineSection() {
             "Very loud speakers make it mistake your voice for echo — lower them or use NKF\n"
             "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
             "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
-    }
-    if (ImGui::Checkbox("Show legacy engines (SpeexDSP, LocalVQE — weaker on double-talk)", &g_showLegacyEngines)) {
-        SaveSettings();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "SpeexDSP and LocalVQE cut your voice during double-talk\n"
-            "(both talk at once). Hidden by default; tick to reveal.");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
 
     const char* rates[] = { "16000", "48000" };
-    if (g_engineIndex == ENGINE_SPEEX || g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_LOCALVQE || g_engineIndex == ENGINE_DTLN) {
+    if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("This engine always runs at 16 kHz — nothing to choose.");
@@ -1654,24 +1312,10 @@ void DrawEngineSection() {
             ImGui::SetTooltip("Higher = better quality, more CPU\nAEC3 best at 48000");
     }
 
-    if (g_engineIndex == ENGINE_SPEEX) {
-        ImGui::TextUnformatted("Echo tail");
-        ImGui::SameLine(labelCol);
-        ImGui::SetNextItemWidth(-1);
-        const char* filterLengths[] = { "30", "50", "80", "120", "200" };
-        if (ImGui::Combo("##tail", &g_filterIndex, filterLengths, IM_ARRAYSIZE(filterLengths))) {
-            g_filterLengthMs.store(atoi(filterLengths[g_filterIndex]));
-            MarkPresetCustom();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("SpeexDSP only - how much echo to cancel (ms)");
-    } else if (g_engineIndex == ENGINE_AEC3) {
+    if (g_engineIndex == ENGINE_AEC3) {
         ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
         ImGui::TextDisabled("Light neural engine, best voice preservation. Runs at 16 kHz automatically.");
-    } else if (g_engineIndex == ENGINE_LOCALVQE) {
-        ImGui::TextDisabled("Removes only echo — your voice and room sound stay natural.");
-        ImGui::TextDisabled("Runs at 16 kHz automatically. Very light on CPU.");
     } else if (g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("Cleanest output — neural echo + noise removal. Runs at 16 kHz automatically.");
         ImGui::TextDisabled("Needs an extra download — see About for details.");
@@ -1844,118 +1488,6 @@ void DrawVadSection() {
     } else {
         ImGui::TextDisabled("Gate is off — everything passes through unchanged.");
     }
-
-    // ---- Owner-only voice (experimental personal gate) ----
-    ImGui::Spacing();
-    bool pvadOn = g_pvadEnabled.load();
-    if (ImGui::Checkbox("Only my voice (experimental)", &pvadOn)) {
-        EnsurePvad();
-        if (pvadOn && !g_pvad) {
-            // Refused: say why instead of silently reverting (MODELS.md:
-            // the owner check stays unavailable without the voice model).
-            std::error_code ec;
-            bool missing =
-                !std::filesystem::exists("models/ecapa-speaker-v1.onnx", ec);
-            g_pvadMsg = missing
-                ? "Voice model missing: models/ecapa-speaker-v1.onnx not found "
-                  "(not shipped in releases — see MODELS.md). The owner check "
-                  "stays unavailable; everything else works."
-                : "Voice model failed to load (ONNX error). The owner check "
-                  "stays unavailable; everything else works.";
-            pvadOn = false;
-        } else {
-            g_pvadMsg.clear();
-        }
-        g_pvadEnabled.store(pvadOn && g_pvad != nullptr);
-        SaveSettings();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("After learning your voice, the gate also pushes down OTHER\n"
-                           "voices (TV, family, roommates) — only you pass through.\n"
-                           "Your voiceprint never leaves this PC.\n"
-                           "Checks ~1/sec: speech starts always pass — pushing down\n"
-                           "only on a measured mismatch, never on timing.\n"
-                           "Off by default; needs a voiceprint below to do anything.");
-    if (!g_pvadMsg.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", g_pvadMsg.c_str());
-    if (g_pvadEnabled.load() && g_pvad) {
-        if (g_pvadEnrolling.load()) {
-            int pct = g_pvadEnrollSamples.load() * 100 / PVAD_NEED_SAMPLES;
-            if (pct > 100) pct = 100;
-            int secsLeft = 8 - (int)(std::chrono::duration_cast<std::chrono::seconds>(
-                Clock::now() - g_enrollStart).count());
-            if (secsLeft < 0) secsLeft = 0;
-            if (!g_enrollOwnedAudio) secsLeft = -1;  // live path: no timer
-            if (secsLeft >= 0)
-                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
-                                   "Listening… keep speaking (%d%%, %ds left)", pct, secsLeft);
-            else
-                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
-                                   "Listening… keep speaking normally (%d%%)", pct);
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                g_pvadEnrolling.store(false);
-                StopEnrollCapture();
-            }
-            // Finalize on the UI thread (embedding takes ~0.1-1 s).
-            if (g_pvadEnrollSamples.load() >= PVAD_NEED_SAMPLES) {
-                g_pvadEnrolling.store(false);
-                StopEnrollCapture();
-                if (PvadFinishEnroll(g_pvad) &&
-                    PvadSave(g_pvad, "models/voiceprint.bin")) {
-                    g_pvadReady.store(true);
-                    g_pvadThreshold.store(PvadThreshold(g_pvad));
-                    g_pvadMatch.store(-2.0f);
-                }
-            }
-        } else if (!g_pvadReady.load()) {
-            ImGui::TextDisabled("No voice learned yet.");
-            if (ImGui::Button("Learn my voice", ImVec2(160, 0))) {
-                PvadStartEnrollFlow();
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Listens for 8 seconds (you'll hear yourself),\n"
-                                  "then saves your voiceprint on this PC.\n"
-                                  "Enroll in a quiet moment (no TV/music).");
-            ImGui::TextDisabled("Takes 8 seconds. Your voiceprint never leaves this PC.");
-        } else {
-            float m = g_pvadMatch.load();
-            if (m < -1.5f) {
-                ImGui::TextDisabled("Voice learned. Waiting for speech to check…");
-            } else if (m >= g_pvadThreshold.load()) {
-                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                                   "Voice learned. Last check: you (%.2f)", m);
-            } else {
-                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
-                                   "Voice learned. Last check: not you (%.2f) — lowered", m);
-            }
-            if (ImGui::Button("Re-learn my voice", ImVec2(160, 0))) {
-                PvadStartEnrollFlow();
-            }
-            ImGui::SameLine();
-            if (!g_forgetArmed) {
-                if (ImGui::Button("Forget my voice", ImVec2(160, 0))) {
-                    g_forgetArmed = true;
-                    g_forgetArmTime = Clock::now();
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Deletes your voiceprint from this PC.");
-            } else {
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                    Clock::now() - g_forgetArmTime).count();
-                if (elapsed > 5) {
-                    g_forgetArmed = false;
-                } else if (ImGui::Button("Click again to confirm", ImVec2(160, 0))) {
-                    if (g_pvad) PvadClearVoiceprint(g_pvad);
-                    std::remove("models/voiceprint.bin");
-                    g_pvadReady.store(false);
-                    g_pvadMatch.store(-2.0f);
-                    g_forgetArmed = false;
-                }
-            }
-        }
-    } else if (pvadOn && !g_pvad) {
-        ImGui::TextDisabled("Voice model missing — owner check unavailable.");
-    }
 }
 
 void DrawAudioTab() {
@@ -2081,7 +1613,7 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Five AEC engines: SpeexDSP, WebRTC AEC3, NKF-AEC, LocalVQE v1.4-AEC, DTLN-AEC 512");
+    ImGui::BulletText("Three AEC engines: WebRTC AEC3, NKF-AEC, DTLN-AEC 512");
     ImGui::BulletText("Voice gate — neural speech detector pushes silence down");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
@@ -2092,13 +1624,10 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Credits");
-    ImGui::BulletText("SpeexDSP      - Xiph.Org Foundation (BSD-3)");
     ImGui::BulletText("WebRTC AP     - Google (BSD-3)");
     ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
     ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
-    ImGui::BulletText("LocalVQE      - LocalAI (Apache-2.0)");
     ImGui::BulletText("Silero VAD    - Silero Team (MIT)");
-    ImGui::BulletText("ECAPA voice   - SpeechBrain (Apache-2.0)");
     ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
@@ -2363,13 +1892,10 @@ int main(int, char**) {
 
     SaveSettings();
     StopAEC();
-    if (g_engine.speex) AecDestroy(g_engine.speex);
     if (g_engine.aec3)  Aec3Destroy(g_engine.aec3);
     if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
-    if (g_engine.localvqe) LocalVqeDestroy(g_engine.localvqe);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
-    if (g_pvad) { PvadDestroy(g_pvad); g_pvad = nullptr; }
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

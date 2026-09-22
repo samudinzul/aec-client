@@ -5,7 +5,7 @@ Real-time acoustic echo cancellation for Windows.
 
 WHAT IT DOES
 ------------
-Routes your microphone through one of 5 AEC engines, cancels
+Routes your microphone through one of 3 AEC engines, cancels
 the sound coming from your speakers, and outputs a clean mic signal
 to a virtual audio cable that Discord / Zoom / Teams can use.
 A neural voice gate mutes silence and passes speech automatically.
@@ -28,21 +28,23 @@ QUICK START
    - Output:            CABLE Input (VB-Audio Virtual Cable)
 
 4. Pick an engine:
-   - WebRTC AEC3          best overall (default, 16 / 48 kHz)
-   - LocalVQE v1.4-AEC    echo-only neural, preserves voice (16 kHz)
-   - SpeexDSP             lowest CPU (16 kHz)
-   - NKF-AEC              experimental neural engine (16 kHz)
+   - WebRTC AEC3          best echo removal (default, 16 / 48 kHz)
+   - NKF-AEC              recommended default: most natural voice (16 kHz)
    - DTLN-AEC 512         neural echo + noise canceller (16 kHz)
 
-5. Click Start. The green SPEAKING pill means speech is going out;
+5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
+   for WebRTC noise suppression on top of echo cancellation.
+
+6. Click Start. The green SPEAKING pill means speech is going out;
    grey SILENT means the voice gate muted silence. The gate is on
    by default — uncheck Voice gate in the Audio tab to disable it.
 
-6. In Discord (or Zoom/Teams), open Voice & Video settings:
+7. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)
    - Input Profile:       Voice Isolation (one tap: Discord's noise
-     cleanup ON; echo is already removed by this app — only the
-     DTLN engine also removes noise, the rest are echo-only).
+     cleanup ON; echo is already removed by this app — DTLN and the
+     optional Noise reduction checkbox also remove noise, bare
+     AEC3/NKF-AEC are echo-only).
      Manual alternative: Custom profile with Echo Cancellation OFF
      (this app does it), Noise Suppression Krisp (Standard on weak
      PCs), Automatic Gain Control OFF.
@@ -50,7 +52,7 @@ QUICK START
 TIPS
 ----
 - If echo comes back after a long call, click Stop then Start.
-- If your voice sounds robotic, try LocalVQE or AEC3.
+- If your voice sounds robotic, try NKF-AEC.
 - The X button minimizes to the system tray (toggle in Appearance tab).
 - DTLN-AEC needs models/dtln_aec_512_1.tflite +
   models/dtln_aec_512_2.tflite (bundled) and tensorflowlite_c.dll
@@ -63,7 +65,7 @@ TROUBLESHOOTING
 - "No devices found": click Refresh in the Devices section.
 - App won't start: make sure all DLLs are in the same folder as the .exe.
 - Choppy audio: switch to the 16000 sample rate in the Engine section.
-- LocalVQE quiet: it runs at 16 kHz only (auto-locked).
+- DTLN quiet: it runs at 16 kHz only (auto-locked).
 
 LICENSE
 -------

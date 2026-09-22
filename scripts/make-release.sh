@@ -6,7 +6,7 @@
 # Contract (matches v1.2.x precedent, enforced by asserts below):
 #   release/AEC-Client-vX-win64/
 #     aec_gui.exe + *.dll (runtime only) + libs/tensorflowlite_c.dll
-#     models/          (explicit allowlist: nkf, localvqe, dtln pair, silero)
+#     models/          (explicit allowlist: nkf, dtln pair, silero)
 #     LICENSES/        (third-party credits)
 #     README.txt       (end-user doc, version stamped)
 #     wallpapers/      (empty; users bring their own)
@@ -45,7 +45,6 @@ cp libs/tensorflowlite_c.dll "$STAGE/" 2>/dev/null || true
 # Models: explicit allowlist from repo source of truth (never build/
 # leftovers — stale files like the nuked ECAPA pair must not ship).
 for m in models/nkf.onnx \
-         models/localvqe-v1.4-aec-200K-f32.gguf \
          models/dtln_aec_512_1.tflite \
          models/dtln_aec_512_2.tflite \
          models/silero_vad.onnx; do

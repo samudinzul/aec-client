@@ -1,21 +1,16 @@
 AEC Client bundles the following open-source libraries:
 
-1.  SpeexDSP
-    Copyright (C) 2002-2003 Jean-Marc Valin
-    Copyright (C) 2005-2008 Xiph.Org Foundation
-    License: BSD 3-Clause
-
-2.  WebRTC Audio Processing
+1.  WebRTC Audio Processing (AEC3 + optional noise suppression)
     Copyright (C) 2011 The WebRTC project authors
     Copyright (C) 2011 Google Inc.
     License: BSD 3-Clause
 
-3.  NKF-AEC
+2.  NKF-AEC
     "Neural Kalman Filtering for Acoustic Echo Cancellation"
     Jiang et al., ICASSP 2023
     License: MIT
 
-3b. DTLN-AEC
+3.  DTLN-AEC
     "Acoustic Echo Cancellation with the Dual-Signal Transformation
     LSTM Network"
     Westhausen & Meyer, ICASSP 2021 (breizhn/DTLN-aec)
@@ -57,15 +52,6 @@ AEC Client bundles the following open-source libraries:
     License: MIT, Copyright (c) 2020-present Silero Team
     File (download on demand, not committed):
       models/silero_vad.onnx (sha256 1a153a22…)
-
-12. ECAPA speaker embedding (owner-only voice gate, experimental)
-    Upstream: vedk00/ecapa-voxceleb-speaker-embedding-onnx (Apache-2.0,
-    mirror of speechbrain/spkrec-ecapa-voxceleb, 83 MB, 192-d).
-    The Silero gate keeps timing; ECAPA verifies identity ~1 Hz on a
-    worker thread. Voiceprint never leaves the PC
-    (models/voiceprint.bin, untracked, not shipped).
-    File (download on demand, not committed):
-      models/ecapa-speaker-v1.onnx (sha256 f46380bb…)
 
 Full license texts are available at the source URLs listed in the
 project repository:
