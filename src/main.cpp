@@ -2245,6 +2245,20 @@ void DrawUI() {
 // ============================================================
 int main(int, char**) {
 #ifdef _WIN32
+    // Anchor all relative asset paths (models/, aec_config.txt, imgui.ini,
+    // wallpapers/) to the exe directory, so the app works no matter which
+    // folder it is launched from (shell CWD, shortcut "Start in", ...).
+    // Fail-open: if the exe path can't be determined, keep the launch CWD
+    // (previous behavior).
+    {
+        wchar_t exePath[MAX_PATH];
+        DWORD n = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) {
+            std::error_code ec;
+            std::filesystem::current_path(
+                std::filesystem::path(exePath).parent_path(), ec);
+        }
+    }
     if (!AcquireSingleInstance()) {
         return 0;   // Another instance is already running
     }
