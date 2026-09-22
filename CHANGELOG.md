@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-09-22
+
+- **Download:** [AEC-Client-v1.6.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.6.1/AEC-Client-v1.6.1-win64.zip) (Windows 10/11 64-bit)
+
+### Fixed
+
+- **Reset to defaults now leaves Push down silence ON**, matching a
+  fresh install (the gate has defaulted ON since 1.3.0, and a missing
+  config field loads ON). OFF-on-Reset dated from 1.4.0, when Reset
+  also cleared the now-removed "Only my voice" tick; with that layer
+  nuked in 1.6.0 the remaining half was a plain inconsistency.
+
 ## [1.6.0] — 2026-09-22
 
 - **Download:** [AEC-Client-v1.6.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.6.0/AEC-Client-v1.6.0-win64.zip) (Windows 10/11 64-bit)

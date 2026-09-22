@@ -47,7 +47,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.6.0"
+#define APP_VERSION "1.6.1"
 
 // ============================================================
 //  Single-instance protection
@@ -640,7 +640,7 @@ void ResetToDefaults() {
     g_preprocessEnabled = false;
     g_noiseReduction.store(false);  // default OFF; retired preprocess slot carries it
     g_minimizeToTray = true;
-    g_vadEnabled.store(false);   // Push-down-silence defaults OFF after reset
+    g_vadEnabled.store(true);    // match a fresh install (ON since 1.3.0)
     g_vadOpen.store(0.50f);
     g_vadClose.store(0.30f);
     g_vadCalibrating.store(false);
