@@ -18,10 +18,15 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 //   out:   int16 cleaned output
 //   frameSize: samples per frame (e.g. 160 at 16kHz)
 //   NOTE: This must only be called with sample rate 16000.
+//   Internally performs TDC (ref->mic delay alignment by cross-
+//   correlation, required by upstream NKF) and runs a divergence
+//   guard: on runaway output the filter is reset; after too many
+//   resets the session fails open to mic passthrough.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 
-// Reset internal state (call after Stop/Start)
+// Reset all internal state (buffers, TDC lag, guard counters).
+// Engines are recreated on Stop/Start anyway; provided for completeness.
 void NkfReset(NkfHandle* h);
 
 // Destroy the engine

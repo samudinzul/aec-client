@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **NKF blowout: time-delay compensation + divergence guard.**
+  NKF-AEC is a *linear* canceller whose upstream requires the far-end
+  to be delay-aligned (their GCC-PHAT "-a" TDC) — the real-time WASAPI
+  path never aligned it, so the Kalman filter diverged until output
+  pegged full-scale. The wrapper now estimates the ref-to-mic lag by
+  normalized cross-correlation (~every 0.5 s, 0–100 ms search, jump-
+  gated) and feeds NKF a delay-aligned reference. A second-line guard
+  watches output-vs-input energy and resets the filter on divergence;
+  after six resets it fails open to mic passthrough, so output can
+  never blow out again — the lowest-CPU engine made safe to use.
+
 ## [1.7.0] — 2026-09-22
 
 - **Download:** [AEC-Client-v1.7.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.7.0/AEC-Client-v1.7.0-win64.zip) (Windows 10/11 64-bit)
