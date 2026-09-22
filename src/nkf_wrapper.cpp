@@ -98,13 +98,14 @@ struct NkfHandle {
     int loopConf = 0;               // consecutive-ish hit score (0..4)
     int loopQuiet = 0;              // silent detections in a row
 
-    // Noise-reduction stage: WebRTC NS only (no echo canceller, no
-    // reverse stream) applied to the NKF output when nsEnabled.
-    bool nsEnabled = false;
+    // Residual stage: WebRTC APM after NKF — AEC3 (always on; NKF is
+    // strictly linear, AEC3's nonlinear suppressor eats what it
+    // leaves) + optional WebRTC NS (nsEnabled checkbox) on top.
     rtc::scoped_refptr<webrtc::AudioProcessing> nsApm;
-    std::vector<int16_t> nsInAccum;   // raw NKF output awaiting NS
+    std::vector<int16_t> nsInAccum;   // NKF output awaiting the post stage
     std::vector<float> nsMicFloat;    // 10 ms frame scratch
     std::vector<float> nsOutFloat;    // 10 ms frame scratch
+    std::vector<float> refFloat;      // 10 ms reverse-stream scratch
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -255,8 +256,9 @@ static void NkfDetectLoop(NkfHandle* h) {
     }
 }
 
-// Drain raw output into outAccum (NS applied when enabled).
-static void NkfDrainNs(NkfHandle* h) {
+// Drain raw output through the post stage (residual AEC3 + optional
+// NS) into outAccum. Ordering is preserved: leftovers (< 1 frame) wait.
+static void NkfDrainPost(NkfHandle* h) {
     webrtc::StreamConfig sc(NS_SAMPLE_RATE, 1);  // mono
     while (h->nsInAccum.size() >= (size_t)NS_FRAME_SIZE) {
         for (int i = 0; i < NS_FRAME_SIZE; i++)
@@ -308,26 +310,25 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled) {
     h->micWin.reserve(TDC_WIN);
     h->outAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->outHist.reserve(LOOP_WIN + LOOP_DMAX);
-    h->nsEnabled = nsEnabled;
-    if (nsEnabled) {
-        // NS-only pass: echo canceller off (NKF already killed the echo),
-        // Moderate suppression, no reverse stream needed.
-        h->nsApm = webrtc::AudioProcessingBuilder().Create();
-        if (!h->nsApm) {
-            h->nsEnabled = false;  // fail-open: ship NKF output unfiltered
-        } else {
-            webrtc::AudioProcessing::Config config;
-            config.echo_canceller.enabled   = false;
-            config.noise_suppression.enabled = true;
-            config.noise_suppression.level   =
-                webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
-            config.high_pass_filter.enabled = false;
-            config.gain_controller1.enabled = false;
-            config.gain_controller2.enabled = false;
-            h->nsApm->ApplyConfig(config);
-            h->nsMicFloat.assign(NS_FRAME_SIZE, 0.0f);
-            h->nsOutFloat.assign(NS_FRAME_SIZE, 0.0f);
-        }
+    // Post stage: mirror the AEC3 wrapper's production config — AEC3
+    // residual cancellation always on (aggressive nonlinear echo kill
+    // after linear NKF, incl. shadow/give-up passthrough), NS still
+    // tied to the checkbox, HPF like standalone AEC3, no AGC.
+    h->nsApm = webrtc::AudioProcessingBuilder().Create();
+    if (h->nsApm) {
+        webrtc::AudioProcessing::Config config;
+        config.echo_canceller.enabled     = true;
+        config.echo_canceller.mobile_mode = false;
+        config.noise_suppression.enabled  = nsEnabled;
+        config.noise_suppression.level    =
+            webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
+        config.high_pass_filter.enabled   = true;
+        config.gain_controller1.enabled   = false;
+        config.gain_controller2.enabled   = false;
+        h->nsApm->ApplyConfig(config);
+        h->nsMicFloat.assign(NS_FRAME_SIZE, 0.0f);
+        h->nsOutFloat.assign(NS_FRAME_SIZE, 0.0f);
+        h->refFloat.assign(NS_FRAME_SIZE, 0.0f);
     }
     return h;
 }
@@ -351,6 +352,17 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
     if (h->micWin.size() > (size_t)TDC_WIN)
         h->micWin.erase(h->micWin.begin(),
                         h->micWin.begin() + (h->micWin.size() - TDC_WIN));
+
+    // Residual-stage far-end: feed the raw reference every frame so
+    // AEC3's delay estimator and suppressor track what the speakers
+    // are playing, independent of NKF's internal TDC alignment.
+    if (h->nsApm && frameSize == NS_FRAME_SIZE) {
+        for (int i = 0; i < frameSize; i++)
+            h->refFloat[i] = ref[i] / 32768.0f;
+        webrtc::StreamConfig sc(NS_SAMPLE_RATE, 1);
+        float* refPtr = h->refFloat.data();
+        h->nsApm->ProcessReverseStream(&refPtr, sc, sc, &refPtr);
+    }
 
     if (!h->giveUp) {
         h->samplesSinceTdc += frameSize;
@@ -429,17 +441,17 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
             float v = micBlock[i];
             if (g > 0.0f) v += (outBlock[i] - v) * g;
-            if (!(h->nsEnabled && h->nsApm))
-                h->outHist.push_back(v);  // what the speakers get (pre-NS branch)
+            if (!h->nsApm)
+                h->outHist.push_back(v);  // no post stage: speakers get this
             v *= 32768.0f;
             if (v >  32767.0f) v =  32767.0f;
             if (v < -32768.0f) v = -32768.0f;
-            if (h->nsEnabled && h->nsApm)
+            if (h->nsApm)
                 h->nsInAccum.push_back((int16_t)v);
             else
                 h->outAccum.push_back((int16_t)v);
         }
-        if (h->nsEnabled && h->nsApm) NkfDrainNs(h);
+        if (h->nsApm) NkfDrainPost(h);
 
         // Hold shadow while a self-monitor loop is active; release the
         // countdown only when the loop is gone (then fade normally).

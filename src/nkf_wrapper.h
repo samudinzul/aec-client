@@ -8,8 +8,9 @@ extern "C" {
 typedef struct NkfHandle NkfHandle;
 
 // Create NKF-AEC engine. modelPath = path to nkf.onnx
-// nsEnabled = extra WebRTC noise-suppression pass (Moderate) on the
-// NKF output. DTLN already removes noise itself, so it gets no flag.
+// nsEnabled = WebRTC noise suppression (Moderate) on top of the
+// residual stage; the residual AEC3 pass itself is always on.
+// DTLN already removes noise itself, so it gets no flag.
 NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 
 // Process one frame of audio.
@@ -29,7 +30,10 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 //   loop detector (ref vs our output — Discord mic test / Listen to
 //   myself on speakers) holds exposure on mic while a feedback loop
 //   is present; after too many guard trips the session fails open to
-//   permanent mic passthrough.
+//   permanent mic passthrough. Output then runs a residual WebRTC
+//   AEC3 stage (always on — NKF is strictly linear, AEC3's nonlinear
+//   suppressor eats the echoey leftovers; also active on shadow /
+//   fail-up passthrough) plus optional NS.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 

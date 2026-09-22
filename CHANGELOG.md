@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **NKF: residual WebRTC AEC3 stage, always on — echo cut
+  aggressively.** NKF is strictly *linear*: what it leaves behind
+  (near-end double-talk residuals, time-varying/speaker-distortion
+  echo) used to ship raw. NKF output now always runs through the
+  same AEC3 as the standalone engine (nonlinear multi-band residual
+  suppression, delay-agnostic) with the raw ref fed every frame —
+  the "echoey" sound gets actively suppressed. The stage also runs
+  on shadow / fail-open mic passthrough, so echo kill never depends
+  on NKF being exposed (Discord mic test / Listen to myself included;
+  AEC3 tolerates self-monitoring by design). The Noise reduction
+  checkbox still toggles only WebRTC NS on top (Moderate).
+
 ### Fixed
 
 - **NKF blowout: TDC + staged exposure + divergence guard.**
