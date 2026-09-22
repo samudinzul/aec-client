@@ -145,10 +145,10 @@ struct SpscRing {
 // ============================================================
 // Numeric values keep their historical meaning so saved aec_config.txt
 // indices keep loading: 0 (SpeexDSP) and 3 (LocalVQE) were retired and
-// remap to AEC3 on load.
+// remap to DTLN (the default) on load.
 enum EngineType { ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4 };
 struct EngineState {
-    EngineType  type  = ENGINE_AEC3;
+    EngineType  type  = ENGINE_DTLN;
     Aec3Handle* aec3  = nullptr;
     NkfHandle*  nkf   = nullptr;
     DtlnHandle* dtln  = nullptr;
@@ -169,7 +169,7 @@ struct Preset {
 
 static const Preset PRESETS[] = {
     { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
-    { "Discord (recommended)",2, 0, 0, false, 1.00f, 1.00f },
+    { "Discord (recommended)",4, 0, 0, false, 1.00f, 1.00f },
     // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
     // means faster convergence per band where voice lives, and long
     // reverb tails are a convergence race. Full-band returns when
@@ -222,7 +222,7 @@ bool g_isRunning = false;
 Clock::time_point g_sessionStart;
 
 std::atomic<int>   g_sampleRate(16000);
-std::atomic<int>   g_selectedEngine(ENGINE_NKF);
+std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
 std::atomic<bool>  g_noiseReduction{ false };  // WebRTC NS Moderate on AEC3 + NKF; hidden on DTLN
@@ -247,7 +247,7 @@ bool g_isFirstRun = false;      // no config file at launch: show the setup card
 bool g_sessionStartedOnce = false;  // setup card retires after first Start
 bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
-int  g_engineIndex = 2, g_sampleRateIndex = 0, g_filterIndex = 2;
+int  g_engineIndex = 4, g_sampleRateIndex = 0, g_filterIndex = 2;  // 4 = ENGINE_DTLN
 int  g_presetIndex = 1;
 bool g_preprocessEnabled = false;
 bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
@@ -545,16 +545,16 @@ void LoadSettings() {
         // out-of-range index land on 48 kHz — no stranded configs.
         if (g_sampleRateIndex == 0) { g_sampleRate.store(16000); }
         else { g_sampleRateIndex = 1; g_sampleRate.store(48000); }
-        // Retired engines (SpeexDSP=0, LocalVQE=3): remap to AEC3 so old
-        // configs never point at a deleted engine.
+        // Retired engines (SpeexDSP=0, LocalVQE=3): remap to the default
+        // (DTLN) so old configs never point at a deleted engine.
         if (g_engineIndex == 0 || g_engineIndex == 3) {
-            g_engineIndex = ENGINE_AEC3;
-            g_sampleRateIndex = 1;
-            g_sampleRate.store(48000);
+            g_engineIndex = ENGINE_DTLN;
+            g_sampleRateIndex = 0;
+            g_sampleRate.store(16000);
         }
         if (g_engineIndex != ENGINE_AEC3 && g_engineIndex != ENGINE_NKF &&
             g_engineIndex != ENGINE_DTLN)
-            g_engineIndex = ENGINE_AEC3;
+            g_engineIndex = ENGINE_DTLN;
         g_selectedEngine.store(g_engineIndex);
         g_enablePreprocess.store(g_preprocessEnabled);
         // Speex cleanup retired: old configs with it on land on gate-only.
@@ -635,7 +635,7 @@ void ResetToDefaults() {
     // virtual cable is installed).
     int cable = FindCableInputIndex();
     g_outIndex = (cable >= 0) ? cable : 0;
-    g_engineIndex = 2; g_sampleRateIndex = 0; g_filterIndex = 2;  // NKF @16 kHz = Discord preset
+    g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 2;  // DTLN @16 kHz = Discord preset
     g_presetIndex = 1;
     g_preprocessEnabled = false;
     g_noiseReduction.store(false);  // default OFF; retired preprocess slot carries it
@@ -653,7 +653,7 @@ void ResetToDefaults() {
     g_advancedOpen = false;  // reset lands simple: Advanced collapsed
     g_advInitDone = false;  // re-apply the persisted default next frame
     g_sampleRate.store(16000);
-    g_selectedEngine.store(ENGINE_NKF);
+    g_selectedEngine.store(ENGINE_DTLN);
     g_filterLengthMs.store(50);
     g_enablePreprocess.store(false);
     g_wallpaperIndex = 0;
@@ -1272,11 +1272,11 @@ void DrawEngineSection() {
     ImGui::TextUnformatted("Engine");
     ImGui::SameLine(labelCol);
     ImGui::SetNextItemWidth(-1);
-    static const int kShown[] = { ENGINE_AEC3, ENGINE_NKF, ENGINE_DTLN };
+    static const int kShown[] = { ENGINE_DTLN, ENGINE_AEC3, ENGINE_NKF };
     static const char* kShownNames[] = {
-        "WebRTC AEC3 (strongest echo cut)",
-        "NKF-AEC (recommended default)",
-        "DTLN-AEC 512 (cleanest output)"
+        "DTLN-AEC 512 (recommended default)",
+        "WebRTC AEC3 (strongest echo cut, more CPU)",
+        "NKF-AEC (lightest — experimental)"
     };
     int comboIdx = 0;
     for (int i = 0; i < 3; i++)
@@ -1292,10 +1292,11 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
+            "DTLN-AEC 512 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
             "AEC3 = strongest echo suppression, voice sounds processed, more CPU.\n"
-            "Very loud speakers make it mistake your voice for echo — lower them or use NKF\n"
-            "NKF-AEC = recommended default: light, best voice preservation (16 kHz automatic)\n"
-            "DTLN-AEC 512 = cleanest output, neural echo + noise removal (16 kHz automatic)");
+            "Very loud speakers make it mistake your voice for echo — lower them or use DTLN\n"
+            "NKF-AEC = lightest, but a linear research engine (ICASSP 2023) that needs\n"
+            "delay alignment real-time paths lack — it can distort; kept as an option");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -1318,9 +1319,9 @@ void DrawEngineSection() {
     if (g_engineIndex == ENGINE_AEC3) {
         ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
-        ImGui::TextDisabled("Light neural engine, best voice preservation. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Lightest engine, but experimental — a linear research model that can distort in real time. Runs at 16 kHz automatically.");
     } else if (g_engineIndex == ENGINE_DTLN) {
-        ImGui::TextDisabled("Cleanest output — neural echo + noise removal. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Recommended default — cleanest output, neural echo + noise removal. Runs at 16 kHz automatically.");
         ImGui::TextDisabled("Needs an extra download — see About for details.");
     }
 
@@ -1636,7 +1637,7 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Three AEC engines: WebRTC AEC3, NKF-AEC, DTLN-AEC 512");
+    ImGui::BulletText("Three AEC engines: DTLN-AEC 512 (default), WebRTC AEC3, NKF-AEC");
     ImGui::BulletText("Voice gate — neural speech detector pushes silence down");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");

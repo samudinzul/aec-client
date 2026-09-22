@@ -28,9 +28,9 @@ QUICK START
    - Output:            CABLE Input (VB-Audio Virtual Cable)
 
 4. Pick an engine:
-   - WebRTC AEC3          best echo removal (default, 16 / 48 kHz)
-   - NKF-AEC              recommended default: most natural voice (16 kHz)
-   - DTLN-AEC 512         neural echo + noise canceller (16 kHz)
+   - DTLN-AEC 512         recommended default: neural echo + noise (16 kHz)
+   - WebRTC AEC3          strongest echo removal, more CPU (16 / 48 kHz)
+   - NKF-AEC              lightest — experimental, may distort (16 kHz)
 
 5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
    for WebRTC noise suppression on top of echo cancellation.
@@ -52,7 +52,8 @@ QUICK START
 TIPS
 ----
 - If echo comes back after a long call, click Stop then Start.
-- If your voice sounds robotic, try NKF-AEC.
+- If your voice sounds processed or robotic on AEC3, stay on the
+  default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
 - The X button minimizes to the system tray (toggle in Appearance tab).
 - DTLN-AEC needs models/dtln_aec_512_1.tflite +
   models/dtln_aec_512_2.tflite (bundled) and tensorflowlite_c.dll

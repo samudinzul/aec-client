@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Default engine is now DTLN-AEC 512.** Fresh installs, Reset to
+  defaults, the Discord preset, and retired/invalid config remaps all
+  land on DTLN (cleanest output, removes noise too). The picker is
+  reordered DTLN → AEC3 → NKF: WebRTC AEC3 becomes the second choice
+  (strongest echo cut, more CPU), NKF-AEC demoted to third.
+- **NKF-AEC demoted from default.** Field reports of blown-out /
+  overflowing output after extended testing, on top of the engine's
+  documented constraints: it is a *linear* echo canceller and its
+  upstream requires time-delay compensation — real-time WASAPI
+  loopback has variable delay and no alignment, so the Kalman filter
+  can diverge (the ICASSP 2023 paper itself warns of "unacceptable
+  results" under covariance misestimation). Kept as an option for the
+  lightest CPU; picker label, tooltips, README, and packaged quick
+  start now say "experimental — may distort".
+
+### Fixed
+
+- **NKF's Noise reduction pass fails open on APM errors.**
+  `ProcessStream`'s return code was ignored — on failure the previous
+  frame's buffer replayed forever (harsh looping full-scale noise).
+  Errors now bypass NS for that frame, shipping the raw NKF output.
+
 ## [1.6.1] — 2026-09-22
 
 - **Download:** [AEC-Client-v1.6.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.6.1/AEC-Client-v1.6.1-win64.zip) (Windows 10/11 64-bit)

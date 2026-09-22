@@ -79,7 +79,13 @@ static void NkfDrainNs(NkfHandle* h) {
             h->nsMicFloat[i] = h->nsInAccum[i] / 32768.0f;
         float* micPtr = h->nsMicFloat.data();
         float* outPtr = h->nsOutFloat.data();
-        h->nsApm->ProcessStream(&micPtr, sc, sc, &outPtr);
+        if (h->nsApm->ProcessStream(&micPtr, sc, sc, &outPtr) != 0) {
+            // Fail-open: on any APM error ship the raw frame. Ignoring the
+            // error would replay the previous out buffer forever (harsh
+            // looping full-scale noise — the "NKF overflows" report).
+            for (int i = 0; i < NS_FRAME_SIZE; i++)
+                h->nsOutFloat[i] = h->nsMicFloat[i];
+        }
         for (int i = 0; i < NS_FRAME_SIZE; i++) {
             float v = h->nsOutFloat[i] * 32768.0f;
             if (v >  32767.0f) v =  32767.0f;
