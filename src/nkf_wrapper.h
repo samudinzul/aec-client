@@ -23,9 +23,13 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 //   guard. Exposure is staged on one continuous block timeline:
 //   warm-up (lag unknown) and a post-lock shadow phase carry mic on
 //   the wire while the engine runs and is monitored only; then a
-//   256 ms crossfade brings NKF in. Guard trips drop back to shadow
-//   (spikes are never heard); after too many trips the session fails
-//   open to permanent mic passthrough.
+//   256 ms crossfade brings NKF in — cold-start spikes are never
+//   heard, and there are no engagement holes or replays. Guard trips
+//   drop back to shadow rather than exposing a reset; a self-monitor
+//   loop detector (ref vs our output — Discord mic test / Listen to
+//   myself on speakers) holds exposure on mic while a feedback loop
+//   is present; after too many guard trips the session fails open to
+//   permanent mic passthrough.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 

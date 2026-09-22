@@ -23,7 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engagement holes or replays. A guard watches output-vs-input energy
   (~100 ms catch); trips drop back to shadow rather than exposing a
   reset, and after six trips the session fails open to permanent mic
-  passthrough. Lowest-CPU engine made safe to use.
+  passthrough. A **self-monitor loop detector** correlates ref against
+  our own recent output (~every 128 ms, box-decimated): with "Listen
+  to myself" or a Discord mic test on speakers, ref carries our output
+  back around the acoustic loop, and NKF's live Kalman adaptation
+  inside that loop can ring — while the loop is detected, exposure
+  holds on mic (DTLN/AEC3 tolerate self-monitoring; NKF now sits it
+  out). Lowest-CPU engine made safe to use.
 
 ## [1.7.0] — 2026-09-22
 

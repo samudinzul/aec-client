@@ -42,6 +42,21 @@ static const float TDC_MIN_MEAN_E = 1e-5f;  // mean-square floor (don't chase si
 static const int   TDC_SHADOW     = 16;     // 512 ms internal warm-up
 static const int   TDC_FADE       = 8;      // 256 ms crossfade into NKF
 
+// Self-monitor loop detection: with "Listen to myself" or a Discord
+// mic test on SPEAKERS, ref carries our own recent output back around
+// (mic -> NKF -> Discord -> speakers -> loopback). NKF's live Kalman
+// adaptation inside that feedback loop can ring/blow; DTLN (fixed
+// weights) and AEC3 (leakage guards) tolerate it. Correlate ref
+// against our own output history — a strong delayed match means a
+// loop is present -> hold exposure on mic (shadow) until it clears.
+static const int   LOOP_WIN      = 1024;    // correlation window
+static const int   LOOP_DMAX     = 4800;    // 300 ms search (playback chain)
+static const int   LOOP_DEC      = 4;       // box-decimate x4 (cheap NCC)
+static const int   LOOP_PERIOD   = 2048;    // check every ~128 ms of audio
+static const float LOOP_MIN_PEAK = 0.45f;   // NCC: delayed copy, not coincidence
+static const int   LOOP_ON       = 2;       // hits needed to engage (hysteresis)
+static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> release
+
 // ---- Divergence guard ---------------------------------------------------
 // Second line of defence: if output energy runs far above BOTH inputs,
 // reset the filter and drop back to shadow (mic on the wire). After too
@@ -76,6 +91,12 @@ struct NkfHandle {
     bool giveUp = false;            // too many resets: always mic this session
     int shadowBlocks = TDC_SHADOW;  // blocks still emitting mic (engine warms)
     int fadePos = TDC_FADE;         // crossfade position (TDC_FADE = complete)
+
+    // Self-monitor loop detector state.
+    std::vector<float> outHist;     // our emitted output (what speakers get)
+    int samplesSinceLoop = 0;
+    int loopConf = 0;               // consecutive-ish hit score (0..4)
+    int loopQuiet = 0;              // silent detections in a row
 
     // Noise-reduction stage: WebRTC NS only (no echo canceller, no
     // reverse stream) applied to the NKF output when nsEnabled.
@@ -175,6 +196,65 @@ static bool NkfGuard(NkfHandle* h, const float* micB,
     return h->hotBlocks >= GUARD_HOT_BLOCKS;
 }
 
+// Box-decimated NCC of ref's tail against our own output history's
+// tail: ref[n] ~ out[n - L] with L in [0, LOOP_DMAX] = a self-monitor
+// loop is on. Confirms with LOOP_ON hits, releases after LOOP_QUIET
+// consecutive silent windows (so a finished mic test re-exposes NKF).
+static void NkfDetectLoop(NkfHandle* h) {
+    h->samplesSinceLoop = 0;
+    const int W = LOOP_WIN, DMAX = LOOP_DMAX, D = LOOP_DEC;
+    const int Wd = W / D;
+    const int OdN = (W + DMAX) / D;
+    const int off = DMAX / D;         // out-bin lag 0 aligns tail-to-tail
+    if ((int)h->refHist.size() < W ||
+        (int)h->outHist.size() < W + DMAX)
+        return;
+
+    const float* R = h->refHist.data() + (h->refHist.size() - W);
+    const float* O = h->outHist.data() + (h->outHist.size() - (W + DMAX));
+
+    std::vector<float> Rd(Wd), Od(OdN);
+    for (int k = 0; k < Wd; k++)
+        Rd[k] = (R[4*k] + R[4*k+1] + R[4*k+2] + R[4*k+3]) * 0.25f;
+    for (int j = 0; j < OdN; j++)
+        Od[j] = (O[4*j] + O[4*j+1] + O[4*j+2] + O[4*j+3]) * 0.25f;
+
+    double eR = 0, eO = 0;
+    for (int k = 0; k < Wd; k++) eR += (double)Rd[k] * Rd[k];
+    for (int j = 0; j < OdN; j++) eO += (double)Od[j] * Od[j];
+    if (eR / Wd < TDC_MIN_MEAN_E || eO / OdN < TDC_MIN_MEAN_E) {
+        // Too quiet to judge — hold, but release after sustained quiet
+        // so NKF re-exposes once the self-test is over.
+        if (++h->loopQuiet >= LOOP_QUIET) {
+            h->loopConf = 0;
+            h->loopQuiet = 0;
+        }
+        return;
+    }
+    h->loopQuiet = 0;
+
+    std::vector<double> pref(OdN + 1, 0.0);
+    for (int j = 0; j < OdN; j++)
+        pref[j + 1] = pref[j] + (double)Od[j] * Od[j];
+
+    double best = -2.0;
+    for (int Ld = 0; Ld <= off; Ld++) {
+        const int s = off - Ld;       // out-bin start paired with Rd[0]
+        double num = 0;
+        for (int k = 0; k < Wd; k++) num += (double)Rd[k] * Od[s + k];
+        const double eSeg = pref[s + Wd] - pref[s];
+        if (eSeg <= 0.0) continue;
+        const double sc = num / std::sqrt(eR * eSeg);
+        if (sc > best) best = sc;
+    }
+
+    if (best >= (double)LOOP_MIN_PEAK) {
+        if (h->loopConf < 4) h->loopConf++;
+    } else if (h->loopConf > 0) {
+        h->loopConf--;
+    }
+}
+
 // Drain raw output into outAccum (NS applied when enabled).
 static void NkfDrainNs(NkfHandle* h) {
     webrtc::StreamConfig sc(NS_SAMPLE_RATE, 1);  // mono
@@ -191,6 +271,7 @@ static void NkfDrainNs(NkfHandle* h) {
                 h->nsOutFloat[i] = h->nsMicFloat[i];
         }
         for (int i = 0; i < NS_FRAME_SIZE; i++) {
+            h->outHist.push_back(h->nsOutFloat[i]);
             float v = h->nsOutFloat[i] * 32768.0f;
             if (v >  32767.0f) v =  32767.0f;
             if (v < -32768.0f) v = -32768.0f;
@@ -226,6 +307,7 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled) {
     h->refHist.reserve(TDC_WIN + TDC_DMAX + NKF_BLOCK_SHIFT * 4);
     h->micWin.reserve(TDC_WIN);
     h->outAccum.reserve(NKF_BLOCK_SHIFT * 4);
+    h->outHist.reserve(LOOP_WIN + LOOP_DMAX);
     h->nsEnabled = nsEnabled;
     if (nsEnabled) {
         // NS-only pass: echo canceller off (NKF already killed the echo),
@@ -276,6 +358,9 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
         if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE)
             h->tdcLocked = true;  // engage anyway; TDC keeps correcting
+
+        h->samplesSinceLoop += frameSize;
+        if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
     }
 
     std::vector<float> micBlock(NKF_BLOCK_SHIFT);
@@ -321,6 +406,14 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
             }
         }
 
+        // Self-monitor loop detected while exposed: yank back to shadow
+        // NOW — NKF's live adaptation inside a feedback loop is what
+        // rings before the guard can trip.
+        if (h->loopConf >= LOOP_ON && h->shadowBlocks == 0 && processed) {
+            h->shadowBlocks = TDC_SHADOW;
+            h->fadePos = TDC_FADE;
+        }
+
         // Exposure mix: g=0 -> mic, g=1 -> full NKF.
         const bool shadowed = processed && h->shadowBlocks > 0;
         float g = 0.0f;
@@ -336,6 +429,8 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
             float v = micBlock[i];
             if (g > 0.0f) v += (outBlock[i] - v) * g;
+            if (!(h->nsEnabled && h->nsApm))
+                h->outHist.push_back(v);  // what the speakers get (pre-NS branch)
             v *= 32768.0f;
             if (v >  32767.0f) v =  32767.0f;
             if (v < -32768.0f) v = -32768.0f;
@@ -346,13 +441,23 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         }
         if (h->nsEnabled && h->nsApm) NkfDrainNs(h);
 
-        if (shadowed && --h->shadowBlocks == 0) h->fadePos = 0;
+        // Hold shadow while a self-monitor loop is active; release the
+        // countdown only when the loop is gone (then fade normally).
+        if (shadowed && h->loopConf < LOOP_ON &&
+            --h->shadowBlocks == 0)
+            h->fadePos = 0;
         h->micAccum.erase(h->micAccum.begin(),
                           h->micAccum.begin() + NKF_BLOCK_SHIFT);
         h->micConsumed += NKF_BLOCK_SHIFT;
     }
 
     NkfTrimRef(h);
+    {
+        const size_t cap = (size_t)(LOOP_WIN + LOOP_DMAX);
+        if (h->outHist.size() > cap)
+            h->outHist.erase(h->outHist.begin(),
+                             h->outHist.begin() + (h->outHist.size() - cap));
+    }
     NkfDrainOut(h, out, frameSize);
 }
 
@@ -363,6 +468,7 @@ void NkfReset(NkfHandle* h) {
     h->outAccum.clear();
     h->nsInAccum.clear();
     h->micWin.clear();
+    h->outHist.clear();
     h->total = 0;
     h->micConsumed = 0;
     h->alignDelay = 0;
@@ -374,6 +480,9 @@ void NkfReset(NkfHandle* h) {
     h->giveUp = false;
     h->shadowBlocks = TDC_SHADOW;
     h->fadePos = TDC_FADE;
+    h->samplesSinceLoop = 0;
+    h->loopConf = 0;
+    h->loopQuiet = 0;
     if (h->engine) h->engine->Reset();
 }
 
