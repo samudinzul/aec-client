@@ -17,7 +17,11 @@ gh auth status >/dev/null 2>&1 || { echo "error: not authenticated — run: gh a
 # ------------------------------------------------------------------
 # Current latest: v1.6.0 — standard title + notes rewritten to template
 # ------------------------------------------------------------------
-NOTES=$(mktemp)
+# Notes go to a RELATIVE path: gh is a native Windows exe and cannot
+# open POSIX mktemp paths like /tmp/... (MSYS path conversion skips
+# them). A repo-relative file needs no conversion on any shell.
+mkdir -p release
+NOTES="release/.notes-v1.6.0.md"
 trap 'rm -f "$NOTES"' EXIT
 
 cat > "$NOTES" <<'EOF'
