@@ -8,7 +8,9 @@ extern "C" {
 typedef struct NkfHandle NkfHandle;
 
 // Create NKF-AEC engine. modelPath = path to nkf.onnx
-NkfHandle* NkfNew(const char* modelPath);
+// nsEnabled = extra WebRTC noise-suppression pass (Moderate) on the
+// NKF output. DTLN already removes noise itself, so it gets no flag.
+NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 
 // Process one frame of audio.
 //   mic:   int16 mic input

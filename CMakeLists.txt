@@ -78,7 +78,7 @@ endforeach()
 # ============================================================
 #  Copy every runtime DLL next to aec_gui.exe
 #  Includes transitive deps that load dynamically at runtime
-#  (ggml backends, ONNX Runtime, WebRTC, GLFW, Absl, OpenMP).
+#  (ONNX Runtime, WebRTC, GLFW, Absl, OpenMP).
 # ============================================================
 add_custom_command(TARGET aec_gui POST_BUILD
     # Our own engine DLLs

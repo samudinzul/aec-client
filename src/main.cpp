@@ -225,6 +225,7 @@ std::atomic<int>   g_sampleRate(16000);
 std::atomic<int>   g_selectedEngine(ENGINE_NKF);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
+std::atomic<bool>  g_noiseReduction{ false };  // WebRTC NS Moderate on AEC3 + NKF; hidden on DTLN
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -510,7 +511,7 @@ void SaveSettings() {
     if (!f.is_open()) return;
     f << g_micIndex << "\n" << g_refIndex << "\n" << g_outIndex << "\n"
       << g_engineIndex << "\n" << g_sampleRateIndex << "\n" << g_filterIndex << "\n"
-      << g_preprocessEnabled << "\n"
+      << (g_noiseReduction.load() ? 1 : 0) << "\n"  // retired preprocess slot: now noise reduction
       << (int)(g_micGain.load() * 100) << "\n"
       << (int)(g_outputGain.load() * 100) << "\n"
       << g_wallpaperIndex << "\n"
@@ -533,10 +534,11 @@ void LoadSettings() {
     g_isFirstRun = !f.is_open();
     g_advancedOpen = !g_isFirstRun;  // newcomers start simple; regulars keep full view
     if (!f.is_open()) return;
-    int mg, og;
+    int mg, og, nsFlag = 0;
     if (f >> g_micIndex >> g_refIndex >> g_outIndex
           >> g_engineIndex >> g_sampleRateIndex >> g_filterIndex
-          >> g_preprocessEnabled >> mg >> og) {
+          >> nsFlag >> mg >> og) {
+        g_noiseReduction.store(nsFlag != 0);
         g_micGain.store(mg / 100.0f);
         g_outputGain.store(1.0f);  // single visible level: output stage fixed
         // Rates are {16000, 48000}: old index 1 (32 kHz, removed) and any
@@ -636,6 +638,7 @@ void ResetToDefaults() {
     g_engineIndex = 2; g_sampleRateIndex = 0; g_filterIndex = 2;  // NKF @16 kHz = Discord preset
     g_presetIndex = 1;
     g_preprocessEnabled = false;
+    g_noiseReduction.store(false);  // default OFF; retired preprocess slot carries it
     g_minimizeToTray = true;
     g_vadEnabled.store(false);   // Push-down-silence defaults OFF after reset
     g_vadOpen.store(0.50f);
@@ -702,10 +705,10 @@ void ReinitEngine() {
     int fs = frameSizeForRate(sr);
 
     if (eng == ENGINE_AEC3) {
-        g_engine.aec3 = Aec3New(sr, fs);
+        g_engine.aec3 = Aec3New(sr, fs, g_noiseReduction.load());
         g_engine.type = ENGINE_AEC3;
     } else if (eng == ENGINE_NKF) {
-        g_engine.nkf = NkfNew("models/nkf.onnx");
+        g_engine.nkf = NkfNew("models/nkf.onnx", g_noiseReduction.load());
         g_engine.type = ENGINE_NKF;
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_512");
@@ -1322,6 +1325,25 @@ void DrawEngineSection() {
     }
 
     ImGui::EndDisabled();
+
+    // Noise reduction: extra WebRTC suppression (Moderate) on top of echo
+    // removal. DTLN already removes noise itself, so the box is hidden
+    // there — never a dead control. Live-togglable: the engine restarts
+    // for a split second, same path as switching presets mid-call.
+    if (g_engineIndex != ENGINE_DTLN) {
+        bool ns = g_noiseReduction.load();
+        if (ImGui::Checkbox("Noise reduction", &ns)) {
+            g_noiseReduction.store(ns);
+            MarkPresetCustom();
+            SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Extra cut of background hiss and fan noise on top of echo removal.\n"
+                               "Takes effect immediately — the engine restarts for a split second.\n"
+                               "DTLN already removes noise itself, so this box only shows\n"
+                               "for WebRTC AEC3 and NKF-AEC.");
+    }
 }
 
 void DrawGainsSection() {

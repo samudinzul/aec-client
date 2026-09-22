@@ -24,7 +24,7 @@ struct Aec3Handle {
 
 extern "C" {
 
-Aec3Handle* Aec3New(int sampleRate, int frameSize) {
+Aec3Handle* Aec3New(int sampleRate, int frameSize, bool nsEnabled) {
     auto h = new Aec3Handle();
     h->sampleRate = sampleRate;
     h->frameSize  = frameSize;
@@ -37,7 +37,9 @@ Aec3Handle* Aec3New(int sampleRate, int frameSize) {
     webrtc::AudioProcessing::Config config;
     config.echo_canceller.enabled     = true;
     config.echo_canceller.mobile_mode = false;
-    config.noise_suppression.enabled  = false;   // off = preserve voice quality
+    config.noise_suppression.enabled  = nsEnabled;
+    config.noise_suppression.level    =
+        webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
     config.high_pass_filter.enabled   = true;
     config.gain_controller1.enabled   = false;
     config.gain_controller2.enabled   = false;

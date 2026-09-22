@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Noise reduction checkbox (Advanced → Engine).** Extra WebRTC
+  background-noise suppression (Moderate: hiss, fans) on top of echo
+  removal for WebRTC AEC3 and NKF-AEC — off by default, live-togglable
+  (the engine restarts for a split second, same path as switching
+  presets mid-call). Hidden on DTLN, which already removes noise
+  itself. Persisted in the retired preprocess config slot, so
+  `aec_config.txt` stays positionally aligned; presets leave it alone,
+  Reset-to-defaults turns it off.
+
 ### Fixed
 
 - **AEC3 loud-speaker caveat documented, not coded.** Live testing:
