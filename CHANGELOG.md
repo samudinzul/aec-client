@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-09-22
+
+- **Download:** [AEC-Client-v1.7.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.7.1/AEC-Client-v1.7.1-win64.zip) (Windows 10/11 64-bit)
+
 ### Changed
 
 - **First launch and Reset to defaults now select the Windows system
