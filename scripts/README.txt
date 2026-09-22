@@ -29,7 +29,7 @@ QUICK START
 
 4. Pick an engine:
    - DTLN-AEC 512         recommended default: neural echo + noise (16 kHz)
-   - WebRTC AEC3          strongest echo removal, more CPU (16 / 48 kHz)
+   - WebRTC AEC3          strongest echo removal (16 / 48 kHz)
    - NKF-AEC              lightest — experimental, may distort (16 kHz)
 
 5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
@@ -51,6 +51,8 @@ QUICK START
 
 TIPS
 ----
+- CPU-sensitive? NKF-AEC is lightest (experimental); DTLN and AEC3 are
+  both moderate — all well under 2% on a typical desktop either way.
 - If echo comes back after a long call, click Stop then Start.
 - If your voice sounds processed or robotic on AEC3, stay on the
   default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).

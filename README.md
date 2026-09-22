@@ -46,7 +46,7 @@ No more headphones. No more echo. No dead-air noise.
 
 - **3 selectable AEC engines** in one app:
   - **DTLN-AEC 512** — recommended default: dual-LSTM echo + noise canceller (ICASSP 2021)
-  - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed, more CPU)
+  - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed)
   - **NKF-AEC** — lightest experimental neural Kalman filter (ICASSP 2023; can distort in real time)
 - **Noise reduction** (AEC3 and NKF-AEC) — optional WebRTC noise suppression on top of echo cancellation, one checkbox
 - **Low CPU usage** — under 2% on a typical desktop
@@ -74,7 +74,7 @@ No more headphones. No more echo. No dead-air noise.
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick (more CPU); NKF-AEC is the lightest (experimental). Optionally tick **Noise reduction** on AEC3 or NKF-AEC for WebRTC noise suppression.
+5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is the lightest (experimental). Optionally tick **Noise reduction** on AEC3 or NKF-AEC for WebRTC noise suppression.
 6. **Click Start**. Keep speakers at a moderate volume — very loud
    speakers make any canceller mistake your voice for echo (AEC3 will
    cut you mid-sentence in double-talk). If the room must be loud,
@@ -123,7 +123,7 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 *Voice preservation = your voice survives intact, double-talk included (both sides speaking at once is the hardest case and governs the score). Echo removal = the far-end echo actually gone. DTLN additionally removes background noise (see its Best-For); AEC3 and NKF-AEC can add WebRTC noise suppression via the **Noise reduction** checkbox. NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 suppression muscle is bare AEC3, and stays. AEC3 trades naturalness for suppression muscle — its suppressor leaves voices sounding processed/cleaned; NKF can be the most natural but drifts when real-time loopback delay misaligns its linear filter (hence the Sep 2026 demotion from default). Loud-speaker caveat: AEC3's echo removal assumes sane levels — its suppressor works on echo-to-voice ratio per band, so speakers much louder than your mic read as "all echo" and your voice gets clamped in double-talk (no identity concept; Meta measured a 39% double-talk gap vs their Beryl canceller). Gain-structure first (speakers down, mic up/closer), DTLN second — it cuts echo without the AEC3 clamp.*
 
-**In short:** start on **DTLN** (the default) — cleanest output and it removes noise too. Switch to **AEC3** when echo is winning (loud speakers, echoey room) — strongest removal, more CPU — with the **Noise reduction** checkbox if you want WebRTC noise suppression on top. **NKF** stays for the lightest CPU if it sounds clean on your rig (linear research engine — can distort when loopback delay drifts).
+**In short:** start on **DTLN** (the default) — cleanest output and it removes noise too. Switch to **AEC3** when echo is winning (loud speakers, echoey room) — strongest removal — with the **Noise reduction** checkbox if you want WebRTC noise suppression on top. **NKF** stays for the lightest CPU if it sounds clean on your rig (linear research engine — can distort when loopback delay drifts).
 
 ---
 

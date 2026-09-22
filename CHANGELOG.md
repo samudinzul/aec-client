@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults, the Discord preset, and retired/invalid config remaps all
   land on DTLN (cleanest output, removes noise too). The picker is
   reordered DTLN → AEC3 → NKF: WebRTC AEC3 becomes the second choice
-  (strongest echo cut, more CPU), NKF-AEC demoted to third.
+  (strongest echo cut), NKF-AEC demoted to third.
 - **NKF-AEC demoted from default.** Field reports of blown-out /
   overflowing output after extended testing, on top of the engine's
   documented constraints: it is a *linear* echo canceller and its

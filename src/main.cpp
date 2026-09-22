@@ -1275,7 +1275,7 @@ void DrawEngineSection() {
     static const int kShown[] = { ENGINE_DTLN, ENGINE_AEC3, ENGINE_NKF };
     static const char* kShownNames[] = {
         "DTLN-AEC 512 (recommended default)",
-        "WebRTC AEC3 (strongest echo cut, more CPU)",
+        "WebRTC AEC3 (strongest echo cut)",
         "NKF-AEC (lightest — experimental)"
     };
     int comboIdx = 0;
@@ -1293,7 +1293,7 @@ void DrawEngineSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "DTLN-AEC 512 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
-            "AEC3 = strongest echo suppression, voice sounds processed, more CPU.\n"
+            "AEC3 = strongest echo suppression, voice sounds processed.\n"
             "Very loud speakers make it mistake your voice for echo — lower them or use DTLN\n"
             "NKF-AEC = lightest, but a linear research engine (ICASSP 2023) that needs\n"
             "delay alignment real-time paths lack — it can distort; kept as an option");
