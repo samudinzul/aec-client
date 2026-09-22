@@ -47,7 +47,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.6.1"
+#define APP_VERSION "1.7.0"
 
 // ============================================================
 //  Single-instance protection

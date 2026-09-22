@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-09-22
+
+- **Download:** [AEC-Client-v1.7.0-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.7.0/AEC-Client-v1.7.0-win64.zip) (Windows 10/11 64-bit)
+
 ### Changed
 
 - **Default engine is now DTLN-AEC 512.** Fresh installs, Reset to
