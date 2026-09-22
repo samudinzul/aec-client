@@ -21,7 +21,9 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 //   Internally performs TDC (ref->mic delay alignment by cross-
 //   correlation, required by upstream NKF) and runs a divergence
 //   guard: on runaway output the filter is reset; after too many
-//   resets the session fails open to mic passthrough.
+//   resets the session fails open to mic passthrough. Until the lag
+//   first locks (~0.2 s), output is mic passthrough — the canceller
+//   never runs unaligned.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 

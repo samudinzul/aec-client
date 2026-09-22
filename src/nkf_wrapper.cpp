@@ -27,7 +27,9 @@ static const int NS_FRAME_SIZE = NS_SAMPLE_RATE / 100;
 // (GCC-PHAT) provides offline, done continuously here.
 static const int   TDC_DMAX       = 1600;   // 100 ms search range @16 kHz
 static const int   TDC_WIN        = 1024;   // 64 ms correlation window
+static const int   TDC_EAGER      = 1024;   // pre-lock cadence: ~64 ms of audio
 static const int   TDC_PERIOD     = 8192;   // re-estimate every ~0.512 s of audio
+static const int   TDC_LOCK_GRACE = 48000;  // 3 s: engage with best guess if no lock
 static const float TDC_MIN_PEAK   = 0.35f;  // NCC needed to accept a small lag step
 static const float TDC_JUMP_PEAK  = 0.55f;  // NCC needed to accept a jump (> 5 ms)
 static const int   TDC_JUMP       = 80;     // lag steps beyond this count as a jump
@@ -38,7 +40,7 @@ static const float TDC_MIN_MEAN_E = 1e-5f;  // mean-square floor (don't chase si
 // for a few hundred ms, reset the filter. After too many resets, fail
 // open (mic passthrough) for the rest of the session — clean-but-echoed
 // beats blown-out.
-static const int   GUARD_HOT_BLOCKS  = 8;     // ~256 ms hot -> reset
+static const int   GUARD_HOT_BLOCKS  = 5;     // ~160 ms hot -> reset
 static const float GUARD_EMA         = 0.125f;
 static const float GUARD_HOT_MEAN_E  = 0.05f; // output mean-square floor
 static const float GUARD_RATIO       = 4.0f;  // out must exceed inputs by 6 dB
@@ -58,7 +60,7 @@ struct NkfHandle {
     size_t micConsumed = 0;         // abs index of micAccum[0]
     std::vector<float> micWin;      // last TDC_WIN mic samples (estimator)
     int alignDelay = 0;             // current ref->mic lag (samples)
-    int samplesSinceTdc = TDC_PERIOD;  // estimate on first eligible call
+    int samplesSinceTdc = 0;        // estimate as soon as data allows
     bool tdcLocked = false;
 
     float micEnv = 0, refEnv = 0, outEnv = 0;  // EMA of per-block mean-square
@@ -201,6 +203,16 @@ static void NkfDrainOut(NkfHandle* h, int16_t* out, int frameSize) {
     }
 }
 
+// Mic passthrough for this frame (NS applied when enabled) — used for
+// fail-open and for the pre-lock warm-up window.
+static void NkfPassMic(NkfHandle* h, const int16_t* mic, int frameSize) {
+    for (int i = 0; i < frameSize; i++) {
+        if (h->nsEnabled && h->nsApm) h->nsInAccum.push_back(mic[i]);
+        else                          h->outAccum.push_back(mic[i]);
+    }
+    if (h->nsEnabled && h->nsApm) NkfDrainNs(h);
+}
+
 extern "C" {
 
 NkfHandle* NkfNew(const char* modelPath, bool nsEnabled) {
@@ -245,20 +257,22 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
 
     // Fail-open session: mic passthrough (still NS'd), engine idle.
     if (h->giveUp) {
-        for (int i = 0; i < frameSize; i++) {
-            if (h->nsEnabled && h->nsApm) h->nsInAccum.push_back(mic[i]);
-            else                          h->outAccum.push_back(mic[i]);
-        }
-        if (h->nsEnabled && h->nsApm) NkfDrainNs(h);
+        NkfPassMic(h, mic, frameSize);
         NkfDrainOut(h, out, frameSize);
         return;
     }
 
-    // int16 -> float: mic into the block accumulator, ref into the
-    // absolute-addressed history, mic also into the estimator window.
+    // Capture lock state BEFORE this call's estimate: a just-locked
+    // stream must not feed the block loop frames that were never
+    // pushed to micAccum (they went to warm-up passthrough instead).
+    const bool lockedBefore = h->tdcLocked;
+
+    // int16 -> float: mic into the block accumulator (locked streams
+    // only), ref into the absolute-addressed history, mic also into
+    // the estimator window.
     for (int i = 0; i < frameSize; i++) {
         const float s = mic[i] / 32768.0f;
-        h->micAccum.push_back(s);
+        if (lockedBefore) h->micAccum.push_back(s);
         h->micWin.push_back(s);
         h->refHist.push_back(ref[i] / 32768.0f);
     }
@@ -268,7 +282,30 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                         h->micWin.begin() + (h->micWin.size() - TDC_WIN));
 
     h->samplesSinceTdc += frameSize;
-    if (h->samplesSinceTdc >= TDC_PERIOD) NkfEstimateDelay(h);
+    const int tdcNeed = h->tdcLocked ? TDC_PERIOD : TDC_EAGER;
+    if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
+    if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE)
+        h->tdcLocked = true;  // engage anyway; periodic TDC keeps correcting
+
+    // Warm-up: lag unknown — running the linear canceller unaligned is
+    // what blew out before, so pass the mic through (NS'd). Histories
+    // keep filling; once the lag locks, blocks engage from NOW.
+    if (!h->tdcLocked) {
+        h->micAccum.clear();
+        h->micConsumed = h->total;
+        NkfPassMic(h, mic, frameSize);
+        NkfTrimRef(h);
+        NkfDrainOut(h, out, frameSize);
+        return;
+    }
+    if (!lockedBefore) {
+        // First locked call: this frame never entered micAccum.
+        h->micConsumed = h->total;
+        NkfPassMic(h, mic, frameSize);
+        NkfTrimRef(h);
+        NkfDrainOut(h, out, frameSize);
+        return;
+    }
 
     std::vector<float> micBlock(NKF_BLOCK_SHIFT);
     std::vector<float> refBlock(NKF_BLOCK_SHIFT);
@@ -340,7 +377,7 @@ void NkfReset(NkfHandle* h) {
     h->total = 0;
     h->micConsumed = 0;
     h->alignDelay = 0;
-    h->samplesSinceTdc = TDC_PERIOD;
+    h->samplesSinceTdc = 0;
     h->tdcLocked = false;
     h->micEnv = h->refEnv = h->outEnv = 0;
     h->hotBlocks = 0;

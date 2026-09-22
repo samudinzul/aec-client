@@ -16,9 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pegged full-scale. The wrapper now estimates the ref-to-mic lag by
   normalized cross-correlation (~every 0.5 s, 0–100 ms search, jump-
   gated) and feeds NKF a delay-aligned reference. A second-line guard
-  watches output-vs-input energy and resets the filter on divergence;
-  after six resets it fails open to mic passthrough, so output can
-  never blow out again — the lowest-CPU engine made safe to use.
+  watches output-vs-input energy and resets the filter on divergence
+  (catch tightened to ~160 ms); after six resets it fails open to mic
+  passthrough, so output can never blow out again. Warm-up runs mic
+  passthrough until the lag first locks (eager estimate every ~64 ms
+  of audio), so the canceller never executes unaligned — the momentary
+  early spike at Start is gone; a 3 s never-locked grace engages the
+  engine anyway with continuous correction. Lowest-CPU engine made
+  safe to use.
 
 ## [1.7.0] — 2026-09-22
 
