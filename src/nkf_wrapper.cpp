@@ -35,12 +35,19 @@ static const float TDC_JUMP_PEAK  = 0.55f;  // NCC needed to accept a jump (> 5 
 static const int   TDC_JUMP       = 80;     // lag steps beyond this count as a jump
 static const float TDC_MIN_MEAN_E = 1e-5f;  // mean-square floor (don't chase silence)
 
+// Exposure pipeline: after (re)lock the engine runs in SHADOW — mic
+// stays on the wire, guard monitors internally, so cold-start spikes
+// are never heard. Shadow ends -> FADE blocks crossfade mic->NKF on
+// the same block timeline (no holes, no replays), then live.
+static const int   TDC_SHADOW     = 16;     // 512 ms internal warm-up
+static const int   TDC_FADE       = 8;      // 256 ms crossfade into NKF
+
 // ---- Divergence guard ---------------------------------------------------
-// Second line of defence: if output energy runs far above BOTH inputs
-// for a few hundred ms, reset the filter. After too many resets, fail
-// open (mic passthrough) for the rest of the session — clean-but-echoed
-// beats blown-out.
-static const int   GUARD_HOT_BLOCKS  = 5;     // ~160 ms hot -> reset
+// Second line of defence: if output energy runs far above BOTH inputs,
+// reset the filter and drop back to shadow (mic on the wire). After too
+// many resets, fail open (always mic) for the rest of the session —
+// clean-but-echoed beats blown-out.
+static const int   GUARD_HOT_BLOCKS  = 3;     // ~100 ms hot -> reset+shadow
 static const float GUARD_EMA         = 0.125f;
 static const float GUARD_HOT_MEAN_E  = 0.05f; // output mean-square floor
 static const float GUARD_RATIO       = 4.0f;  // out must exceed inputs by 6 dB
@@ -66,7 +73,9 @@ struct NkfHandle {
     float micEnv = 0, refEnv = 0, outEnv = 0;  // EMA of per-block mean-square
     int hotBlocks = 0;
     int resets = 0;
-    bool giveUp = false;            // too many resets: passthrough this session
+    bool giveUp = false;            // too many resets: always mic this session
+    int shadowBlocks = TDC_SHADOW;  // blocks still emitting mic (engine warms)
+    int fadePos = TDC_FADE;         // crossfade position (TDC_FADE = complete)
 
     // Noise-reduction stage: WebRTC NS only (no echo canceller, no
     // reverse stream) applied to the NKF output when nsEnabled.
@@ -203,16 +212,6 @@ static void NkfDrainOut(NkfHandle* h, int16_t* out, int frameSize) {
     }
 }
 
-// Mic passthrough for this frame (NS applied when enabled) — used for
-// fail-open and for the pre-lock warm-up window.
-static void NkfPassMic(NkfHandle* h, const int16_t* mic, int frameSize) {
-    for (int i = 0; i < frameSize; i++) {
-        if (h->nsEnabled && h->nsApm) h->nsInAccum.push_back(mic[i]);
-        else                          h->outAccum.push_back(mic[i]);
-    }
-    if (h->nsEnabled && h->nsApm) NkfDrainNs(h);
-}
-
 extern "C" {
 
 NkfHandle* NkfNew(const char* modelPath, bool nsEnabled) {
@@ -255,24 +254,14 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize) {
     if (!h || !h->engine) return;
 
-    // Fail-open session: mic passthrough (still NS'd), engine idle.
-    if (h->giveUp) {
-        NkfPassMic(h, mic, frameSize);
-        NkfDrainOut(h, out, frameSize);
-        return;
-    }
-
-    // Capture lock state BEFORE this call's estimate: a just-locked
-    // stream must not feed the block loop frames that were never
-    // pushed to micAccum (they went to warm-up passthrough instead).
-    const bool lockedBefore = h->tdcLocked;
-
-    // int16 -> float: mic into the block accumulator (locked streams
-    // only), ref into the absolute-addressed history, mic also into
-    // the estimator window.
+    // int16 -> float: mic into the block accumulator, ref into the
+    // absolute-addressed history, mic also into the estimator window.
+    // Pushed unconditionally so ALL phases (warm-up, shadow, fade,
+    // live) emit from one continuous block timeline — engagement can
+    // neither drop a hole nor replay already-heard samples.
     for (int i = 0; i < frameSize; i++) {
         const float s = mic[i] / 32768.0f;
-        if (lockedBefore) h->micAccum.push_back(s);
+        h->micAccum.push_back(s);
         h->micWin.push_back(s);
         h->refHist.push_back(ref[i] / 32768.0f);
     }
@@ -281,30 +270,12 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         h->micWin.erase(h->micWin.begin(),
                         h->micWin.begin() + (h->micWin.size() - TDC_WIN));
 
-    h->samplesSinceTdc += frameSize;
-    const int tdcNeed = h->tdcLocked ? TDC_PERIOD : TDC_EAGER;
-    if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
-    if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE)
-        h->tdcLocked = true;  // engage anyway; periodic TDC keeps correcting
-
-    // Warm-up: lag unknown — running the linear canceller unaligned is
-    // what blew out before, so pass the mic through (NS'd). Histories
-    // keep filling; once the lag locks, blocks engage from NOW.
-    if (!h->tdcLocked) {
-        h->micAccum.clear();
-        h->micConsumed = h->total;
-        NkfPassMic(h, mic, frameSize);
-        NkfTrimRef(h);
-        NkfDrainOut(h, out, frameSize);
-        return;
-    }
-    if (!lockedBefore) {
-        // First locked call: this frame never entered micAccum.
-        h->micConsumed = h->total;
-        NkfPassMic(h, mic, frameSize);
-        NkfTrimRef(h);
-        NkfDrainOut(h, out, frameSize);
-        return;
+    if (!h->giveUp) {
+        h->samplesSinceTdc += frameSize;
+        const int tdcNeed = h->tdcLocked ? TDC_PERIOD : TDC_EAGER;
+        if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
+        if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE)
+            h->tdcLocked = true;  // engage anyway; TDC keeps correcting
     }
 
     std::vector<float> micBlock(NKF_BLOCK_SHIFT);
@@ -314,7 +285,8 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
     while (h->micAccum.size() >= (size_t)NKF_BLOCK_SHIFT) {
         // Aligned pairing: mic [micConsumed, +SHIFT) with ref SHIFT-delay
         // samples earlier — the TDC slice NKF needs. Positions < 0 are
-        // stream warmup: feed zeros.
+        // stream warmup: feed zeros. (Pre-lock the engine isn't called;
+        // the slice just stays ready.)
         const long long needStart = (long long)h->micConsumed - h->alignDelay;
         const long long front =
             (long long)h->total - (long long)h->refHist.size();
@@ -327,29 +299,44 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 refBlock[i] = 0.0f;
         }
 
-        h->engine->ProcessBlock(micBlock.data(), refBlock.data(),
-                                outBlock.data());
-
-        if (NkfGuard(h, micBlock.data(), refBlock.data(), outBlock.data())) {
-            // Divergence: purge blown samples, reset the filter, drop the
-            // pending backlog (a few ms of audio — fine during recovery).
-            h->outAccum.clear();
-            h->nsInAccum.clear();
-            h->micAccum.clear();
-            h->micConsumed = h->total;
-            h->engine->Reset();
-            h->micEnv = h->refEnv = h->outEnv = 0;
-            h->hotBlocks = 0;
-            if (++h->resets >= GUARD_MAX_RESETS) {
-                h->giveUp = true;
-                h->micAccum.clear();
-                h->micConsumed = h->total;
+        // Engine runs only once locked and before fail-open; its output
+        // reaches the wire only past shadow, through the fade.
+        bool processed = false;
+        if (h->tdcLocked && !h->giveUp) {
+            h->engine->ProcessBlock(micBlock.data(), refBlock.data(),
+                                    outBlock.data());
+            processed = true;
+            if (NkfGuard(h, micBlock.data(), refBlock.data(),
+                         outBlock.data())) {
+                // Divergence: reset the filter and drop back to shadow.
+                // The wire keeps carrying mic — internal spikes, even
+                // here, are never exposed.
+                h->engine->Reset();
+                h->micEnv = h->refEnv = h->outEnv = 0;
+                h->hotBlocks = 0;
+                h->shadowBlocks = TDC_SHADOW;
+                h->fadePos = TDC_FADE;
+                if (++h->resets >= GUARD_MAX_RESETS) h->giveUp = true;
+                processed = false;
             }
-            break;
+        }
+
+        // Exposure mix: g=0 -> mic, g=1 -> full NKF.
+        const bool shadowed = processed && h->shadowBlocks > 0;
+        float g = 0.0f;
+        if (processed && !shadowed) {
+            if (h->fadePos < TDC_FADE) {
+                h->fadePos++;
+                g = (float)h->fadePos / (float)TDC_FADE;
+            } else {
+                g = 1.0f;
+            }
         }
 
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-            float v = outBlock[i] * 32768.0f;
+            float v = micBlock[i];
+            if (g > 0.0f) v += (outBlock[i] - v) * g;
+            v *= 32768.0f;
             if (v >  32767.0f) v =  32767.0f;
             if (v < -32768.0f) v = -32768.0f;
             if (h->nsEnabled && h->nsApm)
@@ -358,6 +345,8 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 h->outAccum.push_back((int16_t)v);
         }
         if (h->nsEnabled && h->nsApm) NkfDrainNs(h);
+
+        if (shadowed && --h->shadowBlocks == 0) h->fadePos = 0;
         h->micAccum.erase(h->micAccum.begin(),
                           h->micAccum.begin() + NKF_BLOCK_SHIFT);
         h->micConsumed += NKF_BLOCK_SHIFT;
@@ -383,6 +372,8 @@ void NkfReset(NkfHandle* h) {
     h->hotBlocks = 0;
     h->resets = 0;
     h->giveUp = false;
+    h->shadowBlocks = TDC_SHADOW;
+    h->fadePos = TDC_FADE;
     if (h->engine) h->engine->Reset();
 }
 

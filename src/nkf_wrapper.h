@@ -20,10 +20,12 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled);
 //   NOTE: This must only be called with sample rate 16000.
 //   Internally performs TDC (ref->mic delay alignment by cross-
 //   correlation, required by upstream NKF) and runs a divergence
-//   guard: on runaway output the filter is reset; after too many
-//   resets the session fails open to mic passthrough. Until the lag
-//   first locks (~0.2 s), output is mic passthrough — the canceller
-//   never runs unaligned.
+//   guard. Exposure is staged on one continuous block timeline:
+//   warm-up (lag unknown) and a post-lock shadow phase carry mic on
+//   the wire while the engine runs and is monitored only; then a
+//   256 ms crossfade brings NKF in. Guard trips drop back to shadow
+//   (spikes are never heard); after too many trips the session fails
+//   open to permanent mic passthrough.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 

@@ -9,21 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **NKF blowout: time-delay compensation + divergence guard.**
+- **NKF blowout: TDC + staged exposure + divergence guard.**
   NKF-AEC is a *linear* canceller whose upstream requires the far-end
   to be delay-aligned (their GCC-PHAT "-a" TDC) — the real-time WASAPI
   path never aligned it, so the Kalman filter diverged until output
   pegged full-scale. The wrapper now estimates the ref-to-mic lag by
-  normalized cross-correlation (~every 0.5 s, 0–100 ms search, jump-
-  gated) and feeds NKF a delay-aligned reference. A second-line guard
-  watches output-vs-input energy and resets the filter on divergence
-  (catch tightened to ~160 ms); after six resets it fails open to mic
-  passthrough, so output can never blow out again. Warm-up runs mic
-  passthrough until the lag first locks (eager estimate every ~64 ms
-  of audio), so the canceller never executes unaligned — the momentary
-  early spike at Start is gone; a 3 s never-locked grace engages the
-  engine anyway with continuous correction. Lowest-CPU engine made
-  safe to use.
+  normalized cross-correlation (eager every ~64 ms until first lock,
+  then ~0.5 s; 0–100 ms search, jump-gated) and feeds NKF a
+  delay-aligned reference. Output exposure is staged on one continuous
+  block timeline: warm-up and a 512 ms post-lock shadow phase carry mic
+  while the engine runs monitored-only, then a 256 ms crossfade brings
+  NKF in — cold-start spikes are never heard, and there are no
+  engagement holes or replays. A guard watches output-vs-input energy
+  (~100 ms catch); trips drop back to shadow rather than exposing a
+  reset, and after six trips the session fails open to permanent mic
+  passthrough. Lowest-CPU engine made safe to use.
 
 ## [1.7.0] — 2026-09-22
 
