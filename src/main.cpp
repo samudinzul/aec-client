@@ -308,6 +308,16 @@ static int FindCableInputIndex() {
 
 static bool CableInputPresent() { return FindCableInputIndex() >= 0; }
 
+// Index of the Windows system default endpoint (the "Default Device"
+// the OS hands apps; eConsole role) in `list`, else -1. miniaudio
+// flags it as isDefault during enumeration (WASAPI + WinMM backends).
+static int FindSystemDefaultIndex(const std::vector<ma_device_info>& list) {
+    for (int i = 0; i < (int)list.size(); i++) {
+        if (list[i].isDefault) return i;
+    }
+    return -1;
+}
+
 // ============================================================
 //  System tray (Windows)
 // ============================================================
@@ -627,14 +637,22 @@ void LoadSettings() {
 
 // Forward: stopping live/owned audio before reconfiguring (defined below).
 void StopAEC();
+void BuildDisplayIndices();  // defined below, used by ResetToDefaults
 
 void ResetToDefaults() {
     if (g_isRunning) StopAEC();  // never reconfigure live devices
-    g_micIndex = 0; g_refIndex = 0;
-    // Send-cleaned-sound-to lands on CABLE Input (index 0 only if no
-    // virtual cable is installed).
+    // Devices: Windows system default — same as a fresh install
+    // (mic/speakers), not whatever sits first in enumeration order.
+    int defMic = FindSystemDefaultIndex(g_captureDevices);
+    int defRef = FindSystemDefaultIndex(g_playbackDevices);
+    g_micIndex = (defMic >= 0) ? defMic : 0;
+    g_refIndex = (defRef >= 0) ? defRef : 0;
+    // Send-cleaned-sound-to lands on CABLE Input (the routing target
+    // voice apps listen to); without one, the system default output.
     int cable = FindCableInputIndex();
-    g_outIndex = (cable >= 0) ? cable : 0;
+    g_outIndex = (cable >= 0) ? cable
+                : ((defRef >= 0) ? defRef : 0);
+    BuildDisplayIndices();  // keep selections inside the filtered lists
     g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 2;  // DTLN @16 kHz = Discord preset
     g_presetIndex = 1;
     g_preprocessEnabled = false;
@@ -948,6 +966,7 @@ void BuildDisplayIndices() {
 }
 
 void EnumerateDevices() {
+    const bool firstScan = g_captureDevices.empty() && g_playbackDevices.empty();
     std::string micName, refName, outName;
     if (!g_captureDevices.empty()  && g_micIndex < (int)g_captureDevices.size())
         micName = g_captureDevices[g_micIndex].name;
@@ -974,21 +993,49 @@ void EnumerateDevices() {
     g_captureDevices.assign(pCapture,  pCapture  + captureCount);
     g_playbackDevices.assign(pPlayback, pPlayback + playbackCount);
 
+    const int defMic = FindSystemDefaultIndex(g_captureDevices);
+    const int defRef = FindSystemDefaultIndex(g_playbackDevices);
+
     auto findBy = [](const std::vector<ma_device_info>& list, const std::string& name) -> int {
         if (name.empty()) return -1;
         for (int i = 0; i < (int)list.size(); i++)
             if (name == list[i].name) return i;
         return -1;
     };
-    int mi = findBy(g_captureDevices, micName);   if (mi >= 0) g_micIndex = mi; else g_micIndex = 0;
-    int ri = findBy(g_playbackDevices, refName);  if (ri >= 0) g_refIndex = ri; else g_refIndex = 0;
-    int oi = findBy(g_playbackDevices, outName);
-    if (oi >= 0) {
-        g_outIndex = oi;
+
+    if (firstScan && !g_isFirstRun) {
+        // Launch with a saved config: the lists were empty when names
+        // were captured, so honor the indices LoadSettings restored —
+        // clamp only when they no longer exist (previously this path
+        // reset them to device 0 on every launch). Out-of-range falls
+        // back to the system default (mic/speakers) or CABLE/default.
+        if (g_micIndex < 0 || g_micIndex >= (int)g_captureDevices.size())
+            g_micIndex = (defMic >= 0) ? defMic : 0;
+        if (g_refIndex < 0 || g_refIndex >= (int)g_playbackDevices.size())
+            g_refIndex = (defRef >= 0) ? defRef : 0;
+        if (g_outIndex < 0 || g_outIndex >= (int)g_playbackDevices.size()) {
+            int cable = FindCableInputIndex();
+            g_outIndex = (cable >= 0) ? cable
+                       : ((defRef >= 0) ? defRef : 0);
+        }
     } else {
-        // Saved output gone (or first run): prefer CABLE Input over index 0.
-        int cable = FindCableInputIndex();
-        g_outIndex = (cable >= 0) ? cable : 0;
+        // First run (no config) or a mid-session re-scan: match the
+        // previous selection by name; a miss (fresh install, unplugged
+        // device) lands on the Windows system default.
+        int mi = findBy(g_captureDevices, micName);
+        g_micIndex = (mi >= 0) ? mi : ((defMic >= 0) ? defMic : 0);
+        int ri = findBy(g_playbackDevices, refName);
+        g_refIndex = (ri >= 0) ? ri : ((defRef >= 0) ? defRef : 0);
+        int oi = findBy(g_playbackDevices, outName);
+        if (oi >= 0) {
+            g_outIndex = oi;
+        } else {
+            // Saved output gone (or first run): CABLE Input when
+            // installed (routing target), else the system default.
+            int cable = FindCableInputIndex();
+            g_outIndex = (cable >= 0) ? cable
+                       : ((defRef >= 0) ? defRef : 0);
+        }
     }
 
 BuildDisplayIndices();

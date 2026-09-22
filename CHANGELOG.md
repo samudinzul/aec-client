@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **First launch and Reset to defaults now select the Windows system
+  default devices.** Fresh installs (and the Reset to defaults button)
+  pick the OS "Default Device" for microphone and speakers instead of
+  whatever happens to sit first in enumeration order. Send-cleaned-sound-to
+  still prefers CABLE Input (the routing target voice apps listen to),
+  falling back to the system default output when no cable is installed.
+  Side fix: saved device selections now survive restarts — the first
+  scan after launch honors the config's saved indices (previously the
+  empty-name lookup reset mic/speakers to the first device every launch).
 - **NKF: residual WebRTC AEC3 stage, always on — echo cut
   aggressively.** NKF is strictly *linear*: what it leaves behind
   (near-end double-talk residuals, time-varying/speaker-distortion
