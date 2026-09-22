@@ -208,6 +208,7 @@ std::atomic<float> g_pvadMatch{ -2.0f };    // last worker cosine; < -1.5 = none
 std::atomic<float> g_pvadThreshold{ PVAD_DEFAULT_THRESHOLD };
 std::atomic<bool>  g_pvadEnrolling{ false };
 std::atomic<int>   g_pvadEnrollSamples{ 0 };
+std::string        g_pvadMsg;  // UI thread only — why "Only my voice" refused to enable
 std::thread        g_pvadThread;
 std::atomic<bool>  g_pvadRun{ false };
 std::mutex         g_pvadHistMtx;
@@ -680,6 +681,7 @@ void ResetToDefaults() {
     g_vadCalibrating.store(false);
     g_vadCalSamples.clear();
     g_vadCalMsg.clear();
+    g_pvadMsg.clear();
     g_vadCalWasRunning = false;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -1848,16 +1850,34 @@ void DrawVadSection() {
     bool pvadOn = g_pvadEnabled.load();
     if (ImGui::Checkbox("Only my voice (experimental)", &pvadOn)) {
         EnsurePvad();
+        if (pvadOn && !g_pvad) {
+            // Refused: say why instead of silently reverting (MODELS.md:
+            // the owner check stays unavailable without the voice model).
+            std::error_code ec;
+            bool missing =
+                !std::filesystem::exists("models/ecapa-speaker-v1.onnx", ec);
+            g_pvadMsg = missing
+                ? "Voice model missing: models/ecapa-speaker-v1.onnx not found "
+                  "(not shipped in releases — see MODELS.md). The owner check "
+                  "stays unavailable; everything else works."
+                : "Voice model failed to load (ONNX error). The owner check "
+                  "stays unavailable; everything else works.";
+            pvadOn = false;
+        } else {
+            g_pvadMsg.clear();
+        }
         g_pvadEnabled.store(pvadOn && g_pvad != nullptr);
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("After learning your voice, the gate also pushes down OTHER\n"
-                          "voices (TV, family, roommates) — only you pass through.\n"
-                          "Your voiceprint never leaves this PC.\n"
-                          "Checks ~1/sec: speech starts always pass — pushing down\n"
-                          "only on a measured mismatch, never on timing.\n"
-                          "Off by default; needs a voiceprint below to do anything.");
+                           "voices (TV, family, roommates) — only you pass through.\n"
+                           "Your voiceprint never leaves this PC.\n"
+                           "Checks ~1/sec: speech starts always pass — pushing down\n"
+                           "only on a measured mismatch, never on timing.\n"
+                           "Off by default; needs a voiceprint below to do anything.");
+    if (!g_pvadMsg.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", g_pvadMsg.c_str());
     if (g_pvadEnabled.load() && g_pvad) {
         if (g_pvadEnrolling.load()) {
             int pct = g_pvadEnrollSamples.load() * 100 / PVAD_NEED_SAMPLES;
