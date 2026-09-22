@@ -40,9 +40,12 @@ QUICK START
 
 6. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)
-   - Echo Cancellation:  OFF
-   - Noise Suppression:  OFF
-   - Automatic Gain Control: OFF
+   - Input Profile:       Voice Isolation (one tap: Discord's noise
+     cleanup ON; echo is already removed by this app — only the
+     DTLN engine also removes noise, the rest are echo-only).
+     Manual alternative: Custom profile with Echo Cancellation OFF
+     (this app does it), Noise Suppression Krisp (Standard on weak
+     PCs), Automatic Gain Control OFF.
 
 TIPS
 ----

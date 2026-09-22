@@ -81,9 +81,14 @@ No more headphones. No more echo. No dead-air noise.
    use NKF-AEC instead.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
-   - **Echo Cancellation**: **OFF**
-   - **Noise Suppression**: **OFF**
-   - **Automatic Gain Control**: **OFF**
+   - **Input Profile**: **Voice Isolation** — one tap that turns on
+     Discord's noise cleanup. Echo is already removed by this app
+     (only the DTLN engine also removes noise; the rest are
+     echo-only — which is exactly why Discord's cleanup stays useful).
+   - Prefer manual control? Pick the **Custom** profile instead:
+     Echo Cancellation **OFF** (this app does it — two cancellers
+     stacked fight each other), Noise Suppression **Krisp**
+     (**Standard** on weak PCs), Automatic Gain Control **OFF**.
 
 Done. Talk normally with speakers on.
 
