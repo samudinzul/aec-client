@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **NKF: "Residual echo kill (AEC3)" toggle.** The post-NKF WebRTC
+  AEC3 pass (always-on since 1.7.1) aggressively eats echoey leftovers
+  NKF can't remove, but its multi-band suppressor can make voice sound
+  processed/robotic on some setups while speakers play. It is now a
+  checkbox on NKF-AEC (default ON — current behavior unchanged) so
+  users can instantly A/B against raw NKF output.
+- **NKF: optional "Dry voice (room reverb)" stage (GTCRN).** New
+  checkbox on NKF-AEC only: routes the already echo-cancelled output
+  through GTCRN, an ultra-light 16 kHz streaming enhancement model
+  (MIT, ~0.5 MB, RTF ≈ 0.07), for a drier mic with less room reverb.
+  Off by default — opt-in; costs a small amount of CPU and ~32 ms
+  extra delay while enabled, live-toggles with the same brief engine
+  restart as Noise reduction. VAD gate, meters and the self-monitor
+  loop detector all see the dry signal. While it is on, the residual
+  APM's WebRTC NS is skipped automatically (GTCRN denoises itself —
+  stacking both only over-suppresses); the Noise reduction checkbox
+  still applies whenever Dry voice is off. Missing model file = stage
+  silently off (fail-open), NKF itself is unaffected.
+
 ## [1.7.1] — 2026-09-22
 
 - **Download:** [AEC-Client-v1.7.1-win64.zip](https://github.com/samudinzul/aec-client/releases/download/v1.7.1/AEC-Client-v1.7.1-win64.zip) (Windows 10/11 64-bit)

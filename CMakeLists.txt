@@ -41,6 +41,7 @@ add_executable(aec_gui
     src/nkf_wrapper.cpp
     src/dtln_wrapper.cpp
     src/silero_wrapper.cpp
+    src/gtcrn_wrapper.cpp
 )
 
 target_include_directories(aec_gui PRIVATE
@@ -166,6 +167,19 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx")
             "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx"
             "$<TARGET_FILE_DIR:aec_gui>/models/silero_vad.onnx"
         COMMENT "Copying models/silero_vad.onnx")
+endif()
+# ============================================================
+#  GTCRN dry-voice model (optional — NKF stage stays off if
+#  absent). Guarded so a fresh clone without it still builds.
+#  Download (~535 KB, MIT), sha256-verified streaming export from
+#  Xiaobin-Rong/gtcrn: stream/onnx_models/gtcrn_simple.onnx
+# ============================================================
+if(EXISTS "${CMAKE_SOURCE_DIR}/models/gtcrn_stream.onnx")
+    add_custom_command(TARGET aec_gui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/models/gtcrn_stream.onnx"
+            "$<TARGET_FILE_DIR:aec_gui>/models/gtcrn_stream.onnx"
+        COMMENT "Copying models/gtcrn_stream.onnx")
 endif()
 # TFLite runtime (optional, loaded at runtime by dtln_wrapper)
 foreach(_tflite_dll

@@ -6,7 +6,7 @@
 # Contract (matches v1.2.x precedent, enforced by asserts below):
 #   release/AEC-Client-vX-win64/
 #     aec_gui.exe + *.dll (runtime only) + libs/tensorflowlite_c.dll
-#     models/          (explicit allowlist: nkf, dtln pair, silero)
+#   models/          (explicit allowlist: nkf, dtln pair, silero, gtcrn)
 #     LICENSES/        (third-party credits)
 #     README.txt       (end-user doc, version stamped)
 #     wallpapers/      (empty; users bring their own)
@@ -47,7 +47,8 @@ cp libs/tensorflowlite_c.dll "$STAGE/" 2>/dev/null || true
 for m in models/nkf.onnx \
          models/dtln_aec_512_1.tflite \
          models/dtln_aec_512_2.tflite \
-         models/silero_vad.onnx; do
+         models/silero_vad.onnx \
+         models/gtcrn_stream.onnx; do
     test -f "$m" || { echo "missing model: $m" >&2; exit 1; }
     cp "$m" "$STAGE/models/"
 done
@@ -62,6 +63,7 @@ bad=$(find "$STAGE" | grep -Ei "$forbidden" || true)
 if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
 test -f "$STAGE/aec_gui.exe" || { echo "missing exe" >&2; fail=1; }
 test -f "$STAGE/models/silero_vad.onnx" || { echo "missing silero" >&2; fail=1; }
+test -f "$STAGE/models/gtcrn_stream.onnx" || { echo "missing gtcrn" >&2; fail=1; }
 test -f "$STAGE/README.txt" || { echo "missing README.txt" >&2; fail=1; }
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
 [ $fail -ne 0 ] && exit 1

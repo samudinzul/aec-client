@@ -226,6 +226,8 @@ std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
 std::atomic<bool>  g_noiseReduction{ false };  // WebRTC NS Moderate on AEC3 + NKF; hidden on DTLN
+std::atomic<bool>  g_dryVoice{ false };        // GTCRN dry-voice stage; NKF only, default OFF
+std::atomic<bool>  g_residualAec{ true };      // post-NKF AEC3 pass; NKF only, default ON
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -536,7 +538,9 @@ void SaveSettings() {
        << g_vadClose.load() << "\n"
        << 0 << "\n"  // retired: show-legacy-engines toggle (SpeexDSP + LocalVQE nuked)
        << 0 << "\n"  // retired: nuked DEC-toggle slot (kept for file alignment)
-       << 3 << "\n";  // preset layout generation (3 = no HQ, no Low CPU)
+       << 3 << "\n"  // preset layout generation (3 = no HQ, no Low CPU)
+       << (g_dryVoice.load() ? 1 : 0) << "\n"  // NKF dry voice (GTCRN), default OFF
+       << (g_residualAec.load() ? 1 : 0) << "\n";  // NKF residual AEC3 pass, default ON
 }
 
 void LoadSettings() {
@@ -632,6 +636,12 @@ void LoadSettings() {
             else if (g_presetIndex == 4) g_presetIndex = 3;
         }
         if (g_presetIndex < 0 || g_presetIndex >= PRESET_COUNT) g_presetIndex = 1;
+        // New field — NKF dry voice (GTCRN), default OFF if missing
+        int der = 0;
+        if (f >> der) g_dryVoice.store(der != 0);
+        // New field — NKF residual AEC3 pass, default ON if missing
+        int ra = 1;
+        if (f >> ra) g_residualAec.store(ra != 0);
     }
 }
 
@@ -657,6 +667,8 @@ void ResetToDefaults() {
     g_presetIndex = 1;
     g_preprocessEnabled = false;
     g_noiseReduction.store(false);  // default OFF; retired preprocess slot carries it
+    g_dryVoice.store(false);        // default OFF (opt-in CPU cost)
+    g_residualAec.store(true);      // default ON (aggressive echo kill)
     g_minimizeToTray = true;
     g_vadEnabled.store(true);    // match a fresh install (ON since 1.3.0)
     g_vadOpen.store(0.50f);
@@ -726,7 +738,10 @@ void ReinitEngine() {
         g_engine.aec3 = Aec3New(sr, fs, g_noiseReduction.load());
         g_engine.type = ENGINE_AEC3;
     } else if (eng == ENGINE_NKF) {
-        g_engine.nkf = NkfNew("models/nkf.onnx", g_noiseReduction.load());
+        g_engine.nkf = NkfNew("models/nkf.onnx", g_noiseReduction.load(),
+                              g_dryVoice.load() ? "models/gtcrn_stream.onnx"
+                                                : nullptr,
+                              g_residualAec.load());
         g_engine.type = ENGINE_NKF;
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_512");
@@ -1600,6 +1615,47 @@ void DrawAudioTab() {
                                "Takes effect immediately — the engine restarts for a split second.\n"
                                "DTLN already removes noise itself, so this box only shows\n"
                                "for WebRTC AEC3 and NKF-AEC.");
+    }
+
+    // Residual echo kill: the post-NKF WebRTC AEC3 pass. Default ON
+    // (it eats the echoey leftovers strict-linear NKF can't); offer
+    // OFF because its multi-band suppressor can sound processed or
+    // robotic on some setups while speakers play. NKF only.
+    if (g_engineIndex == ENGINE_NKF) {
+        bool ra = g_residualAec.load();
+        if (ImGui::Checkbox("Residual echo kill (AEC3)", &ra)) {
+            g_residualAec.store(ra);
+            MarkPresetCustom();
+            SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("WebRTC AEC3 pass after NKF: aggressive cut of the\n"
+                               "echoey leftovers a strictly-linear NKF can't remove.\n"
+                               "While speakers play its suppressor can sound processed\n"
+                               "or robotic — untick to hear raw NKF output (echo may\n"
+                               "come back). Engine restarts briefly when toggled.\n"
+                               "NKF-AEC only.");
+    }
+
+    // Dry voice: GTCRN enhancement on NKF only — less room reverb of
+    // your mic. Same live-toggle pattern as Noise reduction; hidden
+    // everywhere else so it's never a dead control.
+    if (g_engineIndex == ENGINE_NKF) {
+        bool dry = g_dryVoice.load();
+        if (ImGui::Checkbox("Dry voice (room reverb)", &dry)) {
+            g_dryVoice.store(dry);
+            MarkPresetCustom();
+            SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Drier mic sound: GTCRN reduces room reverb (echoey\n"
+                               "reflections) of your voice on top of echo cancellation.\n"
+                               "It also cuts noise, so the Noise reduction box is\n"
+                               "skipped while this is on. Small extra CPU and ~32 ms\n"
+                               "extra delay — the engine restarts briefly when toggled.\n"
+                               "NKF-AEC only. Missing model file? Stage stays off.");
     }
 
     ImGui::Spacing();

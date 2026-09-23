@@ -1,5 +1,6 @@
 #include "nkf_wrapper.h"
 #include "NKFImpl.h"
+#include "gtcrn_wrapper.h"
 #include "modules/audio_processing/include/audio_processing.h"
 #include "api/scoped_refptr.h"
 #include <vector>
@@ -98,7 +99,8 @@ struct NkfHandle {
     int loopConf = 0;               // consecutive-ish hit score (0..4)
     int loopQuiet = 0;              // silent detections in a row
 
-    // Residual stage: WebRTC APM after NKF — AEC3 (always on; NKF is
+    // Residual stage: WebRTC APM after NKF — AEC3 (toggleable via
+    // residualAec; NKF is strictly linear, AEC3's nonlinear
     // strictly linear, AEC3's nonlinear suppressor eats what it
     // leaves) + optional WebRTC NS (nsEnabled checkbox) on top.
     rtc::scoped_refptr<webrtc::AudioProcessing> nsApm;
@@ -106,6 +108,12 @@ struct NkfHandle {
     std::vector<float> nsMicFloat;    // 10 ms frame scratch
     std::vector<float> nsOutFloat;    // 10 ms frame scratch
     std::vector<float> refFloat;      // 10 ms reverse-stream scratch
+
+    // Optional GTCRN "Dry voice" stage (null = off): sits AFTER the
+    // APM, before outHist/outAccum, so VAD gate, meters, gain and the
+    // loop detector all see the dry signal.
+    GtcrnHandle* dry = nullptr;
+    std::vector<float> dryOut;        // dry-stage output scratch
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -256,6 +264,25 @@ static void NkfDetectLoop(NkfHandle* h) {
     }
 }
 
+// Ship finished post-APM samples (float, ±1) to the wire: optional
+// GTCRN dry stage first, then outHist (loop detector tap — what the
+// speakers actually get) and the clamped int16 outAccum.
+static void NkfEmit(NkfHandle* h, const float* v, int n) {
+    if (h->dry) {
+        h->dryOut.resize((size_t)n);
+        if (GtcrnProcess(h->dry, v, h->dryOut.data(), n) > 0)
+            v = h->dryOut.data();
+        // else: Process already latched pass-through internally (v = in)
+    }
+    for (int i = 0; i < n; i++) {
+        h->outHist.push_back(v[i]);
+        float s = v[i] * 32768.0f;
+        if (s >  32767.0f) s =  32767.0f;
+        if (s < -32768.0f) s = -32768.0f;
+        h->outAccum.push_back((int16_t)s);
+    }
+}
+
 // Drain raw output through the post stage (residual AEC3 + optional
 // NS) into outAccum. Ordering is preserved: leftovers (< 1 frame) wait.
 static void NkfDrainPost(NkfHandle* h) {
@@ -272,15 +299,9 @@ static void NkfDrainPost(NkfHandle* h) {
             for (int i = 0; i < NS_FRAME_SIZE; i++)
                 h->nsOutFloat[i] = h->nsMicFloat[i];
         }
-        for (int i = 0; i < NS_FRAME_SIZE; i++) {
-            h->outHist.push_back(h->nsOutFloat[i]);
-            float v = h->nsOutFloat[i] * 32768.0f;
-            if (v >  32767.0f) v =  32767.0f;
-            if (v < -32768.0f) v = -32768.0f;
-            h->outAccum.push_back((int16_t)v);
-        }
+        NkfEmit(h, h->nsOutFloat.data(), NS_FRAME_SIZE);
         h->nsInAccum.erase(h->nsInAccum.begin(),
-                            h->nsInAccum.begin() + NS_FRAME_SIZE);
+                           h->nsInAccum.begin() + NS_FRAME_SIZE);
     }
 }
 
@@ -297,7 +318,8 @@ static void NkfDrainOut(NkfHandle* h, int16_t* out, int frameSize) {
 
 extern "C" {
 
-NkfHandle* NkfNew(const char* modelPath, bool nsEnabled) {
+NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
+                  const char* dryModelPath, bool residualAec) {
     auto* h = new NkfHandle();
     try {
         h->engine = new NKFImpl(modelPath);
@@ -310,16 +332,29 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled) {
     h->micWin.reserve(TDC_WIN);
     h->outAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->outHist.reserve(LOOP_WIN + LOOP_DMAX);
+    // Optional dry-voice stage: only when the caller passed a path;
+    // a missing/broken model leaves it off (fail-open) — never kills NKF.
+    if (dryModelPath && dryModelPath[0]) {
+        h->dry = GtcrnNew(dryModelPath);
+        if (h->dry && !GtcrnReady(h->dry)) {
+            GtcrnDestroy(h->dry);
+            h->dry = nullptr;
+        }
+    }
     // Post stage: mirror the AEC3 wrapper's production config — AEC3
-    // residual cancellation always on (aggressive nonlinear echo kill
-    // after linear NKF, incl. shadow/give-up passthrough), NS still
-    // tied to the checkbox, HPF like standalone AEC3, no AGC.
+    // residual cancellation follows the residualAec toggle (default
+    // on: aggressive nonlinear echo kill after linear NKF, incl.
+    // shadow/give-up passthrough; off = raw NKF output when the
+    // multi-band suppressor sounds too processed/robotic), NS tied to
+    // the checkbox EXCEPT when the dry stage is loaded (GTCRN already
+    // denoises — stacking WebRTC NS on top only over-suppresses),
+    // HPF like standalone AEC3, no AGC.
     h->nsApm = webrtc::AudioProcessingBuilder().Create();
     if (h->nsApm) {
         webrtc::AudioProcessing::Config config;
-        config.echo_canceller.enabled     = true;
+        config.echo_canceller.enabled     = residualAec;
         config.echo_canceller.mobile_mode = false;
-        config.noise_suppression.enabled  = nsEnabled;
+        config.noise_suppression.enabled  = nsEnabled && !h->dry;
         config.noise_suppression.level    =
             webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
         config.high_pass_filter.enabled   = true;
@@ -438,20 +473,23 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
             }
         }
 
+        // No-APM edge (builder Create failed): emit the block straight
+        // through (dry stage still applies inside NkfEmit).
+        float emitBlock[NKF_BLOCK_SHIFT];
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
             float v = micBlock[i];
             if (g > 0.0f) v += (outBlock[i] - v) * g;
-            if (!h->nsApm)
-                h->outHist.push_back(v);  // no post stage: speakers get this
-            v *= 32768.0f;
-            if (v >  32767.0f) v =  32767.0f;
-            if (v < -32768.0f) v = -32768.0f;
-            if (h->nsApm)
-                h->nsInAccum.push_back((int16_t)v);
-            else
-                h->outAccum.push_back((int16_t)v);
+            if (h->nsApm) {
+                float s = v * 32768.0f;
+                if (s >  32767.0f) s =  32767.0f;
+                if (s < -32768.0f) s = -32768.0f;
+                h->nsInAccum.push_back((int16_t)s);
+            } else {
+                emitBlock[i] = v;
+            }
         }
         if (h->nsApm) NkfDrainPost(h);
+        else NkfEmit(h, emitBlock, NKF_BLOCK_SHIFT);
 
         // Hold shadow while a self-monitor loop is active; release the
         // countdown only when the loop is gone (then fade normally).
@@ -495,11 +533,13 @@ void NkfReset(NkfHandle* h) {
     h->samplesSinceLoop = 0;
     h->loopConf = 0;
     h->loopQuiet = 0;
+    if (h->dry) GtcrnReset(h->dry);
     if (h->engine) h->engine->Reset();
 }
 
 void NkfDestroy(NkfHandle* h) {
     if (!h) return;
+    GtcrnDestroy(h->dry);
     delete h->engine;
     delete h;
 }

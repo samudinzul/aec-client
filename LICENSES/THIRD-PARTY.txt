@@ -53,6 +53,15 @@ AEC Client bundles the following open-source libraries:
     File (download on demand, not committed):
       models/silero_vad.onnx (sha256 1a153a22…)
 
+12. GTCRN (NKF "Dry voice" enhancement stage)
+    Ultra-lightweight streaming speech enhancement (ShuffleNetV2 +
+    SFE + TRA + 2x DPGRNN), 16 kHz, RTF ~0.07 on desktop CPU
+    (Xiaobin-Rong/gtcrn streaming ONNX export)
+    Source: https://github.com/Xiaobin-Rong/gtcrn
+    License: MIT, Copyright (c) 2024 Rong Xiaobin
+    File (committed):
+      models/gtcrn_stream.onnx (sha256 b4718df6228e7bdf1a8a435cf98f838636eb2fd331acabf86ba87c5192ebcb87)
+
 Full license texts are available at the source URLs listed in the
 project repository:
 https://github.com/samudinzul/aec-client

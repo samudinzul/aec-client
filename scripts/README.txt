@@ -33,7 +33,9 @@ QUICK START
    - NKF-AEC              lightest — experimental, may distort (16 kHz)
 
 5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
-   for WebRTC noise suppression on top of echo cancellation.
+   for WebRTC noise suppression on top of echo cancellation. On
+   NKF-AEC you can also tick "Dry voice (room reverb)" for a drier
+   mic with less room echo (small extra CPU, ~32 ms extra delay).
 
 6. Click Start. The green SPEAKING pill means speech is going out;
    grey SILENT means the voice gate muted silence. The gate is on
@@ -58,6 +60,9 @@ TIPS
   sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
   for mic tests.
 - If echo comes back after a long call, click Stop then Start.
+- On NKF-AEC, if your voice sounds processed or robotic while the
+  speakers play, untick "Residual echo kill (AEC3)" — you trade the
+  aggressive leftover-echo cut for raw (rawer) NKF output.
 - If your voice sounds processed or robotic on AEC3, stay on the
   default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
 - The X button minimizes to the system tray (toggle in Appearance tab).
@@ -66,6 +71,8 @@ TIPS
   (bundled). Without them it reports "Failed to load DTLN model".
 - The voice gate needs models/silero_vad.onnx (bundled). Without
   it the gate stays off and audio passes through unchanged.
+- The NKF "Dry voice" option needs models/gtcrn_stream.onnx
+  (bundled). Without it the option just has no effect.
 
 TROUBLESHOOTING
 ---------------
