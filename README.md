@@ -117,15 +117,20 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 ## Engine Comparison
 
-| Engine | Voice preservation | Echo removal | CPU | Sample Rate | Latency | Best For |
-|--------|---------------|-------------|-----|-------------|---------|----------|
-| **DTLN-AEC 128** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16 kHz only | ~32 ms | Recommended default — cleanest output, removes noise too |
-| **WebRTC AEC3** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Strongest echo removal |
-| **NKF-AEC** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Lightest CPU — can distort if loopback delay drifts |
+| Engine | Your voice | Echo removed | CPU | When to use it |
+|--------|------------|--------------|-----|----------------|
+| **DTLN-AEC 128** *(default)* | Sounds natural | Very good | Moderate | **Start here.** Cleanest overall; also removes background noise. |
+| **WebRTC AEC3** | Can sound a bit processed | Strongest | Moderate | Echo still getting through (loud speakers, echoey room). |
+| **NKF-AEC** | Usually natural | Good | Lowest | Older or busy PC — lightest on the CPU. |
 
-*Voice preservation = your voice survives intact, double-talk included (both sides speaking at once is the hardest case and governs the score). Echo removal = the far-end echo actually gone. DTLN additionally removes background noise (see its Best-For); AEC3 and NKF-AEC can add WebRTC noise suppression via the **Noise reduction** checkbox. NKF-over-DTLN on preservation and DTLN-over-NKF on suppression are research-backed: on the ICASSP 2021 blind-test double-talk set NKF scores AECMOS-Other 4.02 vs DTLN 3.73 (near-end quality) while DTLN scores AECMOS-Echo 4.31 vs NKF 4.02 (echo gone), and NKF takes the best synthetic double-talk PESQ at 2.77 (Jiang et al., ICASSP 2023) — your ears outrank this table. Sep 2026 spike note: a post-AEC3 neural mask (Microsoft DEC baseline) was tried and nuked for muting echo-free speech down to 0.07% — the AEC3 suppression muscle is bare AEC3, and stays. AEC3 trades naturalness for suppression muscle — its suppressor leaves voices sounding processed/cleaned; NKF can be the most natural but drifts when real-time loopback delay misaligns its linear filter (hence the Sep 2026 demotion from default). Loud-speaker caveat: AEC3's echo removal assumes sane levels — its suppressor works on echo-to-voice ratio per band, so speakers much louder than your mic read as "all echo" and your voice gets clamped in double-talk (no identity concept; Meta measured a 39% double-talk gap vs their Beryl canceller). Gain-structure first (speakers down, mic up/closer), DTLN second — it cuts echo without the AEC3 clamp.*
+**Voice** = how natural you sound when both sides talk at once. **Echo** = how much of the other person’s speaker sound is cancelled out.
 
-**In short:** start on **DTLN** (the default) — cleanest output and it removes noise too. Switch to **AEC3** when echo is winning (loud speakers, echoey room) — strongest removal — with the **Noise reduction** checkbox if you want WebRTC noise suppression on top. **NKF** stays for the lightest CPU if it sounds clean on your rig (linear research engine — can distort when loopback delay drifts).
+**Quick pick:**
+1. Stay on **DTLN** unless something is wrong.
+2. Still hearing echo? Try **AEC3** (strongest cancellation; voice may sound cleaned up).
+3. CPU too high? Try **NKF** (lightest; can glitch if speaker delay drifts).
+
+DTLN also cleans noise by itself. AEC3 and NKF can add noise removal with the **Noise reduction** checkbox. Keep speaker volume moderate — very loud speakers make any engine treat your voice as echo.
 
 ---
 
@@ -154,29 +159,21 @@ The release ZIP bundles all required DLLs:
 
 ## Architecture
 
+How audio flows through the app:
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Microphone (WASAPI capture)                                    │
-│         ↓                                                       │
-│  Lock-free ring buffer  ──┐                                     │
-│                            ├──→ AEC Engine ──→ Clean signal    │
-│  Speaker loopback (WASAPI) │                                     │
-│         ↓                  │                                     │
-│  Lock-free ring buffer  ──┘                                     │
-│         ↓                                                       │
-│  Output → VB-CABLE → Discord                                    │
-└─────────────────────────────────────────────────────────────────┘
+Your microphone  ─────────┐
+                          ├─→  AEC Engine  ─→  (optional voice gate)  ─→  VB-CABLE  ─→  Discord / Zoom
+Your speakers  ───────────┘         removes echo
+(loopback = what you hear)
 ```
 
-**Design principles:**
+1. **Capture** — the mic and the speaker output (loopback) are read at the same time.
+2. **Cancel** — the engine subtracts the speaker sound from the mic, leaving your voice.
+3. **Optional gate** — if you turn on the voice gate, quiet parts are pushed down so silence does not go out.
+4. **Deliver** — the clean signal goes to VB-CABLE; Discord uses that as its microphone.
 
-- **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
-- **No heap allocation in audio callback** — stack buffers + hoisted engine state (NKF / GTCRN / Silero; DTLN ONNX path also avoids per-block heap)
-- **Sub-10 ms gate decisions** — 512-sample VAD inference inline (< 1 ms), no worker thread
-- **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
-- **Engine abstraction** — runtime swap between 3 engines with a single enum + function pointer
-- **Settings persistence** — plain text `aec_config.txt`
-- **Single-instance mutex** — prevents accidental double launches
+Settings are saved automatically. Only one copy of the app runs at a time (opening it again focuses the existing window).
 
 ---
 
