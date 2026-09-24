@@ -313,7 +313,7 @@ cd aec-client
 
 ```bash
 cd third_party/REAL_TIME_NKF_AEC/c
-cmake -B build -G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/mingw32-make.exe
+cmake -B build -G "MinGW Makefiles"
 cmake --build build
 cd ../../..
 ```
@@ -353,7 +353,6 @@ See [MODELS.md](MODELS.md) for sizes and SHA-256 checks.
 ```bash
 cd /path/to/aec-client
 cmake -B build -G Ninja \
-    -DCMAKE_MAKE_PROGRAM=/ucrt64/bin/ninja.exe \
     -DCMAKE_C_COMPILER_LAUNCHER=ccache \
     -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 cmake --build build
