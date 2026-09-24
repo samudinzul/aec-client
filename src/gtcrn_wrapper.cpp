@@ -70,7 +70,18 @@ struct GtcrnHandle {
     float conv[kConvN], tra[kTraN], inter[kIntN];
     float frameTd[kNfft];            // synthesis scratch
     double anaX[kNfft];              // analysis scratch (double)
+    double td[kNfft];                // synthesis time-domain scratch
     std::complex<double> spec[kBins];
+
+    // Hoisted FFT descriptors + ONNX shape vectors (no per-hop heap)
+    std::vector<size_t>    fftShape;
+    std::vector<size_t>    fftAxes;
+    std::vector<ptrdiff_t> fftStrideIn;
+    std::vector<ptrdiff_t> fftStrideOut;
+    int64_t mixShape[4] = { 1, kBins, 1, 2 };
+    int64_t convShape[5] = { 2, 1, 16, 16, 33 };
+    int64_t traShape[5]  = { 2, 3, 1, 1, 16 };
+    int64_t intShape[4]  = { 2, 1, 33, 16 };
 
     bool failed = false;
     char lastError[256] = {0};
@@ -110,11 +121,8 @@ static bool GtRunFrame(GtcrnHandle* h) {
             h->anaX[i]        = (double)h->prevHop[i] * (double)h->w[i];
             h->anaX[kHop + i] = (double)h->q[i]       * (double)h->w[kHop + i];
         }
-        std::vector<size_t> shape{ (size_t)kNfft };
-        std::vector<size_t> axes{ 0 };
-        std::vector<ptrdiff_t> strideIn{ sizeof(double) };
-        std::vector<ptrdiff_t> strideOut{ sizeof(std::complex<double>) };
-        pocketfft::r2c(shape, strideIn, strideOut, axes, pocketfft::FORWARD,
+        pocketfft::r2c(h->fftShape, h->fftStrideIn, h->fftStrideOut,
+                       h->fftAxes, pocketfft::FORWARD,
                        h->anaX, h->spec, 1.0);
         for (int f = 0; f < kBins; f++) {
             h->mix[f * 2]     = (float)h->spec[f].real();
@@ -122,18 +130,14 @@ static bool GtRunFrame(GtcrnHandle* h) {
         }
 
         // Model: one hop, caches in/out (same buffers, copy back).
-        std::vector<int64_t> mixShape{ 1, kBins, 1, 2 };
-        std::vector<int64_t> convShape{ 2, 1, 16, 16, 33 };
-        std::vector<int64_t> traShape{ 2, 3, 1, 1, 16 };
-        std::vector<int64_t> intShape{ 2, 1, 33, 16 };
         Ort::Value tMix = Ort::Value::CreateTensor<float>(
-            *h->mem, h->mix, kMixN, mixShape.data(), mixShape.size());
+            *h->mem, h->mix, kMixN, h->mixShape, 4);
         Ort::Value tConv = Ort::Value::CreateTensor<float>(
-            *h->mem, h->conv, kConvN, convShape.data(), convShape.size());
+            *h->mem, h->conv, kConvN, h->convShape, 5);
         Ort::Value tTra = Ort::Value::CreateTensor<float>(
-            *h->mem, h->tra, kTraN, traShape.data(), traShape.size());
+            *h->mem, h->tra, kTraN, h->traShape, 5);
         Ort::Value tInt = Ort::Value::CreateTensor<float>(
-            *h->mem, h->inter, kIntN, intShape.data(), intShape.size());
+            *h->mem, h->inter, kIntN, h->intShape, 4);
         const char* inN[] = {
             h->inNames[0].c_str(), h->inNames[1].c_str(),
             h->inNames[2].c_str(), h->inNames[3].c_str()
@@ -158,11 +162,11 @@ static bool GtRunFrame(GtcrnHandle* h) {
         for (int f = 0; f < kBins; f++)
             h->spec[f] = std::complex<double>((double)enh[f * 2],
                                               (double)enh[f * 2 + 1]);
-        double td[kNfft];
-        pocketfft::c2r(shape, strideOut, strideIn, axes, pocketfft::BACKWARD,
-                       h->spec, td, 1.0);
+        pocketfft::c2r(h->fftShape, h->fftStrideOut, h->fftStrideIn,
+                       h->fftAxes, pocketfft::BACKWARD,
+                       h->spec, h->td, 1.0);
         for (int i = 0; i < kNfft; i++)
-            h->frameTd[i] = (float)(td[i] / (double)kNfft) * h->w[i];
+            h->frameTd[i] = (float)(h->td[i] / (double)kNfft) * h->w[i];
         for (int i = 0; i < kNfft; i++)
             h->ola[i] += h->frameTd[i];
 
@@ -220,6 +224,11 @@ GtcrnHandle* GtcrnNew(const char* onnxPath) {
         GtFail(h, ex.what());
     }
     if (!h->sess) return h;  // unusable, caller checks Ready
+
+    h->fftShape.assign(1, (size_t)kNfft);
+    h->fftAxes.assign(1, (size_t)0);
+    h->fftStrideIn.assign(1, (ptrdiff_t)sizeof(double));
+    h->fftStrideOut.assign(1, (ptrdiff_t)sizeof(std::complex<double>));
 
     // sqrt(periodic hann): analysis * synthesis = hann, hop N/2 OLA = 1.
     for (int i = 0; i < kNfft; i++) {

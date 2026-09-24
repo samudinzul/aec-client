@@ -85,25 +85,18 @@ void NKFImpl::OnnxInfer() {
     float mic_imag[FFT_OUT_SIZE] = { 0 };
 
     double mic_in[BLOCK_LEN] = { 0 };
-    std::vector<cpx_type> mic_res(BLOCK_LEN);
     double lpb_in[BLOCK_LEN] = { 0 };
-    std::vector<cpx_type> lpb_res(BLOCK_LEN);
-
-    std::vector<size_t> shape;
-    shape.push_back(BLOCK_LEN);
-    std::vector<size_t> axes;
-    axes.push_back(0);
-    std::vector<ptrdiff_t> stridel, strideo;
-    strideo.push_back(sizeof(cpx_type));
-    stridel.push_back(sizeof(double));
+    // mic_res / lpb_res / fft descriptors live on the instance (hoisted)
 
     for (int i = 0; i < BLOCK_LEN; i++) {
         mic_in[i] = m_pEngine.mic_buffer[i] * m_windows[i];
         lpb_in[i] = m_pEngine.lpb_buffer[i] * m_windows[i];
     }
 
-    pocketfft::r2c(shape, stridel, strideo, axes, pocketfft::FORWARD, mic_in, mic_res.data(), 1.0);
-    pocketfft::r2c(shape, stridel, strideo, axes, pocketfft::FORWARD, lpb_in, lpb_res.data(), 1.0);
+    pocketfft::r2c(fft_shape, fft_stride_in, fft_stride_out, fft_axes,
+                   pocketfft::FORWARD, mic_in, mic_res.data(), 1.0);
+    pocketfft::r2c(fft_shape, fft_stride_in, fft_stride_out, fft_axes,
+                   pocketfft::FORWARD, lpb_in, lpb_res.data(), 1.0);
 
     memmove(m_pEngine.lpb_real, m_pEngine.lpb_real + FFT_OUT_SIZE,
             (NKF_LEN - 1) * FFT_OUT_SIZE * sizeof(float));
@@ -200,7 +193,8 @@ void NKFImpl::OnnxInfer() {
         mic_res[i] = cpx_type(mic_real[i] - echohat_real[i], mic_imag[i] - echohat_imag[i]);
     }
 
-    pocketfft::c2r(shape, strideo, stridel, axes, pocketfft::BACKWARD, mic_res.data(), mic_in, 1.0);
+    pocketfft::c2r(fft_shape, fft_stride_out, fft_stride_in, fft_axes,
+                   pocketfft::BACKWARD, mic_res.data(), mic_in, 1.0);
 
     for (int i = 0; i < BLOCK_LEN; i++)
         estimated_block[i] = static_cast<float>(mic_in[i]) / BLOCK_LEN;

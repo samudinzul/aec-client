@@ -5,7 +5,7 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] — 2026-09-24
 
 ### Added
 
@@ -27,6 +27,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stacking both only over-suppresses); the Noise reduction checkbox
   still applies whenever Dry voice is off. Missing model file = stage
   silently off (fail-open), NKF itself is unaffected.
+
+### Changed
+
+- **Default DTLN model is now the 128-unit pair (`dtln_aec_128_{1,2}.tflite`).**
+  Same DTLN-AEC architecture and 512-sample DSP block; 1.8M params
+  (~7 MB) instead of 10.4M (~41 MB) — lower default-engine CPU and a
+  much smaller release ZIP. Quality is slightly below the old 512-unit
+  pair (upstream still ships both). The 512 files are removed from the
+  tree, CMake copy list, and release allowlist.
+- **Voice gate (Silero) defaults OFF.** Fresh installs, missing config
+  field, and Reset to defaults all start with "Push down silence"
+  unchecked (opt-in under Advanced → Voice gate). Existing configs that
+  already saved the flag keep their value.
+
+### Fixed
+
+- **DTLN-AEC 128: stage-2 full-scale blowup (tensor role map).**
+  Stage 2 of the 128-unit pair has equal-sized inputs
+  (`est` / `state` / `lpb` all 512 floats). The wrapper classified
+  "state = largest input", so the tie picked index 0 and wrote the
+  estimated waveform into the LSTM state tensor — silent mic + silent
+  reference produced pegged full-scale output. Roles now follow the
+  upstream `run_aec.py` layout (`in[0]=feat, in[1]=state, in[2]=feat`)
+  for both TFLite and ONNX. The 512-unit pair was unaffected (state
+  was strictly larger); this only bit the new default 128 models.
+- **DTLN / engines: no uninitialized output on the early-return path.**
+  `DtlnProcess` now zeros the frame when the handle is unusable, and
+  `output_callback` zeros `cleanedFrame` before dispatch so a skipped
+  engine can never emit stack garbage.
+- **NKF crash on engine create/destroy.** `NKFImpl` grew new members;
+  they are appended after `m_windows` so existing field-built
+  `libnkf_aec.dll` binaries keep stable layout (rebuild the DLL once
+  with this tree if you ship a custom build).
+- **Audio-thread heap allocations removed (NKF / GTCRN / Silero).**
+  Per-block `new`/`delete` and FIFO front-erases are gone; state lives
+  in the handle and windows compact once per Process. Same math,
+  lower and more stable callback cost under load.
+
+### Notes
+
+- Discord preset tooltip now names the recommended Discord **Input
+  Profile** (Voice Isolation, or Custom with EC off / Krisp / AGC off).
+  Docs only — the app does not change Discord's profile.
 
 ## [1.7.1] — 2026-09-22
 

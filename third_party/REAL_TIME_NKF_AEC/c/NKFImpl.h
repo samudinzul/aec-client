@@ -99,6 +99,13 @@ public:
         for (int i = 0; i < BLOCK_LEN; i++) {
             m_windows[i] = sinf(PI * i / (BLOCK_LEN - 1));
         }
+        mic_res.resize(BLOCK_LEN);
+        lpb_res.resize(BLOCK_LEN);
+        fft_shape.assign(1, (size_t)BLOCK_LEN);
+        fft_axes.assign(1, (size_t)0);
+        fft_stride_in.assign(1, (ptrdiff_t)sizeof(double));
+        fft_stride_out.assign(1, (ptrdiff_t)sizeof(cpx_type));
+        ort_inputs.reserve(6);
         ResetInout();
     }
 
@@ -126,4 +133,15 @@ private:
     const int64_t in_states_dims[3] = { 1, FFT_OUT_SIZE, 18 };
 
     float m_windows[BLOCK_LEN] = { 0 };
+
+    // Appended (not inserted): keep every pre-existing member offset stable
+    // so a stale libnkf_aec.dll still matches this header. Rebuild the DLL
+    // to activate the OnnxInfer hoist; until then the old local-scratch
+    // OnnxInfer in the DLL runs against a compatible layout.
+    std::vector<cpx_type> mic_res;
+    std::vector<cpx_type> lpb_res;
+    std::vector<size_t>    fft_shape;
+    std::vector<size_t>    fft_axes;
+    std::vector<ptrdiff_t> fft_stride_in;
+    std::vector<ptrdiff_t> fft_stride_out;
 };

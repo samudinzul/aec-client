@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(aec VERSION 1.7.1 LANGUAGES CXX)
+project(aec VERSION 1.8.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -143,10 +143,10 @@ add_custom_command(TARGET aec_gui POST_BUILD
 #  model files still configures and builds.
 # ============================================================
 foreach(_dtln
-    models/dtln_aec_512_1.tflite
-    models/dtln_aec_512_2.tflite
-    models/dtln_aec_512_1.onnx
-    models/dtln_aec_512_2.onnx)
+    models/dtln_aec_128_1.tflite
+    models/dtln_aec_128_2.tflite
+    models/dtln_aec_128_1.onnx
+    models/dtln_aec_128_2.onnx)
     if(EXISTS "${CMAKE_SOURCE_DIR}/${_dtln}")
         add_custom_command(TARGET aec_gui POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different

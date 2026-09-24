@@ -33,6 +33,10 @@ struct SileroHandle {
     float accum[SILERO_CHUNK] = { 0 };
     int accumUsed = 0;
     int64_t sampleRate = 16000;
+    // Hoisted tensor shapes (no heap per chunk)
+    int64_t waveShape[2]   = { 1, SILERO_WINDOW };
+    int64_t stateShape[3]  = { 2, 1, 128 };
+    int64_t srShape[1]     = { 1 };
     char lastError[256] = { 0 };
 };
 
@@ -86,15 +90,12 @@ static int SileroRunChunk(SileroHandle* h, float* prob) {
     memcpy(h->context, h->accum + SILERO_CHUNK - SILERO_CONTEXT,
            sizeof(h->context));
     try {
-        std::vector<int64_t> waveShape = { 1, SILERO_WINDOW };
-        std::vector<int64_t> stateShape = { 2, 1, 128 };
-        std::vector<int64_t> srShape = { 1 };
         Ort::Value tWave = Ort::Value::CreateTensor<float>(
-            *h->mem, window, SILERO_WINDOW, waveShape.data(), waveShape.size());
+            *h->mem, window, SILERO_WINDOW, h->waveShape, 2);
         Ort::Value tState = Ort::Value::CreateTensor<float>(
-            *h->mem, h->state, 2 * 1 * 128, stateShape.data(), stateShape.size());
+            *h->mem, h->state, 2 * 1 * 128, h->stateShape, 3);
         Ort::Value tSr = Ort::Value::CreateTensor<int64_t>(
-            *h->mem, &h->sampleRate, 1, srShape.data(), srShape.size());
+            *h->mem, &h->sampleRate, 1, h->srShape, 1);
         const char* inNames[] = {
             h->inWaveName.c_str(), h->inStateName.c_str(), h->inSrName.c_str()
         };

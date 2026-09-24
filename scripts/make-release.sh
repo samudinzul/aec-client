@@ -45,8 +45,8 @@ cp libs/tensorflowlite_c.dll "$STAGE/" 2>/dev/null || true
 # Models: explicit allowlist from repo source of truth (never build/
 # leftovers — stale files like the nuked ECAPA pair must not ship).
 for m in models/nkf.onnx \
-         models/dtln_aec_512_1.tflite \
-         models/dtln_aec_512_2.tflite \
+         models/dtln_aec_128_1.tflite \
+         models/dtln_aec_128_2.tflite \
          models/silero_vad.onnx \
          models/gtcrn_stream.onnx; do
     test -f "$m" || { echo "missing model: $m" >&2; exit 1; }
@@ -62,8 +62,15 @@ forbidden='imgui\.ini|aec_config\.txt|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/
 bad=$(find "$STAGE" | grep -Ei "$forbidden" || true)
 if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
 test -f "$STAGE/aec_gui.exe" || { echo "missing exe" >&2; fail=1; }
+test -f "$STAGE/models/dtln_aec_128_1.tflite" || { echo "missing dtln 128 stage1" >&2; fail=1; }
+test -f "$STAGE/models/dtln_aec_128_2.tflite" || { echo "missing dtln 128 stage2" >&2; fail=1; }
 test -f "$STAGE/models/silero_vad.onnx" || { echo "missing silero" >&2; fail=1; }
 test -f "$STAGE/models/gtcrn_stream.onnx" || { echo "missing gtcrn" >&2; fail=1; }
+test -f "$STAGE/models/nkf.onnx" || { echo "missing nkf" >&2; fail=1; }
+# Old default must never ship again
+if ls "$STAGE"/models/dtln_aec_512_* >/dev/null 2>&1; then
+    echo "forbidden: dtln_aec_512_* staged (use 128 pair only)"; fail=1
+fi
 test -f "$STAGE/README.txt" || { echo "missing README.txt" >&2; fail=1; }
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
 [ $fail -ne 0 ] && exit 1

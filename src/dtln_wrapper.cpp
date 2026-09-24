@@ -180,57 +180,80 @@ static bool LoadTfliteApi(TfliteApi& api, char* errBuf, size_t errSize) {
     return true;
 }
 
-// Classify TFLite model_1 inputs: two 257-float feats + states (largest).
+// Classify a 3-input DTLN stage against upstream layout
+// (breizhn/DTLN-aec run_aec.py): in[0]=mic/est, in[1]=states, in[2]=lpb;
+// out[0]=mask/block, out[1]=states.
+// "State = largest input" breaks on dtln_aec_128 stage 2, where state is
+// [1,2,128,2] = 512 floats — the SAME size as est/lpb (512) — so the tie
+// picked index 0 and wrote est into the state tensor (full-scale blowup).
+// Prefer official indices when sizes match (state >= feat, or equal tie).
+static void ClassifyDtln3(size_t* sizes, int n, int* stateIn, int* aIn, int* bIn) {
+    if (n == 3 && sizes[0] == sizes[2] && sizes[1] >= sizes[0]) {
+        *stateIn = 1;
+        *aIn = 0;
+        *bIn = 2;
+        return;
+    }
+    int s = 0;
+    for (int i = 1; i < n; i++)
+        if (sizes[i] > sizes[s]) s = i;
+    if (n == 3 && sizes[0] == sizes[1] && sizes[1] == sizes[2]) s = 1;
+    *stateIn = s;
+    int f[8], nf = 0;
+    for (int i = 0; i < n && nf < 8; i++)
+        if (i != s) f[nf++] = i;
+    if (nf >= 2) { *aIn = f[0]; *bIn = f[nf - 1]; }
+    else if (nf == 1) { *aIn = f[0]; *bIn = f[0]; }
+    else { *aIn = 0; *bIn = 0; }
+}
+
+static void ClassifyDtlnOut(size_t s0, size_t s1, int* primaryOut, int* stateOut) {
+    // Official order when sizes allow (or tie): out[0]=primary, out[1]=state.
+    if (s0 <= s1) { *primaryOut = 0; *stateOut = 1; }
+    else { *primaryOut = 1; *stateOut = 0; }
+}
+
+// Classify TFLite model_1 inputs: two 257-float feats + states.
 static void ClassifyTfliteM1(DtlnHandle* h) {
     int n = h->tf.inputCount(h->tfInterp1);
     if (n < 2) return;
     size_t sizes[8] = { 0 };
     for (int i = 0; i < n && i < 8; i++)
         sizes[i] = h->tf.byteSize(h->tf.getInput(h->tfInterp1, i));
-    // states = largest
-    int s = 0;
-    for (int i = 1; i < n; i++)
-        if (sizes[i] > sizes[s]) s = i;
+    int s = 0, mic = 0, lpb = 0;
+    ClassifyDtln3(sizes, n, &s, &mic, &lpb);
     h->tfM1StateIn = s;
+    h->tfM1Mask = mic;
+    h->tfM1Lpb = lpb;
     h->states1.assign(sizes[s] / sizeof(float), 0.0f);
-    // feats = the rest; first index = mic, last = lpb (matches run_aec.py)
-    int f[8], nf = 0;
-    for (int i = 0; i < n && nf < 8; i++)
-        if (i != s) f[nf++] = i;
-    if (nf >= 2) { h->tfM1Mask = f[0]; h->tfM1Lpb = f[nf - 1]; }
-    else if (nf == 1) { h->tfM1Mask = f[0]; h->tfM1Lpb = f[0]; }
     int no = h->tf.outputCount(h->tfInterp1);
     if (no >= 2) {
         size_t s0 = h->tf.byteSize(h->tf.getOutput(h->tfInterp1, 0));
         size_t s1 = h->tf.byteSize(h->tf.getOutput(h->tfInterp1, 1));
-        if (s0 <= s1) { h->tfM1MaskOut = 0; h->tfM1StateOut = 1; }
-        else { h->tfM1MaskOut = 1; h->tfM1StateOut = 0; }
+        ClassifyDtlnOut(s0, s1, &h->tfM1MaskOut, &h->tfM1StateOut);
     }
 }
 
-// Classify TFLite model_2 inputs: two 512-float feats + states (largest).
+// Classify TFLite model_2 inputs: two 512-float feats + states.
+// For dtln_aec_128, all three inputs are 512 floats (2048 bytes) — must
+// use official in[1]=state, not "largest" (which ties to in[0]).
 static void ClassifyTfliteM2(DtlnHandle* h) {
     int n = h->tf.inputCount(h->tfInterp2);
     if (n < 2) return;
     size_t sizes[8] = { 0 };
     for (int i = 0; i < n && i < 8; i++)
         sizes[i] = h->tf.byteSize(h->tf.getInput(h->tfInterp2, i));
-    int s = 0;
-    for (int i = 1; i < n; i++)
-        if (sizes[i] > sizes[s]) s = i;
+    int s = 0, est = 0, lpb = 0;
+    ClassifyDtln3(sizes, n, &s, &est, &lpb);
     h->tfM2StateIn = s;
+    h->tfM2Est = est;
+    h->tfM2Lpb = lpb;
     h->states2.assign(sizes[s] / sizeof(float), 0.0f);
-    int f[8], nf = 0;
-    for (int i = 0; i < n && nf < 8; i++)
-        if (i != s) f[nf++] = i;
-    if (nf >= 2) { h->tfM2Est = f[0]; h->tfM2Lpb = f[nf - 1]; }
-    else if (nf == 1) { h->tfM2Est = f[0]; h->tfM2Lpb = f[0]; }
     int no = h->tf.outputCount(h->tfInterp2);
     if (no >= 2) {
         size_t s0 = h->tf.byteSize(h->tf.getOutput(h->tfInterp2, 0));
         size_t s1 = h->tf.byteSize(h->tf.getOutput(h->tfInterp2, 1));
-        if (s0 <= s1) { h->tfM2Out = 0; h->tfM2StateOut = 1; }
-        else { h->tfM2Out = 1; h->tfM2StateOut = 0; }
+        ClassifyDtlnOut(s0, s1, &h->tfM2Out, &h->tfM2StateOut);
     }
 }
 
@@ -317,37 +340,31 @@ static bool TryOnnx(DtlnHandle* h, const std::string& prefix) {
         for (auto& s : h->in2Names) h->in2Ptr.push_back(s.c_str());
         for (auto& s : h->out2Names) h->out2Ptr.push_back(s.c_str());
 
-        // Role map model_1: states = largest input; feats = rest (mic first, lpb last)
+        // Role map model_1/2: official DTLN-aec layout
+        // in[0]=mic/est, in[1]=states, in[2]=lpb (same rule as TFLite).
         {
             size_t n = h->in1Ptr.size();
-            size_t best = 0, bestN = 0;
-            for (size_t i = 0; i < n; i++) {
-                size_t c = OnnxElemCount(h->sess1, true, i);
-                if (c > bestN) { bestN = c; best = i; }
-            }
-            h->onnxM1State = (int)best;
-            h->states1.assign(bestN ? bestN : 1, 0.0f);
-            int f[8], nf = 0;
-            for (size_t i = 0; i < n && nf < 8; i++)
-                if ((int)i != (int)best) f[nf++] = (int)i;
-            if (nf >= 2) { h->onnxM1Mic = f[0]; h->onnxM1Lpb = f[nf - 1]; }
-            else if (nf == 1) { h->onnxM1Mic = f[0]; h->onnxM1Lpb = f[0]; }
+            size_t sizes[8] = { 0 };
+            for (size_t i = 0; i < n && i < 8; i++)
+                sizes[i] = OnnxElemCount(h->sess1, true, i);
+            int s = 0, mic = 0, lpb = 0;
+            ClassifyDtln3(sizes, (int)n, &s, &mic, &lpb);
+            h->onnxM1State = s;
+            h->onnxM1Mic = mic;
+            h->onnxM1Lpb = lpb;
+            h->states1.assign(sizes[s] ? sizes[s] : 1, 0.0f);
         }
-        // Role map model_2: same rule (estimated first, lpb last)
         {
             size_t n = h->in2Ptr.size();
-            size_t best = 0, bestN = 0;
-            for (size_t i = 0; i < n; i++) {
-                size_t c = OnnxElemCount(h->sess2, true, i);
-                if (c > bestN) { bestN = c; best = i; }
-            }
-            h->onnxM2State = (int)best;
-            h->states2.assign(bestN ? bestN : 1, 0.0f);
-            int f[8], nf = 0;
-            for (size_t i = 0; i < n && nf < 8; i++)
-                if ((int)i != (int)best) f[nf++] = (int)i;
-            if (nf >= 2) { h->onnxM2Est = f[0]; h->onnxM2Lpb = f[nf - 1]; }
-            else if (nf == 1) { h->onnxM2Est = f[0]; h->onnxM2Lpb = f[0]; }
+            size_t sizes[8] = { 0 };
+            for (size_t i = 0; i < n && i < 8; i++)
+                sizes[i] = OnnxElemCount(h->sess2, true, i);
+            int s = 0, est = 0, lpb = 0;
+            ClassifyDtln3(sizes, (int)n, &s, &est, &lpb);
+            h->onnxM2State = s;
+            h->onnxM2Est = est;
+            h->onnxM2Lpb = lpb;
+            h->states2.assign(sizes[s] ? sizes[s] : 1, 0.0f);
         }
         h->backend = DTLN_ONNX;
         return true;
@@ -412,10 +429,20 @@ static bool RunOnnxFirst(DtlnHandle* h, const float micMag[DTLN_BINS],
             const float* src = h->states1.data();
             const int64_t* dims = nullptr;
             size_t count = h->states1.size();
-            // Identify feat inputs by element count == 257
             size_t c = OnnxElemCount(h->sess1, true, i);
             std::vector<int64_t> stateDims = { 1, 1, (int64_t)h->states1.size() };
-            if (c == DTLN_BINS) {
+            if ((int)i == h->onnxM1State) {
+                if (count == 0) {
+                    float z = 0;
+                    stateDims[2] = 1;
+                    ins.push_back(Ort::Value::CreateTensor<float>(
+                        *h->mem, &z, 1, stateDims.data(), 3));
+                } else {
+                    ins.push_back(Ort::Value::CreateTensor<float>(
+                        *h->mem, const_cast<float*>(src), count,
+                        stateDims.data(), 3));
+                }
+            } else if (c == DTLN_BINS) {
                 src = ((int)i == h->onnxM1Lpb) ? lpbMag : micMag;
                 dims = h->feat257;
                 count = DTLN_BINS;
@@ -435,7 +462,8 @@ static bool RunOnnxFirst(DtlnHandle* h, const float micMag[DTLN_BINS],
         auto outs = h->sess1->Run(Ort::RunOptions{ nullptr },
                                   h->in1Ptr.data(), ins.data(), ins.size(),
                                   h->out1Ptr.data(), h->out1Ptr.size());
-        // mask = smallest output (257); states = largest
+        // mask = official out[0]; states = out[1] (official layout; size
+        // heuristic only when c0 > c1 would mean unexpected order).
         size_t oi = 0;
         if (outs.size() >= 2) {
             size_t c0 = outs[0].GetTensorTypeAndShapeInfo().GetElementCount();
@@ -464,14 +492,13 @@ static bool RunOnnxSecond(DtlnHandle* h, const float est[DTLN_BLOCK_LEN],
         for (size_t i = 0; i < n; i++) {
             size_t c = OnnxElemCount(h->sess2, true, i);
             std::vector<int64_t> stateDims = { 1, 1, (int64_t)h->states2.size() };
-            if (c == DTLN_BLOCK_LEN) {
-                const float* src = ((int)i == h->onnxM2Lpb) ? lpb : est;
-                ins.push_back(Ort::Value::CreateTensor<float>(
-                    *h->mem, const_cast<float*>(src), DTLN_BLOCK_LEN,
-                    h->feat512, 3));
-            } else {
+            // dtln_aec_128: est/state/lpb are all 512 elems — must use the
+            // classified indices, not "count == 512" (that maps state → est).
+            if ((int)i == h->onnxM2State) {
                 size_t count = h->states2.size() ? h->states2.size() : 1;
-                if (h->states2.empty()) { float z = 0; stateDims[2] = 1;
+                if (h->states2.empty()) {
+                    float z = 0;
+                    stateDims[2] = 1;
                     ins.push_back(Ort::Value::CreateTensor<float>(
                         *h->mem, &z, 1, stateDims.data(), 3));
                 } else {
@@ -479,6 +506,16 @@ static bool RunOnnxSecond(DtlnHandle* h, const float est[DTLN_BLOCK_LEN],
                         *h->mem, h->states2.data(), count,
                         stateDims.data(), 3));
                 }
+            } else if (c == DTLN_BLOCK_LEN) {
+                const float* src = ((int)i == h->onnxM2Lpb) ? lpb : est;
+                ins.push_back(Ort::Value::CreateTensor<float>(
+                    *h->mem, const_cast<float*>(src), DTLN_BLOCK_LEN,
+                    h->feat512, 3));
+            } else {
+                size_t count = h->states2.size() ? h->states2.size() : 1;
+                ins.push_back(Ort::Value::CreateTensor<float>(
+                    *h->mem, h->states2.data(), count,
+                    stateDims.data(), 3));
             }
         }
         auto outs = h->sess2->Run(Ort::RunOptions{ nullptr },
@@ -576,7 +613,7 @@ DtlnHandle* DtlnNew(const char* modelPrefix) {
     h->micAccum.reserve(DTLN_BLOCK_SHIFT * 4);
     h->refAccum.reserve(DTLN_BLOCK_SHIFT * 4);
     h->outAccum.reserve(DTLN_BLOCK_SHIFT * 4);
-    std::string prefix = (modelPrefix && *modelPrefix) ? modelPrefix : "models/dtln_aec_512";
+    std::string prefix = (modelPrefix && *modelPrefix) ? modelPrefix : "models/dtln_aec_128";
 
     char tfErr[256] = { 0 };
     // Probe TFLite first (preferred: ships upstream weights verbatim)
@@ -610,7 +647,10 @@ DtlnHandle* DtlnNew(const char* modelPrefix) {
 
 void DtlnProcess(DtlnHandle* h, const int16_t* mic, const int16_t* ref,
                  int16_t* out, int frameSize) {
-    if (!h || h->backend == DTLN_NONE) return;
+    if (!h || h->backend == DTLN_NONE) {
+        if (out && frameSize > 0) memset(out, 0, (size_t)frameSize * sizeof(int16_t));
+        return;
+    }
     for (int i = 0; i < frameSize; i++) {
         h->micAccum.push_back(mic[i]);
         h->refAccum.push_back(ref[i]);

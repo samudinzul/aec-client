@@ -8,7 +8,7 @@ extern "C" {
 typedef struct DtlnHandle DtlnHandle;
 
 // Create DTLN-AEC engine.
-//   modelPrefix: path prefix without suffix, e.g. "models/dtln_aec_512"
+//   modelPrefix: path prefix without suffix, e.g. "models/dtln_aec_128"
 //     Backend probe order:
 //       1. TFLite: "<prefix>_1.tflite" + "<prefix>_2.tflite" via
 //          tensorflowlite_c.dll loaded at runtime (no link-time dep).

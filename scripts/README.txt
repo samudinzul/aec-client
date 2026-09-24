@@ -8,7 +8,8 @@ WHAT IT DOES
 Routes your microphone through one of 3 AEC engines, cancels
 the sound coming from your speakers, and outputs a clean mic signal
 to a virtual audio cable that Discord / Zoom / Teams can use.
-A neural voice gate mutes silence and passes speech automatically.
+A neural voice gate is available (off by default) to push silence down
+and pass speech automatically.
 
 REQUIREMENTS
 ------------
@@ -28,7 +29,7 @@ QUICK START
    - Output:            CABLE Input (VB-Audio Virtual Cable)
 
 4. Pick an engine:
-   - DTLN-AEC 512         recommended default: neural echo + noise (16 kHz)
+   - DTLN-AEC 128         recommended default: neural echo + noise (16 kHz)
    - WebRTC AEC3          strongest echo removal (16 / 48 kHz)
    - NKF-AEC              lightest — experimental, may distort (16 kHz)
 
@@ -37,19 +38,19 @@ QUICK START
    NKF-AEC you can also tick "Dry voice (room reverb)" for a drier
    mic with less room echo (small extra CPU, ~32 ms extra delay).
 
-6. Click Start. The green SPEAKING pill means speech is going out;
-   grey SILENT means the voice gate muted silence. The gate is on
-   by default — uncheck Voice gate in the Audio tab to disable it.
+6. Click Start. Optional: under Advanced → Voice gate, tick "Push down
+   silence" — the green SPEAKING pill then means speech is going out and
+   grey SILENT means silence is pushed down. The gate is OFF by default.
 
 7. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)
    - Input Profile:       Voice Isolation (one tap: Discord's noise
-     cleanup ON; echo is already removed by this app — DTLN and the
-     optional Noise reduction checkbox also remove noise, bare
-     AEC3/NKF-AEC are echo-only).
-     Manual alternative: Custom profile with Echo Cancellation OFF
-     (this app does it), Noise Suppression Krisp (Standard on weak
-     PCs), Automatic Gain Control OFF.
+      cleanup ON; echo is already removed by this app — DTLN and the
+      optional Noise reduction checkbox also remove noise, bare
+      AEC3/NKF-AEC are echo-only).
+      Manual alternative: Custom profile with Echo Cancellation OFF
+      (this app does it), Noise Suppression Krisp (Standard on weak
+      PCs), Automatic Gain Control OFF.
 
 TIPS
 ----
@@ -66,8 +67,8 @@ TIPS
 - If your voice sounds processed or robotic on AEC3, stay on the
   default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
 - The X button minimizes to the system tray (toggle in Appearance tab).
-- DTLN-AEC needs models/dtln_aec_512_1.tflite +
-  models/dtln_aec_512_2.tflite (bundled) and tensorflowlite_c.dll
+- DTLN-AEC needs models/dtln_aec_128_1.tflite +
+  models/dtln_aec_128_2.tflite (bundled) and tensorflowlite_c.dll
   (bundled). Without them it reports "Failed to load DTLN model".
 - The voice gate needs models/silero_vad.onnx (bundled). Without
   it the gate stays off and audio passes through unchanged.

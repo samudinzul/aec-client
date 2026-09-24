@@ -78,6 +78,15 @@ struct NkfHandle {
     std::vector<float> micAccum;
     std::vector<float> refHist;     // raw ref, abs [total - size(), total)
     std::vector<int16_t> outAccum;
+    // FIFO heads — consume by offset, compact once per Process
+    // (never erase(begin) per sample/block on the audio thread).
+    size_t micHead = 0, outHead = 0, nsInHead = 0;
+
+    // Per-block scratch (hoisted: no heap inside NkfProcess's loop)
+    float micBlock[NKF_BLOCK_SHIFT];
+    float refBlock[NKF_BLOCK_SHIFT];
+    float outBlock[NKF_BLOCK_SHIFT];
+    float emitBlock[NKF_BLOCK_SHIFT];
 
     size_t total = 0;               // mic+ref samples pushed (lockstep)
     size_t micConsumed = 0;         // abs index of micAccum[0]
@@ -85,6 +94,11 @@ struct NkfHandle {
     int alignDelay = 0;             // current ref->mic lag (samples)
     int samplesSinceTdc = 0;        // estimate as soon as data allows
     bool tdcLocked = false;
+    // TDC / loop NCC prefix scratch (hoisted — used by DetectLoop/EstimateDelay)
+    double tdcPref[TDC_WIN + TDC_DMAX + 1];
+    float  loopRd[(LOOP_WIN) / LOOP_DEC];
+    float  loopOd[(LOOP_WIN + LOOP_DMAX) / LOOP_DEC];
+    double loopPref[(LOOP_WIN + LOOP_DMAX) / LOOP_DEC + 1];
 
     float micEnv = 0, refEnv = 0, outEnv = 0;  // EMA of per-block mean-square
     int hotBlocks = 0;
@@ -147,7 +161,8 @@ static void NkfEstimateDelay(NkfHandle* h) {
     if (micE / TDC_WIN < TDC_MIN_MEAN_E) return;
 
     const int RLEN = TDC_WIN + TDC_DMAX;
-    std::vector<double> pref(RLEN + 1, 0.0);
+    double* pref = h->tdcPref;
+    pref[0] = 0.0;
     for (int i = 0; i < RLEN; i++)
         pref[i + 1] = pref[i] + (double)R[i] * R[i];
     if (pref[RLEN] / RLEN < TDC_MIN_MEAN_E) return;
@@ -219,14 +234,15 @@ static void NkfDetectLoop(NkfHandle* h) {
         (int)h->outHist.size() < W + DMAX)
         return;
 
-    const float* R = h->refHist.data() + (h->refHist.size() - W);
-    const float* O = h->outHist.data() + (h->outHist.size() - (W + DMAX));
+    float* Rf = h->refHist.data() + (h->refHist.size() - W);
+    float* Of = h->outHist.data() + (h->outHist.size() - (W + DMAX));
 
-    std::vector<float> Rd(Wd), Od(OdN);
+    float* Rd = h->loopRd;
+    float* Od = h->loopOd;
     for (int k = 0; k < Wd; k++)
-        Rd[k] = (R[4*k] + R[4*k+1] + R[4*k+2] + R[4*k+3]) * 0.25f;
+        Rd[k] = (Rf[4*k] + Rf[4*k+1] + Rf[4*k+2] + Rf[4*k+3]) * 0.25f;
     for (int j = 0; j < OdN; j++)
-        Od[j] = (O[4*j] + O[4*j+1] + O[4*j+2] + O[4*j+3]) * 0.25f;
+        Od[j] = (Of[4*j] + Of[4*j+1] + Of[4*j+2] + Of[4*j+3]) * 0.25f;
 
     double eR = 0, eO = 0;
     for (int k = 0; k < Wd; k++) eR += (double)Rd[k] * Rd[k];
@@ -242,7 +258,8 @@ static void NkfDetectLoop(NkfHandle* h) {
     }
     h->loopQuiet = 0;
 
-    std::vector<double> pref(OdN + 1, 0.0);
+    double* pref = h->loopPref;
+    pref[0] = 0.0;
     for (int j = 0; j < OdN; j++)
         pref[j + 1] = pref[j] + (double)Od[j] * Od[j];
 
@@ -287,9 +304,10 @@ static void NkfEmit(NkfHandle* h, const float* v, int n) {
 // NS) into outAccum. Ordering is preserved: leftovers (< 1 frame) wait.
 static void NkfDrainPost(NkfHandle* h) {
     webrtc::StreamConfig sc(NS_SAMPLE_RATE, 1);  // mono
-    while (h->nsInAccum.size() >= (size_t)NS_FRAME_SIZE) {
+    while (h->nsInAccum.size() - h->nsInHead >= (size_t)NS_FRAME_SIZE) {
+        const int16_t* src = h->nsInAccum.data() + h->nsInHead;
         for (int i = 0; i < NS_FRAME_SIZE; i++)
-            h->nsMicFloat[i] = h->nsInAccum[i] / 32768.0f;
+            h->nsMicFloat[i] = src[i] / 32768.0f;
         float* micPtr = h->nsMicFloat.data();
         float* outPtr = h->nsOutFloat.data();
         if (h->nsApm->ProcessStream(&micPtr, sc, sc, &outPtr) != 0) {
@@ -300,19 +318,30 @@ static void NkfDrainPost(NkfHandle* h) {
                 h->nsOutFloat[i] = h->nsMicFloat[i];
         }
         NkfEmit(h, h->nsOutFloat.data(), NS_FRAME_SIZE);
+        h->nsInHead += NS_FRAME_SIZE;
+    }
+    if (h->nsInHead) {
         h->nsInAccum.erase(h->nsInAccum.begin(),
-                           h->nsInAccum.begin() + NS_FRAME_SIZE);
+                           h->nsInAccum.begin() + (ptrdiff_t)h->nsInHead);
+        h->nsInHead = 0;
     }
 }
 
 static void NkfDrainOut(NkfHandle* h, int16_t* out, int frameSize) {
+    const size_t avail = h->outAccum.size() - h->outHead;
     for (int i = 0; i < frameSize; i++) {
-        if (!h->outAccum.empty()) {
-            out[i] = h->outAccum.front();
-            h->outAccum.erase(h->outAccum.begin());
+        if ((size_t)i < avail) {
+            out[i] = h->outAccum[h->outHead + i];
         } else {
             out[i] = 0;
         }
+    }
+    const size_t consume = ((size_t)frameSize < avail) ? (size_t)frameSize : avail;
+    h->outHead += consume;
+    if (h->outHead) {
+        h->outAccum.erase(h->outAccum.begin(),
+                          h->outAccum.begin() + (ptrdiff_t)h->outHead);
+        h->outHead = 0;
     }
 }
 
@@ -331,6 +360,7 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
     h->refHist.reserve(TDC_WIN + TDC_DMAX + NKF_BLOCK_SHIFT * 4);
     h->micWin.reserve(TDC_WIN);
     h->outAccum.reserve(NKF_BLOCK_SHIFT * 4);
+    h->nsInAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->outHist.reserve(LOOP_WIN + LOOP_DMAX);
     // Optional dry-voice stage: only when the caller passed a path;
     // a missing/broken model leaves it off (fail-open) — never kills NKF.
@@ -341,6 +371,7 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
             h->dry = nullptr;
         }
     }
+    if (h->dry) h->dryOut.reserve(NKF_BLOCK_SHIFT);
     // Post stage: mirror the AEC3 wrapper's production config — AEC3
     // residual cancellation follows the residualAec toggle (default
     // on: aggressive nonlinear echo kill after linear NKF, incl.
@@ -410,11 +441,7 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
     }
 
-    std::vector<float> micBlock(NKF_BLOCK_SHIFT);
-    std::vector<float> refBlock(NKF_BLOCK_SHIFT);
-    std::vector<float> outBlock(NKF_BLOCK_SHIFT);
-
-    while (h->micAccum.size() >= (size_t)NKF_BLOCK_SHIFT) {
+    while (h->micAccum.size() - h->micHead >= (size_t)NKF_BLOCK_SHIFT) {
         // Aligned pairing: mic [micConsumed, +SHIFT) with ref SHIFT-delay
         // samples earlier — the TDC slice NKF needs. Positions < 0 are
         // stream warmup: feed zeros. (Pre-lock the engine isn't called;
@@ -423,23 +450,23 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         const long long front =
             (long long)h->total - (long long)h->refHist.size();
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-            micBlock[i] = h->micAccum[i];
+            h->micBlock[i] = h->micAccum[h->micHead + i];
             const long long p = needStart + i;
             if (p >= front && (size_t)(p - front) < h->refHist.size())
-                refBlock[i] = h->refHist[(size_t)(p - front)];
+                h->refBlock[i] = h->refHist[(size_t)(p - front)];
             else
-                refBlock[i] = 0.0f;
+                h->refBlock[i] = 0.0f;
         }
 
         // Engine runs only once locked and before fail-open; its output
         // reaches the wire only past shadow, through the fade.
         bool processed = false;
         if (h->tdcLocked && !h->giveUp) {
-            h->engine->ProcessBlock(micBlock.data(), refBlock.data(),
-                                    outBlock.data());
+            h->engine->ProcessBlock(h->micBlock, h->refBlock,
+                                    h->outBlock);
             processed = true;
-            if (NkfGuard(h, micBlock.data(), refBlock.data(),
-                         outBlock.data())) {
+            if (NkfGuard(h, h->micBlock, h->refBlock,
+                         h->outBlock)) {
                 // Divergence: reset the filter and drop back to shadow.
                 // The wire keeps carrying mic — internal spikes, even
                 // here, are never exposed.
@@ -475,30 +502,34 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
 
         // No-APM edge (builder Create failed): emit the block straight
         // through (dry stage still applies inside NkfEmit).
-        float emitBlock[NKF_BLOCK_SHIFT];
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-            float v = micBlock[i];
-            if (g > 0.0f) v += (outBlock[i] - v) * g;
+            float v = h->micBlock[i];
+            if (g > 0.0f) v += (h->outBlock[i] - v) * g;
             if (h->nsApm) {
                 float s = v * 32768.0f;
                 if (s >  32767.0f) s =  32767.0f;
                 if (s < -32768.0f) s = -32768.0f;
                 h->nsInAccum.push_back((int16_t)s);
             } else {
-                emitBlock[i] = v;
+                h->emitBlock[i] = v;
             }
         }
         if (h->nsApm) NkfDrainPost(h);
-        else NkfEmit(h, emitBlock, NKF_BLOCK_SHIFT);
+        else NkfEmit(h, h->emitBlock, NKF_BLOCK_SHIFT);
 
         // Hold shadow while a self-monitor loop is active; release the
         // countdown only when the loop is gone (then fade normally).
         if (shadowed && h->loopConf < LOOP_ON &&
             --h->shadowBlocks == 0)
             h->fadePos = 0;
-        h->micAccum.erase(h->micAccum.begin(),
-                          h->micAccum.begin() + NKF_BLOCK_SHIFT);
+        h->micHead += NKF_BLOCK_SHIFT;
         h->micConsumed += NKF_BLOCK_SHIFT;
+    }
+    // Compact micAccum once after the block loop (not per block).
+    if (h->micHead) {
+        h->micAccum.erase(h->micAccum.begin(),
+                          h->micAccum.begin() + (ptrdiff_t)h->micHead);
+        h->micHead = 0;
     }
 
     NkfTrimRef(h);
@@ -519,6 +550,9 @@ void NkfReset(NkfHandle* h) {
     h->nsInAccum.clear();
     h->micWin.clear();
     h->outHist.clear();
+    h->micHead = 0;
+    h->outHead = 0;
+    h->nsInHead = 0;
     h->total = 0;
     h->micConsumed = 0;
     h->alignDelay = 0;

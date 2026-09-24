@@ -45,7 +45,7 @@ No more headphones. No more echo. No dead-air noise.
 ## Features
 
 - **3 selectable AEC engines** in one app:
-  - **DTLN-AEC 512** — recommended default: dual-LSTM echo + noise canceller (ICASSP 2021)
+  - **DTLN-AEC 128** — recommended default: dual-LSTM echo + noise canceller (ICASSP 2021; 128 LSTM units for lower CPU)
   - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed)
   - **NKF-AEC** — lightest experimental neural Kalman filter (ICASSP 2023; can distort in real time)
 - **Noise reduction** (AEC3 and NKF-AEC) — optional WebRTC noise suppression on top of echo cancellation, one checkbox
@@ -58,7 +58,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Live level meters** with peak-hold
 - **Presets** for common scenarios (Discord, Echo-Heavy Room, Noisy Room)
 - **Clock-drift correction** — stable over long calls
-- **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz, on by default, one checkbox + one-tap mic calibration)
+- **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz; off by default — enable under Advanced → Voice gate, then optional one-tap mic calibration)
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
@@ -103,11 +103,11 @@ Done. Talk normally with speakers on.
 
 ## Voice Gate
 
-After echo cancellation, a tiny neural network checks for speech many times a second. Speech passes to Discord; silence is pushed down (−12 dB, not muted — so the level never pumps). No setup, no recording — it's on by default.
+After echo cancellation, a tiny neural network checks for speech many times a second. Speech passes to Discord; silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence** under Advanced → Voice gate to enable. No recording; one-tap calibration optional.
 
-- Green **SPEAKING** pill at the top = speech going out. Grey **SILENT** = pushed down.
+- Green **SPEAKING** pill at the top = speech going out (only when the gate is on). Grey **SILENT** = pushed down.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
-- Uncheck **Voice gate** in the Audio tab to pass original audio through.
+- Uncheck **Push down silence** in the Audio tab to pass original audio through.
 - **Calibrate for my mic** (under Voice gate, idle or running): starts audio if needed (you'll hear yourself, live meters, no CABLE needed), you speak normally 5 s, then back to idle — press Start to use it. Sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
 - Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — NKF and DTLN run at 16000 (locked); AEC3 offers 16000 or 48000.
 
@@ -117,7 +117,7 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 
 | Engine | Voice preservation | Echo removal | CPU | Sample Rate | Latency | Best For |
 |--------|---------------|-------------|-----|-------------|---------|----------|
-| **DTLN-AEC 512** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate–High | 16 kHz only | ~32 ms | Recommended default — cleanest output, removes noise too |
+| **DTLN-AEC 128** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16 kHz only | ~32 ms | Recommended default — cleanest output, removes noise too |
 | **WebRTC AEC3** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | Moderate | 16/48 kHz | ~40 ms | Strongest echo removal |
 | **NKF-AEC** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | Low | 16 kHz only | ~32 ms | Lightest CPU — experimental, can distort |
 
@@ -141,7 +141,7 @@ The release ZIP bundles all required DLLs:
 | `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
 | `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
 | `models/nkf.onnx` | ~45 KB | NKF model |
-| `models/dtln_aec_512_*` | user-supplied | DTLN models (optional) |
+| `models/dtln_aec_128_*` | user-supplied | DTLN models (optional) |
 | `tensorflowlite_c.dll` | user-supplied | TFLite runtime for DTLN (optional) |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
@@ -260,16 +260,16 @@ The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `Proces
 
 The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and builds to `libnkf_aec.dll` (1.3 MB).
 
-### DTLN-AEC 512
+### DTLN-AEC 128
 
 DTLN-AEC (Dual-signal Transformation LSTM Network) by Westhausen & Meyer (**ICASSP 2021**, 3rd place in the Microsoft AEC Challenge) cancels echo **and** noise with a two-stage LSTM (separation mask + waveform refinement).
 
-- **Model size**: 10.4M parameters (512 LSTM units/layer), two files: `dtln_aec_512_1` + `dtln_aec_512_2`
+- **Model size**: 1.8M parameters (128 LSTM units/layer), two files: `dtln_aec_128_1` + `dtln_aec_128_2` (lighter/faster than the upstream 512-unit pair; same 512-sample DSP block)
 - **Sample rate**: 16 kHz (auto-locked)
 - **DSP**: 512-sample block, 128-sample shift, 257-bin FFT, overlap-add
 - **Runtime (in probe order)**:
-  1. **TFLite** — drop `dtln_aec_512_1.tflite` + `dtln_aec_512_2.tflite` from [breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec) into `models/` plus a Windows `tensorflowlite_c.dll` next to `aec_gui.exe` (loaded at runtime, no rebuild needed)
-  2. **ONNX fallback** — `dtln_aec_512_1.onnx` + `dtln_aec_512_2.onnx` in `models/` (reuses the already-linked ONNX Runtime)
+  1. **TFLite** — drop `dtln_aec_128_1.tflite` + `dtln_aec_128_2.tflite` from [breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec) into `models/` plus a Windows `tensorflowlite_c.dll` next to `aec_gui.exe` (loaded at runtime, no rebuild needed)
+  2. **ONNX fallback** — `dtln_aec_128_1.onnx` + `dtln_aec_128_2.onnx` in `models/` (reuses the already-linked ONNX Runtime)
 - Without either pair the engine reports `Failed to load DTLN model` on Start; all other engines are unaffected.
 
 The wrapper at `src/dtln_wrapper.cpp` handles frame accumulation (128-sample shifts bridged to the 160-sample audio callback), int16 ↔ float conversion, LSTM state carry-over, and graceful fallback to mic on inference failure.
@@ -319,13 +319,13 @@ mkdir -p models
 # NKF-AEC model is bundled in third_party/REAL_TIME_NKF_AEC/python/nkf.onnx
 cp third_party/REAL_TIME_NKF_AEC/python/nkf.onnx models/
 
-# DTLN-AEC 512 (optional — engine stays disabled until these exist)
+# DTLN-AEC 128 (optional — engine stays disabled until these exist)
 # Option A (preferred, upstream weights verbatim):
-#   download dtln_aec_512_1.tflite + dtln_aec_512_2.tflite from
+#   download dtln_aec_128_1.tflite + dtln_aec_128_2.tflite from
 #   https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models
 #   into models/, plus a Windows tensorflowlite_c.dll next to aec_gui.exe
 # Option B (no new DLL): convert the pair to
-#   models/dtln_aec_512_1.onnx + models/dtln_aec_512_2.onnx
+#   models/dtln_aec_128_1.onnx + models/dtln_aec_128_2.onnx
 
 # Silero VAD voice gate (optional — gate reports "model not found" until
 # vendored, ~2.2 MB, MIT, sha256 1a153a22… = upstream v6.2.1)
@@ -383,7 +383,7 @@ aec-client/
 │
 ├── models/
 │   ├── nkf.onnx                    NKF model (45 KB)
-│   ├── dtln_aec_512_{1,2}.tflite|.onnx  DTLN models (user-supplied, optional)
+│   ├── dtln_aec_128_{1,2}.tflite|.onnx  DTLN models (user-supplied, optional)
 │   └── silero_vad.onnx             Silero VAD model (2.2 MB, user-supplied, optional)
 │
 ├── screenshots/

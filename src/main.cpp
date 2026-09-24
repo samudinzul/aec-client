@@ -47,7 +47,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.7.2"
+#define APP_VERSION "1.8.0"
 
 // ============================================================
 //  Single-instance protection
@@ -195,7 +195,7 @@ EngineState g_engine;
 //  UI only reads the atomics.
 // ============================================================
 SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
-std::atomic<bool>  g_vadEnabled{ true };  // default ON, zero-click
+std::atomic<bool>  g_vadEnabled{ false }; // default OFF (opt-in under Advanced)
 std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
 std::atomic<float> g_vadOpen{ 0.50f };    // calibrated open threshold (persisted)
@@ -584,8 +584,8 @@ void LoadSettings() {
         int mt = 1;
         if (f >> mt) g_minimizeToTray = (mt != 0);
 
-        // New field — voice gate defaults ON if missing
-        int ve = 1;
+        // New field — voice gate defaults OFF if missing (opt-in)
+        int ve = 0;
         if (f >> ve) g_vadEnabled.store(ve != 0);
 
         // New field — self-monitor defaults OFF if missing
@@ -670,7 +670,7 @@ void ResetToDefaults() {
     g_dryVoice.store(false);        // default OFF (opt-in CPU cost)
     g_residualAec.store(true);      // default ON (aggressive echo kill)
     g_minimizeToTray = true;
-    g_vadEnabled.store(true);    // match a fresh install (ON since 1.3.0)
+    g_vadEnabled.store(false);   // default OFF (opt-in under Advanced)
     g_vadOpen.store(0.50f);
     g_vadClose.store(0.30f);
     g_vadCalibrating.store(false);
@@ -744,7 +744,7 @@ void ReinitEngine() {
                               g_residualAec.load());
         g_engine.type = ENGINE_NKF;
     } else if (eng == ENGINE_DTLN) {
-        g_engine.dtln = DtlnNew("models/dtln_aec_512");
+        g_engine.dtln = DtlnNew("models/dtln_aec_128");
         g_engine.type = ENGINE_DTLN;
     }
 
@@ -897,6 +897,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     int16_t micFrame[MAX_FRAME_SIZE];
     int16_t refFrame[MAX_FRAME_SIZE];
     int16_t cleanedFrame[MAX_FRAME_SIZE];
+    memset(cleanedFrame, 0, sizeof(cleanedFrame));
 
     g_micRing.read(micFrame, fs);
     if (g_refRing.available() < (size_t)fs)
@@ -1336,7 +1337,7 @@ void DrawEngineSection() {
     ImGui::SetNextItemWidth(-1);
     static const int kShown[] = { ENGINE_DTLN, ENGINE_AEC3, ENGINE_NKF };
     static const char* kShownNames[] = {
-        "DTLN-AEC 512 (recommended default)",
+        "DTLN-AEC 128 (recommended default)",
         "WebRTC AEC3 (strongest echo cut)",
         "NKF-AEC (lightest — experimental)"
     };
@@ -1354,7 +1355,7 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "DTLN-AEC 512 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
+            "DTLN-AEC 128 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
             "AEC3 = strongest echo suppression, voice sounds processed.\n"
             "Very loud speakers make it mistake your voice for echo — lower them or use DTLN\n"
             "NKF-AEC = lightest, but a linear research engine (ICASSP 2023) that needs\n"
@@ -1593,9 +1594,17 @@ void DrawAudioTab() {
             if (wasRunning) { StopAEC(); StartAEC(); }
         }
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("One-click setups for common uses.\n"
-                          "Changing anything by hand switches this to Manual settings.");
+    if (ImGui::IsItemHovered()) {
+        if (g_presetIndex == 1)
+            ImGui::SetTooltip(
+                "One-click setups for common uses.\n"
+                "Changing anything by hand switches this to Manual settings.\n"
+                "Discord: use Input Profile Voice Isolation, or Custom with\n"
+                "Echo Cancellation off, Krisp noise suppression, AGC off.");
+        else
+            ImGui::SetTooltip("One-click setups for common uses.\n"
+                              "Changing anything by hand switches this to Manual settings.");
+    }
 
     // Noise reduction: extra WebRTC suppression (Moderate) on top of echo
     // removal. Always visible (not behind Advanced); hidden on DTLN, which
@@ -1740,7 +1749,7 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Three AEC engines: DTLN-AEC 512 (default), WebRTC AEC3, NKF-AEC");
+    ImGui::BulletText("Three AEC engines: DTLN-AEC 128 (default), WebRTC AEC3, NKF-AEC");
     ImGui::BulletText("Voice gate — neural speech detector pushes silence down");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");

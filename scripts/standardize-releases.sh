@@ -1,66 +1,67 @@
 #!/usr/bin/env bash
-# standardize-releases.sh — align every GitHub release with release-template.md
-# (gold standard: the v1.5.0 release).
+# standardize-releases.sh — align every GitHub release title with
+# release-template.md ("AEC Client vX.Y.Z"), and optionally rewrite
+# the NOTES of one release (normally the current latest) to the template.
 #
-#   Titles  -> "AEC Client vX.Y.Z" for every release.
-#   Notes   -> only the current latest is rewritten to the template
-#              (old releases keep their historical notes, per the template).
+#   Usage:
+#     scripts/standardize-releases.sh              # titles only
+#     scripts/standardize-releases.sh v1.7.2       # titles + rewrite that tag's notes
+#     scripts/standardize-releases.sh v1.7.2 path/to/notes.md
 #
-# Run from a shell where `gh auth login` has been done (MSYS2 UCRT64).
+#   Notes file is optional when VERSION is given: without it the script
+#   only fixes the title for that tag. With it, notes are rewritten from
+#   the file (use scripts/release-template.md + CHANGELOG for content).
+#
+#   Old releases keep their historical notes (per the template).
+#   Run from a shell where `gh auth login` has been done (MSYS2 UCRT64).
 set -euo pipefail
 
 REPO=samudinzul/aec-client
+VERSION="${1:-}"
+NOTES_SRC="${2:-}"
 
 command -v gh >/dev/null 2>&1 || { echo "error: gh not found" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "error: not authenticated — run: gh auth login" >&2; exit 1; }
 
-# ------------------------------------------------------------------
-# Current latest: v1.6.0 — standard title + notes rewritten to template
-# ------------------------------------------------------------------
-# Notes go to a RELATIVE path: gh is a native Windows exe and cannot
-# open POSIX mktemp paths like /tmp/... (MSYS path conversion skips
-# them). A repo-relative file needs no conversion on any shell.
-mkdir -p release
-NOTES="release/.notes-v1.6.0.md"
-trap 'rm -f "$NOTES"' EXIT
-
-cat > "$NOTES" <<'EOF'
-AEC Client v1.6.0 (Windows 10/11 64-bit).
-
-Highlights since v1.5.0:
-- Noise reduction checkbox cuts background hiss and fans on WebRTC AEC3 and NKF-AEC — off by default, toggles live
-- SpeexDSP + LocalVQE removed after failing the double-talk voice test; old settings migrate to AEC3 automatically, three engines remain
-- Owner-only voice gate removed — the standard voice gate (Push down silence) is unchanged
-- AEC3 loud-speaker caveat documented: very loud speakers can clip your voice on AEC3 — lower them or switch to NKF
-- Engine ranking renamed to outcomes: Voice preservation / Echo removal
-
-Install:
-1. Install VB-CABLE (https://vb-audio.com/Cable/, free) and reboot.
-2. Download AEC-Client-v1.6.0-win64.zip from Assets below and extract it anywhere.
-3. Run aec_gui.exe, pick your devices, click Start.
-4. In Discord: input = CABLE Output, Input Profile = Voice Isolation.
-   (Zoom/Teams: input = CABLE Output; turn off their echo cancellation.)
-
-SmartScreen notice: this app is unsigned (no paid code-signing certificate), so Windows may show
-"Windows protected your PC" on first launch. This is expected: click More info -> Run anyway.
-Every release is built straight from public source (https://github.com/samudinzul/aec-client) —
-audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
-
-Full changelog in CHANGELOG.md.
-Compare: https://github.com/samudinzul/aec-client/compare/v1.5.0...v1.6.0
-EOF
+# Normalize bare "1.7.2" → "v1.7.2"
+if [ -n "$VERSION" ]; then
+    case "$VERSION" in
+        v*) ;;
+        *) VERSION="v${VERSION}" ;;
+    esac
+fi
 
 echo "== titles: standardize all releases =="
-for t in v1.0.0 v1.1.0 v1.1.1 v1.2.0 v1.2.1 v1.3.0 v1.3.1 v1.3.2 v1.4.0 v1.5.0; do
+# Every tag that exists on the remote (sorted)
+while IFS= read -r t; do
+    [ -n "$t" ] || continue
     gh release edit "$t" --repo "$REPO" --title "AEC Client $t" >/dev/null
     echo "   AEC Client $t"
-done
+done < <(gh release list --repo "$REPO" --limit 100 \
+            | awk -F'\t' '{print $NF}' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V)
 
-echo "== v1.6.0: standard title + template notes =="
-gh release edit v1.6.0 --repo "$REPO" \
-    --title "AEC Client v1.6.0" \
-    --notes-file "$NOTES" >/dev/null
-echo "   AEC Client v1.6.0 (notes rewritten to release-template.md)"
+if [ -n "$VERSION" ]; then
+    if [ -z "$NOTES_SRC" ]; then
+        echo "== ${VERSION}: title only (no notes file given) =="
+        gh release edit "$VERSION" --repo "$REPO" \
+            --title "AEC Client ${VERSION}" >/dev/null
+        echo "   AEC Client ${VERSION} (notes left as-is)"
+    else
+        test -f "$NOTES_SRC" || { echo "error: notes file not found: $NOTES_SRC" >&2; exit 1; }
+        # Repo-relative notes path — gh (native Windows) cannot open POSIX /tmp/...
+        mkdir -p release
+        NOTES="release/.notes-${VERSION}.md"
+        cp "$NOTES_SRC" "$NOTES"
+        trap 'rm -f "$NOTES"' EXIT
+        echo "== ${VERSION}: standard title + notes from ${NOTES_SRC} =="
+        gh release edit "$VERSION" --repo "$REPO" \
+            --title "AEC Client ${VERSION}" \
+            --notes-file "$NOTES" >/dev/null
+        echo "   AEC Client ${VERSION} (notes rewritten)"
+    fi
+fi
 
 echo
 echo "done. verify with:"
