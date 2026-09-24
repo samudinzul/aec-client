@@ -64,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Per-block `new`/`delete` and FIFO front-erases are gone; state lives
   in the handle and windows compact once per Process. Same math,
   lower and more stable callback cost under load.
+- **ImGui UI glyphs.** Em-dashes, ellipsis, and arrows in app strings
+  were rendering as `?` under the default font (no U+2014 etc.).
+  Narrow UI strings now use ASCII (` - `, `...`, `->`); the tray
+  tooltip keeps Unicode (shell, not ImGui).
+- **NKF "experimental" label removed.** With TDC, staged exposure, and
+  the divergence guard in place, the picker/docs call NKF the lightest
+  engine (still notes the linear/loopback-delay caveat) instead of
+  experimental.
 
 ### Notes
 

@@ -690,7 +690,7 @@ void ResetToDefaults() {
     LoadWallpaperByIndex(0);
     UpdateTrayIcon();
     SaveSettings();
-    snprintf(g_statusText, 128, "Defaults restored — press Start");
+    snprintf(g_statusText, 128, "Defaults restored - press Start");
 }
 
 void ApplyPreset(int idx) {
@@ -1080,7 +1080,7 @@ void StartAEC() {
     if (g_listenToSelf || g_calMonitor) {
         outIdx = g_refIndex;
     } else if (!CableInputPresent()) {
-        snprintf(g_statusText, 128, "VB-CABLE not found — install/enable CABLE Input");
+        snprintf(g_statusText, 128, "VB-CABLE not found - install/enable CABLE Input");
         return;
     }
 
@@ -1305,12 +1305,12 @@ void DrawDevicesSection() {
     if (!CableInputPresent()) {
         ImGui::Spacing();
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
-            "VB-CABLE not found — install VB-CABLE and enable CABLE Input,");
+            "VB-CABLE not found - install VB-CABLE and enable CABLE Input,");
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
             "then hit Refresh (or tick Listen to myself below).");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Free download: vb-audio.com/Cable/ (reboot after install).\n"
-                              "Windows lists only enabled devices — a disabled CABLE Input\n"
+                              "Windows lists only enabled devices - a disabled CABLE Input\n"
                               "looks the same as not installed: check Sound settings too.");
     }
 
@@ -1320,7 +1320,7 @@ void DrawDevicesSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Hear yourself through your speakers instead of sending\n"
-                          "to voice apps — for testing. Untick to send your voice\n"
+                          "to voice apps - for testing. Untick to send your voice\n"
                           "to CABLE Input (Discord, Zoom, Teams) again.");
 
     ImGui::EndDisabled();
@@ -1339,7 +1339,7 @@ void DrawEngineSection() {
     static const char* kShownNames[] = {
         "DTLN-AEC 128 (recommended default)",
         "WebRTC AEC3 (strongest echo cut)",
-        "NKF-AEC (lightest — experimental)"
+        "NKF-AEC (lightest CPU)"
     };
     int comboIdx = 0;
     for (int i = 0; i < 3; i++)
@@ -1357,9 +1357,9 @@ void DrawEngineSection() {
         ImGui::SetTooltip(
             "DTLN-AEC 128 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
             "AEC3 = strongest echo suppression, voice sounds processed.\n"
-            "Very loud speakers make it mistake your voice for echo — lower them or use DTLN\n"
+            "Very loud speakers make it mistake your voice for echo - lower them or use DTLN\n"
             "NKF-AEC = lightest, but a linear research engine (ICASSP 2023) that needs\n"
-            "delay alignment real-time paths lack — it can distort; kept as an option");
+            "delay alignment real-time paths lack - it can distort; kept as an option");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -1369,7 +1369,7 @@ void DrawEngineSection() {
     if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("This engine always runs at 16 kHz — nothing to choose.");
+            ImGui::SetTooltip("This engine always runs at 16 kHz - nothing to choose.");
     } else {
         if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
             g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
@@ -1380,12 +1380,12 @@ void DrawEngineSection() {
     }
 
     if (g_engineIndex == ENGINE_AEC3) {
-        ImGui::TextDisabled("AEC3 tunes itself — no extra settings.");
+        ImGui::TextDisabled("AEC3 tunes itself - no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
-        ImGui::TextDisabled("Lightest engine, but experimental — a linear research model that can distort in real time. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Lightest engine - linear research model (ICASSP 2023) that can distort if loopback delay drifts. Runs at 16 kHz automatically.");
     } else if (g_engineIndex == ENGINE_DTLN) {
-        ImGui::TextDisabled("Recommended default — cleanest output, neural echo + noise removal. Runs at 16 kHz automatically.");
-        ImGui::TextDisabled("Needs an extra download — see About for details.");
+        ImGui::TextDisabled("Recommended default - cleanest output, neural echo + noise removal. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Needs an extra download - see About for details.");
     }
 
     ImGui::EndDisabled();
@@ -1422,7 +1422,7 @@ void DrawVadSection() {
             "Speech passes through; silence is pushed down (-12 dB). No setup, no recording.");
 
     if (!g_vad) {
-        ImGui::TextDisabled("Voice detector is missing its data file — gate is off.");
+        ImGui::TextDisabled("Voice detector is missing its data file - gate is off.");
         ImGui::TextDisabled("Reinstall the app or see About for details.");
     } else if (enabled) {
         float prob = g_vadProb.load();
@@ -1439,7 +1439,7 @@ void DrawVadSection() {
             // User hit Stop mid-calibration — abort, don't judge stale audio.
             g_vadCalibrating.store(false);
             g_vadCalSamples.clear();
-            g_vadCalMsg = "Stopped — calibration cancelled.";
+            g_vadCalMsg = "Stopped - calibration cancelled.";
             g_vadCalMsgIsErr = true;
         }
         if (g_vadCalibrating.load()) {
@@ -1451,7 +1451,7 @@ void DrawVadSection() {
             int pct = (int)(elapsed * 100 / (VAD_CAL_SECONDS * 1000));
             if (pct > 100) pct = 100;
             ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
-                "Calibrating… keep speaking normally (%d%%, %ds left)", pct, left);
+                "Calibrating... keep speaking normally (%d%%, %ds left)", pct, left);
             if (ImGui::Button("Cancel", ImVec2(120, 0))) {
                 g_vadCalibrating.store(false);
                 g_vadCalSamples.clear();
@@ -1464,7 +1464,7 @@ void DrawVadSection() {
                 std::vector<float> s = g_vadCalSamples;
                 g_vadCalSamples.clear();
                 if (s.size() < 30) {
-                    g_vadCalMsg = "Too few samples — try again while running.";
+                    g_vadCalMsg = "Too few samples - try again while running.";
                     g_vadCalMsgIsErr = true;
                 } else {
                     std::sort(s.begin(), s.end());
@@ -1473,7 +1473,7 @@ void DrawVadSection() {
                     if (p90 < 0.25f || (p90 - p10) < 0.10f) {
                         char buf[160];
                         snprintf(buf, sizeof(buf),
-                            "Didn't hear clear speech (peak %.2f) — kept %.2f/%.2f. "
+                            "Didn't hear clear speech (peak %.2f) - kept %.2f/%.2f. "
                             "Move closer / turn up, then retry.",
                             p90, (double)g_vadOpen.load(), (double)g_vadClose.load());
                         g_vadCalMsg = buf;
@@ -1523,7 +1523,7 @@ void DrawVadSection() {
                 if (!g_isRunning) StartAEC();
                 g_calMonitor = false;
                 if (!g_isRunning || g_vad == nullptr) {
-                    g_vadCalMsg = "Couldn't start audio — check devices / status above.";
+                    g_vadCalMsg = "Couldn't start audio - check devices / status above.";
                     g_vadCalMsgIsErr = true;
                 } else {
                     g_vadCalSamples.clear();
@@ -1536,7 +1536,7 @@ void DrawVadSection() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Starts audio if needed (you'll hear yourself),\n"
                                   "then listens 5 s while you speak. Back to idle\n"
-                                  "after — press Start to use it.");
+                                  "after - press Start to use it.");
             ImGui::SameLine();
             if (custom && ImGui::Button("Reset", ImVec2(80, 0))) {
                 g_vadOpen.store(0.50f);
@@ -1553,7 +1553,7 @@ void DrawVadSection() {
             ImGui::TextDisabled("Tip: re-calibrate after switching mic or engine.");
         }
     } else {
-        ImGui::TextDisabled("Gate is off — everything passes through unchanged.");
+        ImGui::TextDisabled("Gate is off - everything passes through unchanged.");
     }
 }
 
@@ -1621,7 +1621,7 @@ void DrawAudioTab() {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Extra cut of background hiss and fan noise on top of echo removal.\n"
-                               "Takes effect immediately — the engine restarts for a split second.\n"
+                               "Takes effect immediately - the engine restarts for a split second.\n"
                                "DTLN already removes noise itself, so this box only shows\n"
                                "for WebRTC AEC3 and NKF-AEC.");
     }
@@ -1642,7 +1642,7 @@ void DrawAudioTab() {
             ImGui::SetTooltip("WebRTC AEC3 pass after NKF: aggressive cut of the\n"
                                "echoey leftovers a strictly-linear NKF can't remove.\n"
                                "While speakers play its suppressor can sound processed\n"
-                               "or robotic — untick to hear raw NKF output (echo may\n"
+                               "or robotic - untick to hear raw NKF output (echo may\n"
                                "come back). Engine restarts briefly when toggled.\n"
                                "NKF-AEC only.");
     }
@@ -1663,7 +1663,7 @@ void DrawAudioTab() {
                                "reflections) of your voice on top of echo cancellation.\n"
                                "It also cuts noise, so the Noise reduction box is\n"
                                "skipped while this is on. Small extra CPU and ~32 ms\n"
-                               "extra delay — the engine restarts briefly when toggled.\n"
+                               "extra delay - the engine restarts briefly when toggled.\n"
                                "NKF-AEC only. Missing model file? Stage stays off.");
     }
 
@@ -1750,7 +1750,7 @@ void DrawAboutTab() {
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
     ImGui::BulletText("Three AEC engines: DTLN-AEC 128 (default), WebRTC AEC3, NKF-AEC");
-    ImGui::BulletText("Voice gate — neural speech detector pushes silence down");
+    ImGui::BulletText("Voice gate - neural speech detector pushes silence down");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -1817,7 +1817,7 @@ void DrawUI() {
             ImGui::SetTooltip(
                 "Green SPEAKING = speech going to Discord\n"
                 "Grey SILENT = gate lowered (no speech)\n"
-                "Detail lives under Audio → Voice gate");
+                "Detail lives under Audio -> Voice gate");
     }
 
     ImGui::Spacing();
@@ -1900,7 +1900,7 @@ void DrawUI() {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
                                "Reference: receiving speaker audio");
         else
-            ImGui::TextDisabled("Reference: silent (normal if nothing is playing —\n"
+            ImGui::TextDisabled("Reference: silent (normal if nothing is playing  - \n"
                                 "if speakers ARE playing, re-check Your speakers above)");
 
         ImGui::Spacing();

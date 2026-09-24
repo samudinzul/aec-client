@@ -31,7 +31,7 @@ QUICK START
 4. Pick an engine:
    - DTLN-AEC 128         recommended default: neural echo + noise (16 kHz)
    - WebRTC AEC3          strongest echo removal (16 / 48 kHz)
-   - NKF-AEC              lightest — experimental, may distort (16 kHz)
+   - NKF-AEC              lightest CPU (16 kHz)
 
 5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
    for WebRTC noise suppression on top of echo cancellation. On
@@ -54,8 +54,8 @@ QUICK START
 
 TIPS
 ----
-- CPU-sensitive? NKF-AEC is lightest (experimental); DTLN and AEC3 are
-  both moderate — all well under 2% on a typical desktop either way.
+- CPU-sensitive? NKF-AEC is lightest; DTLN and AEC3 are
+  both moderate - all well under 2% on a typical desktop either way.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
   loops your voice back into the mic — NKF adapts live and is the most
   sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
