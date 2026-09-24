@@ -49,6 +49,8 @@ No more headphones. No more echo. No dead-air noise.
   - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed)
   - **NKF-AEC** — lightest neural Kalman filter (ICASSP 2023; can distort if loopback delay drifts)
 - **Noise reduction** (AEC3 and NKF-AEC) — optional WebRTC noise suppression on top of echo cancellation, one checkbox
+- **Residual echo kill** (NKF-AEC) — post-NKF WebRTC AEC3 pass, default ON; untick to hear raw NKF
+- **Dry voice** (NKF-AEC) — optional GTCRN stage for less room reverb (off by default; ~32 ms extra delay)
 - **Low CPU usage** — under 2% on a typical desktop
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -58,7 +60,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Live level meters** with peak-hold
 - **Presets** for common scenarios (Discord, Echo-Heavy Room, Noisy Room)
 - **Clock-drift correction** — stable over long calls
-- **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz; off by default — enable under Advanced → Voice gate, then optional one-tap mic calibration)
+- **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz; **off by default** — enable under Advanced → Voice gate, then optional one-tap mic calibration)
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
@@ -74,14 +76,14 @@ No more headphones. No more echo. No dead-air noise.
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is the lightest. Optionally tick **Noise reduction** on AEC3 or NKF-AEC for WebRTC noise suppression.
+5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is the lightest. Optionally tick **Noise reduction** on AEC3 or NKF-AEC. On NKF you can also use **Residual echo kill** (default ON) and **Dry voice** (optional GTCRN dereverb).
 6. **Click Start**. Keep speakers at a moderate volume — very loud
    speakers make any canceller mistake your voice for echo (AEC3 will
    cut you mid-sentence in double-talk). If the room must be loud,
    use DTLN-AEC instead.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
-- **Input Profile**: **Voice Isolation** — one tap that turns on
+   - **Input Profile**: **Voice Isolation** — one tap that turns on
       Discord's noise cleanup. Echo is already removed by this app
       (DTLN and the optional **Noise reduction** checkbox also remove
       noise; bare AEC3/NKF-AEC are echo-only — which is exactly why
@@ -136,13 +138,15 @@ The release ZIP bundles all required DLLs:
 | `aec_gui.exe` | ~2.4 MB | Main application |
 | `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 + noise suppression |
-| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback, Silero VAD) |
+| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback, Silero, GTCRN) |
+| `tensorflowlite_c.dll` | ~4.5 MB | TFLite runtime for DTLN (primary path) |
 | `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
 | `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
 | `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
 | `models/nkf.onnx` | ~45 KB | NKF model |
-| `models/dtln_aec_128_*` | user-supplied | DTLN models (optional) |
-| `tensorflowlite_c.dll` | user-supplied | TFLite runtime for DTLN (optional) |
+| `models/dtln_aec_128_{1,2}.tflite` | ~7 MB | DTLN-AEC 128 pair (default engine) |
+| `models/silero_vad.onnx` | ~2.2 MB | Voice gate (Silero VAD) |
+| `models/gtcrn_stream.onnx` | ~0.5 MB | NKF Dry voice stage (GTCRN) |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
 
@@ -167,7 +171,7 @@ The release ZIP bundles all required DLLs:
 **Design principles:**
 
 - **No locks in audio thread** — SPSC ring buffers use atomic head/tail indices
-- **No heap allocation in audio callback** — stack buffers only
+- **No heap allocation in audio callback** — stack buffers + hoisted engine state (NKF / GTCRN / Silero; DTLN ONNX path also avoids per-block heap)
 - **Sub-10 ms gate decisions** — 512-sample VAD inference inline (< 1 ms), no worker thread
 - **Drift correction** — skips/duplicates samples if mic/speaker clocks diverge
 - **Engine abstraction** — runtime swap between 3 engines with a single enum + function pointer
@@ -216,7 +220,7 @@ The release ZIP bundles all required DLLs:
 | **[GLFW](https://www.glfw.org/)** | C | Window + OpenGL context |
 | **[OpenGL](https://www.opengl.org/)** | — | Rendering backend |
 | **[stb_image](https://github.com/nothings/stb)** | C (single-header) | Image loading for wallpapers |
-| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback, Silero VAD) |
+| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback, Silero VAD, GTCRN) |
 | **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC and DTLN-AEC |
 | **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
 
@@ -234,13 +238,15 @@ The release ZIP bundles all required DLLs:
 ### DSP Concepts
 
 - Acoustic echo cancellation via adaptive subband filtering (AEC3)
-- Neural Kalman filtering (NKF-AEC)
+- Neural Kalman filtering (NKF-AEC) with delay alignment (TDC) + residual WebRTC AEC3 stage
 - Dual-signal LSTM echo + noise cancellation (DTLN-AEC)
+- Optional streaming speech enhancement / dereverb (GTCRN “Dry voice” on NKF)
 - Optional WebRTC noise suppression (AEC3, NKF-AEC)
 - Frame buffering at 10–16 ms intervals
 - Lock-free SPSC ring buffers (audio thread ↔ UI thread)
 - Clock-drift correction (dynamic sample drop/duplicate)
 - RMS metering with peak hold + decay
+- Self-monitor loop detection (NKF: hold safe exposure while Listen-to-myself rings)
 
 ---
 
@@ -254,11 +260,17 @@ NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research m
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms
 - **CPU**: Very low
-- **Requires**: ONNX Runtime (28 MB DLL)
+- **Requires**: ONNX Runtime (28 MB DLL); optional `models/gtcrn_stream.onnx` for Dry voice
+
+Production path adds: **time-delay compensation** (cross-correlation vs loopback), staged exposure (no cold-start spikes), a **divergence guard**, a **self-monitor loop detector** (Listen-to-myself / Discord mic test), an always-on **residual WebRTC AEC3** pass (toggle **Residual echo kill**), and an optional **GTCRN Dry voice** stage.
 
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
 The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and builds to `libnkf_aec.dll` (1.3 MB).
+
+### GTCRN (Dry voice)
+
+Ultra-light streaming speech enhancement / dereverb used only as the optional NKF **Dry voice** stage (~0.5 MB ONNX, MIT, [Xiaobin-Rong/gtcrn](https://github.com/Xiaobin-Rong/gtcrn)). Off by default; fail-open if the model file is missing.
 
 ### DTLN-AEC 128
 
@@ -313,25 +325,31 @@ Produces `libnkf_aec.dll`.
 
 ### Download Models
 
+Models ship in this repo (`models/`). From a fresh clone they should already be present; restore from upstream if missing:
+
 ```bash
 mkdir -p models
 
-# NKF-AEC model is bundled in third_party/REAL_TIME_NKF_AEC/python/nkf.onnx
-cp third_party/REAL_TIME_NKF_AEC/python/nkf.onnx models/
+# NKF-AEC (bundled)
+#   models/nkf.onnx
 
-# DTLN-AEC 128 (optional — engine stays disabled until these exist)
-# Option A (preferred, upstream weights verbatim):
-#   download dtln_aec_128_1.tflite + dtln_aec_128_2.tflite from
-#   https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models
-#   into models/, plus a Windows tensorflowlite_c.dll next to aec_gui.exe
-# Option B (no new DLL): convert the pair to
-#   models/dtln_aec_128_1.onnx + models/dtln_aec_128_2.onnx
+# DTLN-AEC 128 pair (~1.9 MB + ~5.0 MB) — required for the default engine
+curl -L -o models/dtln_aec_128_1.tflite \
+  "https://raw.githubusercontent.com/breizhn/DTLN-aec/main/pretrained_models/dtln_aec_128_1.tflite"
+curl -L -o models/dtln_aec_128_2.tflite \
+  "https://raw.githubusercontent.com/breizhn/DTLN-aec/main/pretrained_models/dtln_aec_128_2.tflite"
+# Plus Windows tensorflowlite_c.dll next to aec_gui.exe (extract from a release ZIP),
+# or convert the pair to models/dtln_aec_128_{1,2}.onnx (ONNX Runtime fallback).
 
-# Silero VAD voice gate (optional — gate reports "model not found" until
-# vendored, ~2.2 MB, MIT, sha256 1a153a22… = upstream v6.2.1)
+# Silero VAD voice gate (~2.2 MB, MIT, sha256 1a153a22… = upstream v6.2.1)
 curl -L -o models/silero_vad.onnx \
   "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+
+# GTCRN Dry voice (NKF optional stage, ~0.5 MB)
+#   models/gtcrn_stream.onnx  (see MODELS.md for sha256)
 ```
+
+See [MODELS.md](MODELS.md) for sizes and SHA-256 checks.
 
 ### Build the Main App
 
@@ -364,8 +382,9 @@ aec-client/
 ├── src/
 │   ├── main.cpp                    Entry point, GUI, audio pipeline
 │   ├── aec3_wrapper.cpp/.h         WebRTC AEC3 C wrapper
-│   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper
+│   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper (+ residual AEC3, GTCRN dry stage)
 │   ├── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
+│   ├── gtcrn_wrapper.cpp/.h        GTCRN streaming wrapper (NKF Dry voice)
 │   └── silero_wrapper.cpp/.h       Silero VAD C wrapper (voice gate)
 │
 ├── include/
@@ -373,7 +392,7 @@ aec-client/
 │   └── stb_image.h                 Image loading
 │
 ├── libs/
-│   └── tensorflowlite_c.dll        TFLite runtime for DTLN (optional, user-supplied)
+│   └── tensorflowlite_c.dll        TFLite runtime for DTLN (bundled in release)
 │
 ├── third_party/
 │   ├── imgui/                      Dear ImGui source
@@ -383,8 +402,9 @@ aec-client/
 │
 ├── models/
 │   ├── nkf.onnx                    NKF model (45 KB)
-│   ├── dtln_aec_128_{1,2}.tflite|.onnx  DTLN models (user-supplied, optional)
-│   └── silero_vad.onnx             Silero VAD model (2.2 MB, user-supplied, optional)
+│   ├── dtln_aec_128_{1,2}.tflite   DTLN-AEC 128 pair (default engine)
+│   ├── silero_vad.onnx             Silero VAD model (voice gate, 2.2 MB)
+│   └── gtcrn_stream.onnx           GTCRN Dry voice model (~0.5 MB)
 │
 ├── screenshots/
 │   └── main.png                    README image
@@ -396,6 +416,7 @@ aec-client/
 ├── CMakeLists.txt                  Build configuration
 ├── scripts/
 │   ├── make-release.sh             Release bundle + zip builder
+│   ├── standardize-releases.sh     Version-keyed release notes writer
 │   └── README.txt                  End-user doc template (%%VERSION%%)
 ├── README.md                       This file
 ├── LICENSE                         MIT
@@ -418,6 +439,7 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **WebRTC Audio Processing** — Google (BSD-3)
 - **NKF-AEC** — Jiang et al., ICASSP 2023 (MIT)
 - **DTLN-AEC** — Westhausen & Meyer, ICASSP 2021 (MIT)
+- **GTCRN** — Xiaobin Rong et al. (MIT) — NKF Dry voice stage
 - **Silero VAD** — Silero Team (MIT)
 - **ONNX Runtime** — Microsoft (MIT)
 - **Dear ImGui** — Omar Cornut (MIT)
