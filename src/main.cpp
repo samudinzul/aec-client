@@ -165,21 +165,29 @@ struct Preset {
     bool  preprocess;  // retired, always false (kept for initializer shape)
     float micGain;
     float outGain;
+    bool  ns;        // Noise reduction (AEC3/NKF only; ignored on DTLN)
+    bool  dry;       // GTCRN dry voice (NKF only)
+    bool  residual;  // residual AEC3 pass (NKF only; quality default ON)
 };
 
 static const Preset PRESETS[] = {
-    { "Manual settings",      1, 1, 1, false, 1.00f, 1.00f },
-    { "Discord (recommended)",4, 0, 0, false, 1.00f, 1.00f },
+    // Manual: ApplyPreset returns early — trailing flags unused.
+    { "Manual settings",       4, 1, 1, false, 1.00f, 1.00f, false, false, true },
+    { "Discord (recommended)", 4, 0, 0, false, 1.00f, 1.00f, false, false, true },
     // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
     // means faster convergence per band where voice lives, and long
     // reverb tails are a convergence race. Full-band returns when
     // the room allows it.
-    { "Echo-Heavy Room",      1, 0, 2, false, 1.00f, 1.00f },
-    { "Noisy Room",           4, 0, 3, false, 1.20f, 1.00f },
+    { "Echo-Heavy Room",       1, 0, 2, false, 1.00f, 1.00f, false, false, true },
+    { "Noisy Room",            4, 0, 3, false, 1.20f, 1.00f, false, false, true },
+    // Bare NKF @16 kHz for busy PCs: residual AEC3 OFF (that pass is
+    // roughly a second AEC3 — NKF+residual is not cheaper than AEC3).
+    // Dry/NS off. User can re-enable residual if echo returns.
+    { "Low CPU (NKF)",         2, 0, 0, false, 1.00f, 1.00f, false, false, false },
 };
-// "High Quality" was cut (it duplicated Discord's settings and only
-// confused); "Low CPU" went with it (it duplicated the new Discord
-// NKF settings): four slots, each with a distinct config.
+// Five slots, each distinct. "High Quality" stays cut (duplicated
+// Discord). Low CPU is back as bare NKF (residual off), not a
+// duplicate of Discord.
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
 // ============================================================
@@ -539,7 +547,7 @@ void SaveSettings() {
        << g_vadClose.load() << "\n"
        << 0 << "\n"  // retired: show-legacy-engines toggle (SpeexDSP + LocalVQE nuked)
        << 0 << "\n"  // retired: nuked DEC-toggle slot (kept for file alignment)
-       << 3 << "\n"  // preset layout generation (3 = no HQ, no Low CPU)
+       << 3 << "\n"  // preset layout gen (3 = no HQ; Low CPU restored later at index 4)
        << (g_dryVoice.load() ? 1 : 0) << "\n"  // NKF dry voice (GTCRN), default OFF
        << (g_residualAec.load() ? 1 : 0) << "\n";  // NKF residual AEC3 pass, default ON
 }
@@ -711,7 +719,12 @@ void ApplyPreset(int idx) {
     g_filterLengthMs.store(filters[p.filterIdx]);
     g_enablePreprocess.store(false);  // retired: gate does the silencing
     g_micGain.store(p.micGain);
-    g_outputGain.store(1.0f);  // single visible level: output stage fixed
+    g_outputGain.store(1.00f);  // single visible level: output stage fixed
+    // NKF-related stages (ignored when engine is not NKF; kept in sync
+    // so switching away from Low CPU restores the quality defaults).
+    g_noiseReduction.store(p.ns);
+    g_dryVoice.store(p.dry);
+    g_residualAec.store(p.residual);
     g_presetIndex = idx;
 }
 
@@ -1356,7 +1369,7 @@ void DrawEngineSection() {
     static const char* kShownNames[] = {
         "DTLN-AEC 128 (recommended default)",
         "WebRTC AEC3 (strongest echo cut)",
-        "NKF-AEC (lightest CPU)"
+        "NKF-AEC (small neural core, 16 kHz)"
     };
     int comboIdx = 0;
     for (int i = 0; i < 3; i++)
@@ -1375,8 +1388,8 @@ void DrawEngineSection() {
             "DTLN-AEC 128 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
             "AEC3 = strongest echo suppression, voice sounds processed.\n"
             "Very loud speakers make it mistake your voice for echo - lower them or use DTLN\n"
-            "NKF-AEC = lightest, but a linear research engine (ICASSP 2023) that needs\n"
-            "delay alignment real-time paths lack - it can distort; kept as an option");
+            "NKF-AEC = tiny linear research engine (ICASSP 2023), needs delay alignment real-time\n"
+            "paths lack - can distort. Core is small; Residual echo kill adds a full AEC3 pass.");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -1399,7 +1412,8 @@ void DrawEngineSection() {
     if (g_engineIndex == ENGINE_AEC3) {
         ImGui::TextDisabled("AEC3 tunes itself - no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
-        ImGui::TextDisabled("Lightest engine - linear research model (ICASSP 2023) that can distort if loopback delay drifts. Runs at 16 kHz automatically.");
+        ImGui::TextDisabled("Small neural core at 16 kHz - linear research model (ICASSP 2023).");
+        ImGui::TextDisabled("Residual echo kill adds a WebRTC AEC3 pass (more CPU, better echo cut).");
     } else if (g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("Recommended default - cleanest output, neural echo + noise removal. Runs at 16 kHz automatically.");
         ImGui::TextDisabled("Needs an extra download - see About for details.");
@@ -1611,6 +1625,13 @@ void DrawAudioTab() {
                 "Changing anything by hand switches this to Manual settings.\n"
                 "Discord: use Input Profile Voice Isolation, or Custom with\n"
                 "Echo Cancellation off, Krisp noise suppression, AGC off.");
+        else if (g_presetIndex == 4)
+            ImGui::SetTooltip(
+                "One-click setups for common uses.\n"
+                "Changing anything by hand switches this to Manual settings.\n"
+                "Low CPU: bare NKF-AEC at 16 kHz, residual echo kill OFF\n"
+                "(that pass costs about as much as running AEC3 alone).\n"
+                "If echo returns, tick Residual echo kill on Audio.");
         else
             ImGui::SetTooltip("One-click setups for common uses.\n"
                               "Changing anything by hand switches this to Manual settings.");

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.8.1] — 2026-09-24
 
+### Added
+
+- **"Low CPU (NKF)" quick preset.** One click selects NKF-AEC at
+  16 kHz with **Residual echo kill OFF**, Dry voice OFF, and Noise
+  reduction OFF — bare neural Kalman core for busy PCs. The old
+  always-on residual AEC3 pass is not cheaper than standalone AEC3;
+  leave it off for CPU, tick it back on Audio if echo returns.
+  Appended as preset index 4 (no config migration; pgen stays 3).
+
 ### Changed
 
 - **Voice gate is softer and more natural.** The Silero decision is
@@ -21,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visibility as Noise reduction) instead of only under Advanced.
   Calibration, sensitivity, and Speaking/Silent status stay under
   Advanced → Voice gate.
+
+### Docs
+
+- **Corrected overstated NKF CPU claims.** README/UI no longer call
+  NKF the "lightest" engine without qualification: the paper's
+  "low complexity" is the tiny neural core vs other neural AECs, not
+  a measured win over WebRTC AEC3. Default NKF still stacks residual
+  AEC3 (toggleable since 1.8.0). Engine table, picker labels, and
+  packaged README tips now say residual-on ≈ a second AEC3 pass;
+  Low CPU preset = bare NKF. "Under 2%" applies to all engines.
 
 ## [1.8.0] — 2026-09-24
 

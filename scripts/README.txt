@@ -28,10 +28,13 @@ QUICK START
    - Speaker Reference: your physical speakers (the sound to cancel)
    - Output:            CABLE Input (VB-Audio Virtual Cable)
 
-4. Pick an engine:
+4. Pick an engine (or a Quick preset on the Audio tab):
    - DTLN-AEC 128         recommended default: neural echo + noise (16 kHz)
-   - WebRTC AEC3          strongest echo removal (16 / 48 kHz)
-   - NKF-AEC              lightest CPU (16 kHz)
+   - WebRTC AEC3          strongest echo removal (16 / 48 kHz; 48 kHz costs more CPU)
+   - NKF-AEC              small neural core (16 kHz). Residual echo kill
+                          (default ON) adds a second AEC3 pass — more CPU,
+                          better leftover echo. "Low CPU (NKF)" preset =
+                          bare NKF with residual off.
 
 5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
    for WebRTC noise suppression on top of echo cancellation. On
@@ -56,8 +59,9 @@ QUICK START
 
 TIPS
 ----
-- CPU-sensitive? NKF-AEC is lightest; DTLN and AEC3 are
-  both moderate - all well under 2% on a typical desktop either way.
+- CPU-sensitive? Try the "Low CPU (NKF)" preset (bare NKF, residual
+  echo kill off). DTLN/AEC3/NKF are all usually well under 2% on a
+  typical desktop; NKF with residual ON also runs a second AEC3 pass.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
   loops your voice back into the mic — NKF adapts live and is the most
   sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
@@ -66,6 +70,8 @@ TIPS
 - On NKF-AEC, if your voice sounds processed or robotic while the
   speakers play, untick "Residual echo kill (AEC3)" — you trade the
   aggressive leftover-echo cut for raw (rawer) NKF output.
+- On NKF-AEC, if echo gets through with Residual echo kill off, tick
+  it back on (better echo cut; costs a WebRTC AEC3 pass).
 - If your voice sounds processed or robotic on AEC3, stay on the
   default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
 - The X button minimizes to the system tray (toggle in Appearance tab).

@@ -47,18 +47,18 @@ No more headphones. No more echo. No dead-air noise.
 - **3 selectable AEC engines** in one app:
   - **DTLN-AEC 128** — recommended default: dual-LSTM echo + noise canceller (ICASSP 2021; 128 LSTM units for lower CPU)
   - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed)
-  - **NKF-AEC** — lightest neural Kalman filter (ICASSP 2023; can distort if loopback delay drifts)
+  - **NKF-AEC** — tiny neural Kalman filter core (ICASSP 2023, 45 KB model; needs delay alignment; optional Residual echo kill runs a second AEC3 pass)
 - **Noise reduction** (AEC3 and NKF-AEC) — optional WebRTC noise suppression on top of echo cancellation, one checkbox
 - **Residual echo kill** (NKF-AEC) — post-NKF WebRTC AEC3 pass, default ON; untick to hear raw NKF
 - **Dry voice** (NKF-AEC) — optional GTCRN stage for less room reverb (off by default; ~32 ms extra delay)
-- **Low CPU usage** — under 2% on a typical desktop
+- **Low CPU usage** — typically well under 2% per stream on a typical desktop (all three engines)
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
 - **Selectable sample rate** (16 / 48 kHz)
 - **Optional system tray** — runs in the background like a real utility
 - **Device filtering** — virtual cables hidden from Mic/Reference dropdowns
 - **Live level meters** with peak-hold
-- **Presets** for common scenarios (Discord, Echo-Heavy Room, Noisy Room)
+- **Presets** for common scenarios (Discord, Echo-Heavy Room, Noisy Room, Low CPU / NKF)
 - **Clock-drift correction** — stable over long calls
 - **Voice gate** — a soft neural gate keeps speech and natural breaths open and gently pushes true silence down (−12 dB) (16/48 kHz; **off by default** — tick **Push down silence** at the top of the Audio tab; optional one-tap mic calibration under Advanced → Voice gate)
 - **Wallpaper customization**
@@ -76,7 +76,7 @@ No more headphones. No more echo. No dead-air noise.
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is the lightest. Optionally tick **Noise reduction** on AEC3 or NKF-AEC. On NKF you can also use **Residual echo kill** (default ON) and **Dry voice** (optional GTCRN dereverb).
+5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is a tiny 16 kHz core (Residual echo kill adds a second AEC3 pass — leave it on for quality, off for lower CPU). Optionally tick **Noise reduction** on AEC3 or NKF-AEC. On NKF you can also use **Dry voice** (optional GTCRN dereverb). Or use the **Low CPU (NKF)** quick preset for bare NKF.
 6. **Click Start**. Keep speakers at a moderate volume — very loud
    speakers make any canceller mistake your voice for echo (AEC3 will
    cut you mid-sentence in double-talk). If the room must be loud,
@@ -120,15 +120,15 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 | Engine | Your voice | Echo removed | CPU | When to use it |
 |--------|------------|--------------|-----|----------------|
 | **DTLN-AEC 128** *(default)* | Sounds natural | Very good | Moderate | **Start here.** Cleanest overall; also removes background noise. |
-| **WebRTC AEC3** | Can sound a bit processed | Strongest | Moderate | Echo still getting through (loud speakers, echoey room). |
-| **NKF-AEC** | Usually natural | Good | Lowest | Older or busy PC — lightest on the CPU. |
+| **WebRTC AEC3** | Can sound a bit processed | Strongest | Moderate (more at 48 kHz) | Echo still getting through (loud speakers, echoey room). |
+| **NKF-AEC** | Usually natural | Good (better with residual on) | Small core; residual ON ≈ another AEC3 | Busy PC with residual off; or natural voice with residual on. |
 
 **Voice** = how natural you sound when both sides talk at once. **Echo** = how much of the other person’s speaker sound is cancelled out.
 
 **Quick pick:**
 1. Stay on **DTLN** unless something is wrong.
 2. Still hearing echo? Try **AEC3** (strongest cancellation; voice may sound cleaned up).
-3. CPU too high? Try **NKF** (lightest; can glitch if speaker delay drifts).
+3. Busy PC / want bare NKF? Try **Low CPU (NKF)** preset (residual off — enable residual if echo returns). Can glitch if speaker delay drifts.
 
 DTLN also cleans noise by itself. AEC3 and NKF can add noise removal with the **Noise reduction** checkbox. Keep speaker volume moderate — very loud speakers make any engine treat your voice as echo.
 
@@ -253,13 +253,13 @@ Settings are saved automatically. Only one copy of the app runs at a time (openi
 
 NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research model published at **ICASSP 2023** by Jiang et al. It combines classical Kalman filtering with a small neural network.
 
-- **Model size**: 45 KB (5.3K parameters)
+- **Model size**: 45 KB (~5.3K parameters — tiny *neural* core)
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms
-- **CPU**: Very low
+- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. Default **Residual echo kill ON** runs a full WebRTC AEC3 pass on top — that path costs about as much as standalone AEC3@16 kHz (or more). **Low CPU (NKF)** preset turns residual off for the cheapest NKF mode.
 - **Requires**: ONNX Runtime (28 MB DLL); optional `models/gtcrn_stream.onnx` for Dry voice
 
-Production path adds: **time-delay compensation** (cross-correlation vs loopback), staged exposure (no cold-start spikes), a **divergence guard**, a **self-monitor loop detector** (Listen-to-myself / Discord mic test), an always-on **residual WebRTC AEC3** pass (toggle **Residual echo kill**), and an optional **GTCRN Dry voice** stage.
+Production path adds: **time-delay compensation** (cross-correlation vs loopback), staged exposure (no cold-start spikes), a **divergence guard**, a **self-monitor loop detector** (Listen-to-myself / Discord mic test), a toggleable **residual WebRTC AEC3** pass (**Residual echo kill**, default ON), and an optional **GTCRN Dry voice** stage.
 
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
