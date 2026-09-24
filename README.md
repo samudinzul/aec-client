@@ -60,7 +60,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Live level meters** with peak-hold
 - **Presets** for common scenarios (Discord, Echo-Heavy Room, Noisy Room)
 - **Clock-drift correction** — stable over long calls
-- **Voice gate** — a tiny neural network pushes silence down (−12 dB), passes speech (16/48 kHz; **off by default** — enable under Advanced → Voice gate, then optional one-tap mic calibration)
+- **Voice gate** — a soft neural gate keeps speech and natural breaths open and gently pushes true silence down (−12 dB) (16/48 kHz; **off by default** — tick **Push down silence** at the top of the Audio tab; optional one-tap mic calibration under Advanced → Voice gate)
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
@@ -105,12 +105,12 @@ Done. Talk normally with speakers on.
 
 ## Voice Gate
 
-After echo cancellation, a tiny neural network checks for speech many times a second. Speech passes to Discord; silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence** under Advanced → Voice gate to enable. No recording; one-tap calibration optional.
+After echo cancellation, a tiny neural network checks for speech many times a second. Speech and natural breath pauses pass through on a soft knee; only true silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence (neural voice detector)** at the top of the Audio tab to enable. No recording; one-tap calibration optional under Advanced → Voice gate.
 
 - Green **SPEAKING** pill at the top = speech going out (only when the gate is on). Grey **SILENT** = pushed down.
 - It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
 - Uncheck **Push down silence** in the Audio tab to pass original audio through.
-- **Calibrate for my mic** (under Voice gate, idle or running): starts audio if needed (you'll hear yourself, live meters, no CABLE needed), you speak normally 5 s, then back to idle — press Start to use it. Sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
+- **Calibrate for my mic** (Advanced → Voice gate, idle or running): starts audio if needed (you'll hear yourself, live meters, no CABLE needed), you speak normally 5 s, then back to idle — press Start to use it. Sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
 - Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — NKF and DTLN run at 16000 (locked); AEC3 offers 16000 or 48000.
 
 ---

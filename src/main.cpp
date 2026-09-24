@@ -47,7 +47,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.8.0"
+#define APP_VERSION "1.8.1"
 
 // ============================================================
 //  Single-instance protection
@@ -195,7 +195,7 @@ EngineState g_engine;
 //  UI only reads the atomics.
 // ============================================================
 SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
-std::atomic<bool>  g_vadEnabled{ false }; // default OFF (opt-in under Advanced)
+std::atomic<bool>  g_vadEnabled{ false }; // default OFF (opt-in, top of Audio tab)
 std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
 std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
 std::atomic<float> g_vadOpen{ 0.50f };    // calibrated open threshold (persisted)
@@ -209,7 +209,8 @@ bool               g_vadCalWasRunning = false;  // restore idle after auto-start
 bool               g_calMonitor = false;  // one-shot: next StartAEC routes to speakers (calibration monitor)
 #define VAD_CAL_SECONDS 5
 float              g_vadGain = 1.0f;      // audio thread only
-int                g_vadHang = 0;         // audio thread only (500 ms hangover)
+float              g_vadSmooth = 0.0f;    // audio thread only (EMA of Silero prob)
+int                g_vadHang = 0;         // audio thread only (800 ms hangover)
 int                g_vadCloseVotes = 0;   // audio thread only (debounced release)
 ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
@@ -670,7 +671,7 @@ void ResetToDefaults() {
     g_dryVoice.store(false);        // default OFF (opt-in CPU cost)
     g_residualAec.store(true);      // default ON (aggressive echo kill)
     g_minimizeToTray = true;
-    g_vadEnabled.store(false);   // default OFF (opt-in under Advanced)
+    g_vadEnabled.store(false);   // default OFF (opt-in, top of Audio tab)
     g_vadOpen.store(0.50f);
     g_vadClose.store(0.30f);
     g_vadCalibrating.store(false);
@@ -764,6 +765,7 @@ static void VadReset() {
         g_vadResamplerReady = false;
     }
     g_vadGain = 1.0f;
+    g_vadSmooth = 0.0f;
     g_vadHang = 0;
     g_vadCloseVotes = 0;
     g_vadProb.store(0.0f);
@@ -772,12 +774,15 @@ static void VadReset() {
 // Audio-thread gate. Called from output_callback after AEC, before
 // metering so meters show what Discord hears. Lock-free, no allocation.
 // Detector (Silero, 32 ms cadence) feeds calibrated open/close lines.
-// Same pair on every engine. Anti-ducking: -12 dB silence floor (never
-// mute), debounced release, 500 ms hangover against clipping tails.
+// Same pair on every engine. Soft gate: EMA-smoothed prob maps through
+// a close->open knee to a target gain; anti-ducking -12 dB floor (never
+// mute), 800 ms hangover, ~160 ms close debounce against fricatives
+// and natural breath pauses.
 static void VadGateApply(int16_t* cleaned, int fs) {
     int sr = g_sampleRate.load();
     if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
         g_vadGain = 1.0f;
+        g_vadSmooth = 0.0f;
         g_vadHang = 0;
         g_vadCloseVotes = 0;
         return;
@@ -795,6 +800,7 @@ static void VadGateApply(int16_t* cleaned, int fs) {
                 ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
             if (ma_data_converter_init(&cfg, NULL, &g_vadResampler) != MA_SUCCESS) {
                 g_vadGain = 1.0f;
+                g_vadSmooth = 0.0f;
                 g_vadHang = 0;
                 g_vadCloseVotes = 0;
                 return;  // fail-open
@@ -810,11 +816,11 @@ static void VadGateApply(int16_t* cleaned, int fs) {
         feed = fbuf16;
         feedN = (int)outCount;
     }
-    static float lastProb = 0.0f;
     float prob = 0.0f;
     auto t0 = Clock::now();
     if (SileroPush(g_vad, feed, feedN, &prob)) {
-        lastProb = prob;
+        // EMA smooth: kill single-frame flicker that chops s/f/th.
+        g_vadSmooth += (prob - g_vadSmooth) * 0.35f;
         g_vadProb.store(prob);
         float ms = (float)std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - t0).count() / 1000.0f;
@@ -823,37 +829,48 @@ static void VadGateApply(int16_t* cleaned, int fs) {
     // Calibrated hysteresis (defaults 0.50/0.30). One-tap calibration
     // rewrites these from measured speech/silence probs — never drifting
     // mid-call, so the v1.3.1 adaptive-mute failure can't recur.
-    // Anti-ducking dynamics: silence falls to a -12 dB floor (never
-    // mute, so gain swings stay small), release needs ~160 ms of firm
-    // "silent" before fading (flicker holds instead of chopping),
-    // 500 ms hangover keeps endings/pauses, and the uncertain band
-    // leans gently open so onsets are partway through at trip time.
+    // Soft-knee dynamics: smoothed prob between close and open maps to a
+    // target gain in [floor, 1.0] (partial attenuation through weak speech
+    // and breaths). Above open -> full open; below close after hangover +
+    // ~160 ms debounce -> floor. 800 ms hangover keeps endings/pauses.
     const float kVadOpen = g_vadOpen.load(), kVadClose = g_vadClose.load();
     static const float kVadFloor = 0.25f;  // -12 dB silence shelf
-    static const int kCloseVotesNeed = 5;  // consecutive close frames before fade
-    if (lastProb >= kVadOpen) {
-        g_vadHang = 50;
+    static const int   kHangFrames = 80;   // 800 ms hangover @ 10 ms frames
+    static const int   kCloseVotesNeed = 16;  // ~160 ms firm silent before release
+    float sm = g_vadSmooth;
+    float target = 1.0f;
+    if (sm >= kVadOpen) {
+        g_vadHang = kHangFrames;
         g_vadCloseVotes = 0;
-        g_vadGain += (1.0f - g_vadGain) * 0.5f;
-        if (g_vadGain > 0.99f) g_vadGain = 1.0f;
-    } else if (lastProb <= kVadClose) {
+        target = 1.0f;
+    } else if (sm <= kVadClose) {
         if (g_vadHang > 0) {
             g_vadHang--;
+            target = 1.0f;  // hangover holds full open through short breaths
         } else if (++g_vadCloseVotes >= kCloseVotesNeed) {
-            g_vadGain += (kVadFloor - g_vadGain) * 0.15f;
-            if (g_vadGain < kVadFloor + 0.01f) g_vadGain = kVadFloor;
+            target = kVadFloor;
+        } else {
+            target = g_vadGain;  // debouncing — hold, don't chop on flicker
         }
-        // else: debouncing — hold, don't chop on flicker
     } else {
-        // Uncertain band (prob ramping at an onset, or dipping
-        // mid-speech): cancel any pending fade, hold the hangover,
-        // lean gently open. True silence still reads below the close
-        // line and shelves to the floor as before.
+        // Soft knee: map close->open to floor->1.0 (smoothstep).
         g_vadCloseVotes = 0;
         if (g_vadHang > 0) g_vadHang--;
-        g_vadGain += (1.0f - g_vadGain) * 0.04f;
-        if (g_vadGain > 0.99f) g_vadGain = 1.0f;
+        float t = (sm - kVadClose) / (kVadOpen - kVadClose);
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        target = kVadFloor + (1.0f - kVadFloor) * (t * t * (3.0f - 2.0f * t));
+        if (g_vadHang > 0) {
+            // Still inside hangover: bias toward open so onsets/breaths
+            // recover without waiting for the knee to climb.
+            if (target < 1.0f) target = 1.0f - (1.0f - target) * 0.5f;
+        }
     }
+    // Gentler attack / release than the old hard branches.
+    float coeff = (target > g_vadGain) ? 0.35f : 0.10f;
+    g_vadGain += (target - g_vadGain) * coeff;
+    if (g_vadGain > 0.99f) g_vadGain = 1.0f;
+    if (g_vadGain < kVadFloor + 0.01f && target <= kVadFloor) g_vadGain = kVadFloor;
     if (g_vadGain < 1.0f) {
         for (int i = 0; i < fs; i++)
             cleaned[i] = clamp_s16((int)((float)cleaned[i] * g_vadGain));
@@ -1411,20 +1428,13 @@ void DrawGainsSection() {
 void DrawVadSection() {
     ImGui::SeparatorText("Voice gate");
 
-    bool enabled = g_vadEnabled.load();
-    if (ImGui::Checkbox("Push down silence (neural voice detector)", &enabled)) {
-        g_vadEnabled.store(enabled);
-        SaveSettings();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "After echo removal, the app listens for speech many times a second.\n"
-            "Speech passes through; silence is pushed down (-12 dB). No setup, no recording.");
+    // Enable checkbox lives at the top of the Audio tab (always visible).
+    // This section keeps status + calibration detail behind Advanced.
 
     if (!g_vad) {
         ImGui::TextDisabled("Voice detector is missing its data file - gate is off.");
         ImGui::TextDisabled("Reinstall the app or see About for details.");
-    } else if (enabled) {
+    } else if (g_vadEnabled.load()) {
         float prob = g_vadProb.load();
         float open = g_vadOpen.load();
         DrawInlineDot(prob >= open);
@@ -1664,7 +1674,23 @@ void DrawAudioTab() {
                                "It also cuts noise, so the Noise reduction box is\n"
                                "skipped while this is on. Small extra CPU and ~32 ms\n"
                                "extra delay - the engine restarts briefly when toggled.\n"
-                               "NKF-AEC only. Missing model file? Stage stays off.");
+                                "NKF-AEC only. Missing model file? Stage stays off.");
+    }
+
+    // Voice gate: soft neural detector at the top of Audio (not behind
+    // Advanced) so it is one click away. Live atomic toggle — no engine
+    // restart. Calibration/status stay under Advanced -> Voice gate.
+    {
+        bool vg = g_vadEnabled.load();
+        if (ImGui::Checkbox("Push down silence (neural voice detector)", &vg)) {
+            g_vadEnabled.store(vg);
+            SaveSettings();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "After echo removal, a soft neural gate keeps speech and natural\n"
+                "breaths open and gently pushes true silence down (-12 dB).\n"
+                "No setup, no recording. Calibrate under Advanced -> Voice gate.");
     }
 
     ImGui::Spacing();
@@ -1817,7 +1843,7 @@ void DrawUI() {
             ImGui::SetTooltip(
                 "Green SPEAKING = speech going to Discord\n"
                 "Grey SILENT = gate lowered (no speech)\n"
-                "Detail lives under Audio -> Voice gate");
+                "Toggle on Audio; detail under Advanced -> Voice gate");
     }
 
     ImGui::Spacing();

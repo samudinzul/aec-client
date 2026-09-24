@@ -38,9 +38,11 @@ QUICK START
    NKF-AEC you can also tick "Dry voice (room reverb)" for a drier
    mic with less room echo (small extra CPU, ~32 ms extra delay).
 
-6. Click Start. Optional: under Advanced → Voice gate, tick "Push down
-   silence" — the green SPEAKING pill then means speech is going out and
-   grey SILENT means silence is pushed down. The gate is OFF by default.
+6. Click Start. Optional: tick "Push down silence (neural voice
+   detector)" at the top of the Audio tab — the green SPEAKING pill
+   then means speech is going out and grey SILENT means silence is
+   pushed down. Soft gate keeps breaths natural. OFF by default.
+   Calibrate under Advanced -> Voice gate.
 
 7. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)

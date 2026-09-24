@@ -5,6 +5,23 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] — 2026-09-24
+
+### Changed
+
+- **Voice gate is softer and more natural.** The Silero decision is
+  EMA-smoothed and mapped through a close→open soft knee, so weak
+  speech, fricatives (`s`/`f`/`th`), and natural breath pauses only
+  partially duck instead of snapping. Hangover extended 500→800 ms;
+  close debounce fixed to ~160 ms (was 50 ms despite the comment);
+  gentler attack/release ramps. Still a −12 dB floor — never hard
+  mute. Fail-open, lock-free, and the no-mid-call-threshold-drift
+  contract are unchanged.
+- **"Push down silence" is now at the top of the Audio tab** (same
+  visibility as Noise reduction) instead of only under Advanced.
+  Calibration, sensitivity, and Speaking/Silent status stay under
+  Advanced → Voice gate.
+
 ## [1.8.0] — 2026-09-24
 
 ### Added
