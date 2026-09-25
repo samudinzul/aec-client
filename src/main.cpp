@@ -815,10 +815,13 @@ static void VadReset() {
 // Audio-thread gate. Called from output_callback after AEC, before
 // metering so meters show what Discord hears. Lock-free, no allocation.
 // Detector (Silero, 32 ms cadence) feeds calibrated open/close lines.
-// Same pair on every engine. Soft gate: EMA-smoothed prob maps through
-// a close->open knee to a target gain; anti-ducking -12 dB floor (never
-// mute), 800 ms hangover, ~160 ms close debounce against fricatives
-// and natural breath pauses.
+// Same pair on every engine. Soft gate: asymmetrically EMA-smoothed
+// prob (fast rise / slow fall) maps through a close->open knee to a
+// target gain — breaths and weak speech never drop below -5 dB, only
+// firm silence (hangover gone + ~160 ms debounce) reaches the -12 dB
+// shelf (never mute). Fast attack (~30-40 ms) so onsets are never
+// cut, slow release so mid-speech dips glide; 800 ms hangover keeps
+// endings and natural breath pauses wide open.
 // DUAL FEED (Silero's RNN is stateful, so each stream gets its own
 // handle — interleaving two streams through one state would corrupt
 // both):
@@ -931,8 +934,11 @@ static void VadGateApply(int16_t* cleaned, const int16_t* mic,
     if (okClean) prob = pClean;
     if (okMic && pMic > prob) prob = pMic;  // mic arm is pre-gated by ref
     if (prob >= 0.0f) {
-        // EMA smooth: kill single-frame flicker that chops s/f/th.
-        g_vadSmooth += (prob - g_vadSmooth) * 0.35f;
+        // Asymmetric EMA: fast rise (speech onsets register
+        // immediately), slow fall (a single low frame — fricative,
+        // mic bump — can't yank the decision down).
+        g_vadSmooth += (prob - g_vadSmooth) * ((prob > g_vadSmooth) ? 0.45f
+                                                                    : 0.20f);
         g_vadProb.store(prob);
     }
     // Gate off: detector state stays live for NearEndProtect, but no gain.
@@ -946,11 +952,13 @@ static void VadGateApply(int16_t* cleaned, const int16_t* mic,
     // rewrites these from measured speech/silence probs — never drifting
     // mid-call, so the v1.3.1 adaptive-mute failure can't recur.
     // Soft-knee dynamics: smoothed prob between close and open maps to a
-    // target gain in [floor, 1.0] (partial attenuation through weak speech
-    // and breaths). Above open -> full open; below close after hangover +
-    // ~160 ms debounce -> floor. 800 ms hangover keeps endings/pauses.
+    // target gain in [knee-floor, 1.0] — breaths and weak speech stay
+    // mostly open (never below -5 dB). Above open -> full open; below
+    // close after hangover + ~160 ms debounce -> -12 dB shelf. 800 ms
+    // hangover keeps endings/pauses at full open.
     const float kVadOpen = g_vadOpen.load(), kVadClose = g_vadClose.load();
-    static const float kVadFloor = 0.25f;  // -12 dB silence shelf
+    static const float kVadFloor = 0.25f;      // -12 dB true-silence shelf
+    static const float kVadKneeFloor = 0.55f;  // -5 dB: breaths barely ducked
     static const int   kHangFrames = 80;   // 800 ms hangover @ 10 ms frames
     static const int   kCloseVotesNeed = 16;  // ~160 ms firm silent before release
     float sm = g_vadSmooth;
@@ -969,21 +977,27 @@ static void VadGateApply(int16_t* cleaned, const int16_t* mic,
             target = g_vadGain;  // debouncing — hold, don't chop on flicker
         }
     } else {
-        // Soft knee: map close->open to floor->1.0 (smoothstep).
+        // Soft knee: map close->open to knee-floor->1.0 (smoothstep).
+        // Weak speech/breaths land here and stay mostly open; only
+        // firm silence (below close, hangover gone, debounced) reaches
+        // the -12 dB shelf.
         g_vadCloseVotes = 0;
         if (g_vadHang > 0) g_vadHang--;
         float t = (sm - kVadClose) / (kVadOpen - kVadClose);
         if (t < 0.0f) t = 0.0f;
         if (t > 1.0f) t = 1.0f;
-        target = kVadFloor + (1.0f - kVadFloor) * (t * t * (3.0f - 2.0f * t));
+        target = kVadKneeFloor +
+                 (1.0f - kVadKneeFloor) * (t * t * (3.0f - 2.0f * t));
         if (g_vadHang > 0) {
             // Still inside hangover: bias toward open so onsets/breaths
             // recover without waiting for the knee to climb.
             if (target < 1.0f) target = 1.0f - (1.0f - target) * 0.5f;
         }
     }
-    // Gentler attack / release than the old hard branches.
-    float coeff = (target > g_vadGain) ? 0.35f : 0.10f;
+    // Fast attack (onsets reach full open in ~30-40 ms — the start of
+    // speech is never cut), slow release (mid-speech dips glide, not
+    // snap).
+    float coeff = (target > g_vadGain) ? 0.60f : 0.08f;
     g_vadGain += (target - g_vadGain) * coeff;
     if (g_vadGain > 0.99f) g_vadGain = 1.0f;
     if (g_vadGain < kVadFloor + 0.01f && target <= kVadFloor) g_vadGain = kVadFloor;

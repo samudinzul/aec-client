@@ -5,6 +5,18 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] — Unreleased
+
+### Changed
+
+- **Voice gate: smoother, breathier (field-test follow-up).** The
+  gate now opens within ~40 ms (speech onsets are never cut), closes
+  only by gliding (slow release + asymmetric decision smoothing — a
+  single low frame can't yank it down), and the knee keeps breaths
+  and weak speech at about −2 to −5 dB instead of dragging them
+  toward the shelf. The −12 dB silence shelf and 800 ms hangover are
+  unchanged: only firm, sustained silence is pushed down.
+
 ## [1.9.0] — 2026-09-25
 
 ### Added

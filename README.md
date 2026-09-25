@@ -106,7 +106,7 @@ Done. Talk normally with speakers on.
 
 ## Voice Gate
 
-After echo cancellation, a tiny neural network checks for speech many times a second. Speech and natural breath pauses pass through on a soft knee; only true silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence (neural voice detector)** at the top of the Audio tab to enable. No recording; one-tap calibration optional under Advanced → Voice gate.
+After echo cancellation, a tiny neural network checks for speech many times a second. Speech, breaths and natural pauses pass through on a soft knee — weak speech stays within a few dB and the gate opens within ~40 ms so word onsets are never cut; only firm, sustained silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence (neural voice detector)** at the top of the Audio tab to enable. No recording; one-tap calibration optional under Advanced → Voice gate.
 
 - Green **SPEAKING** pill at the top = speech going out (only when the gate is on). Grey **SILENT** = pushed down.
 - Two detector feeds share the decision: the cleaned output (the engine strips the speaker's playback, so **loud speakers can't mask you**) and the raw mic when the speakers are quiet (so engine processing can't fool it either). The gentle ducking applies to the cleaned output.
