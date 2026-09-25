@@ -55,8 +55,13 @@ Aec3Handle* Aec3New(int sampleRate, int frameSize, bool nsEnabled) {
 
 void Aec3CancelEcho(Aec3Handle* h, const int16_t* mic, const int16_t* ref,
                     int16_t* out, int frameSize) {
-    if (!h || !h->apm) return;
-    if (frameSize != h->frameSize) return;   // must match
+    // Fail-open: unusable handle or mismatched frame ships mic, never
+    // silence (a dead handle must not cut the voice mid-call).
+    if (!h || !h->apm || frameSize != h->frameSize) {
+        if (out && mic && frameSize > 0)
+            memcpy(out, mic, (size_t)frameSize * sizeof(int16_t));
+        return;
+    }
 
     // int16 -> float [-1, 1]
     for (int i = 0; i < frameSize; i++) {

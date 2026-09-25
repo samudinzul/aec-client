@@ -47,7 +47,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.8.1"
+#define APP_VERSION "1.9.0"
 
 // ============================================================
 //  Single-instance protection
@@ -166,27 +166,25 @@ struct Preset {
     float micGain;
     float outGain;
     bool  ns;        // Noise reduction (AEC3/NKF only; ignored on DTLN)
-    bool  dry;       // GTCRN dry voice (NKF only)
-    bool  residual;  // residual AEC3 pass (NKF only; quality default ON)
+    bool  wpe;       // WPE dereverb post-filter (NKF only)
 };
 
 static const Preset PRESETS[] = {
     // Manual: ApplyPreset returns early — trailing flags unused.
-    { "Manual settings",       4, 1, 1, false, 1.00f, 1.00f, false, false, true },
-    { "Discord (recommended)", 4, 0, 0, false, 1.00f, 1.00f, false, false, true },
+    { "Manual settings",       4, 1, 1, false, 1.00f, 1.00f, false, true },
+    { "Discord (recommended)", 4, 0, 0, false, 1.00f, 1.00f, false, true },
     // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
     // means faster convergence per band where voice lives, and long
     // reverb tails are a convergence race. Full-band returns when
     // the room allows it.
-    { "Echo-Heavy Room",       1, 0, 2, false, 1.00f, 1.00f, false, false, true },
-    { "Noisy Room",            4, 0, 3, false, 1.20f, 1.00f, false, false, true },
-    // Bare NKF @16 kHz for busy PCs: residual AEC3 OFF (that pass is
-    // roughly a second AEC3 — NKF+residual is not cheaper than AEC3).
-    // Dry/NS off. User can re-enable residual if echo returns.
-    { "Low CPU (NKF)",         2, 0, 0, false, 1.00f, 1.00f, false, false, false },
+    { "Echo-Heavy Room",       1, 0, 2, false, 1.00f, 1.00f, false, true },
+    { "Noisy Room",            4, 0, 3, false, 1.20f, 1.00f, false, true },
+    // Bare NKF @16 kHz for busy PCs: NS + dereverb (WPE) off — the
+    // cheapest NKF path (WPE is real FFT/filter work per frame).
+    { "Low CPU (NKF)",         2, 0, 0, false, 1.00f, 1.00f, false, false },
 };
 // Five slots, each distinct. "High Quality" stays cut (duplicated
-// Discord). Low CPU is back as bare NKF (residual off), not a
+// Discord). Low CPU is back as bare NKF (NS/WPE off), not a
 // duplicate of Discord.
 const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -226,6 +224,11 @@ ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
 ma_context g_context;
 static bool g_contextInitialized = false;
 const int MAX_FRAME_SIZE = 480;
+// Last emitted output frame (audio thread only) — fail-open gaps fade
+// from it instead of hard-muting (10 ms holes are audible clicks).
+int16_t            g_lastOutFrame[MAX_FRAME_SIZE];
+int                g_lastOutLen = 0;
+bool               g_lastOutValid = false;
 SpscRing<4096> g_micRing, g_refRing;
 bool g_isRunning = false;
 Clock::time_point g_sessionStart;
@@ -235,8 +238,7 @@ std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
 std::atomic<bool>  g_noiseReduction{ false };  // WebRTC NS Moderate on AEC3 + NKF; hidden on DTLN
-std::atomic<bool>  g_dryVoice{ false };        // GTCRN dry-voice stage; NKF only, default OFF
-std::atomic<bool>  g_residualAec{ true };      // post-NKF AEC3 pass; NKF only, default ON
+std::atomic<bool>  g_wpe{ true };             // WPE dereverb post-filter; NKF only, default ON
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -547,9 +549,8 @@ void SaveSettings() {
        << g_vadClose.load() << "\n"
        << 0 << "\n"  // retired: show-legacy-engines toggle (SpeexDSP + LocalVQE nuked)
        << 0 << "\n"  // retired: nuked DEC-toggle slot (kept for file alignment)
-       << 3 << "\n"  // preset layout gen (3 = no HQ; Low CPU restored later at index 4)
-       << (g_dryVoice.load() ? 1 : 0) << "\n"  // NKF dry voice (GTCRN), default OFF
-       << (g_residualAec.load() ? 1 : 0) << "\n";  // NKF residual AEC3 pass, default ON
+       << 4 << "\n"  // config gen (4 = v1.9: dry/residual retired, WPE added)
+       << (g_wpe.load() ? 1 : 0) << "\n";  // NKF WPE dereverb, default ON
 }
 
 void LoadSettings() {
@@ -645,12 +646,18 @@ void LoadSettings() {
             else if (g_presetIndex == 4) g_presetIndex = 3;
         }
         if (g_presetIndex < 0 || g_presetIndex >= PRESET_COUNT) g_presetIndex = 1;
-        // New field — NKF dry voice (GTCRN), default OFF if missing
-        int der = 0;
-        if (f >> der) g_dryVoice.store(der != 0);
-        // New field — NKF residual AEC3 pass, default ON if missing
-        int ra = 1;
-        if (f >> ra) g_residualAec.store(ra != 0);
+        if (pgen >= 4) {
+            // Config gen 4: NKF WPE dereverb (default ON if missing).
+            int wpf = 1;
+            if (f >> wpf) g_wpe.store(wpf != 0);
+        } else {
+            // Gen ≤3 files carry retired dry/residual slots here — read
+            // to stay aligned, keep WPE on its ON default.
+            int skip = 0;
+            if (f >> skip) { (void)skip; }
+            if (f >> skip) { (void)skip; }
+            g_wpe.store(true);
+        }
     }
 }
 
@@ -676,8 +683,7 @@ void ResetToDefaults() {
     g_presetIndex = 1;
     g_preprocessEnabled = false;
     g_noiseReduction.store(false);  // default OFF; retired preprocess slot carries it
-    g_dryVoice.store(false);        // default OFF (opt-in CPU cost)
-    g_residualAec.store(true);      // default ON (aggressive echo kill)
+    g_wpe.store(true);              // default ON (NKF dereverb post-filter)
     g_minimizeToTray = true;
     g_vadEnabled.store(false);   // default OFF (opt-in, top of Audio tab)
     g_vadOpen.store(0.50f);
@@ -723,8 +729,7 @@ void ApplyPreset(int idx) {
     // NKF-related stages (ignored when engine is not NKF; kept in sync
     // so switching away from Low CPU restores the quality defaults).
     g_noiseReduction.store(p.ns);
-    g_dryVoice.store(p.dry);
-    g_residualAec.store(p.residual);
+    g_wpe.store(p.wpe);
     g_presetIndex = idx;
 }
 
@@ -753,9 +758,7 @@ void ReinitEngine() {
         g_engine.type = ENGINE_AEC3;
     } else if (eng == ENGINE_NKF) {
         g_engine.nkf = NkfNew("models/nkf.onnx", g_noiseReduction.load(),
-                              g_dryVoice.load() ? "models/gtcrn_stream.onnx"
-                                                : nullptr,
-                              g_residualAec.load());
+                              g_wpe.load());
         g_engine.type = ENGINE_NKF;
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_128");
@@ -791,9 +794,15 @@ static void VadReset() {
 // a close->open knee to a target gain; anti-ducking -12 dB floor (never
 // mute), 800 ms hangover, ~160 ms close debounce against fricatives
 // and natural breath pauses.
-static void VadGateApply(int16_t* cleaned, int fs) {
+// The detector reads the RAW mic (not the cleaned signal): the gate
+// must judge "is the person talking" from what they said, not from
+// what the AEC/gate already did to it — loud-speaker sessions where
+// the chain heavily ducks output still see full speech probability.
+// Silero runs even when the gate checkbox is off (the near-end
+// protector needs the speech flag); only the gain stage is gated.
+static void VadGateApply(int16_t* cleaned, const int16_t* mic, int fs) {
     int sr = g_sampleRate.load();
-    if (!g_vad || (sr != 16000 && sr != 48000) || !g_vadEnabled.load()) {
+    if (!g_vad || (sr != 16000 && sr != 48000)) {
         g_vadGain = 1.0f;
         g_vadSmooth = 0.0f;
         g_vadHang = 0;
@@ -801,7 +810,7 @@ static void VadGateApply(int16_t* cleaned, int fs) {
         return;
     }
     static float fbuf[MAX_FRAME_SIZE];
-    for (int i = 0; i < fs; i++) fbuf[i] = cleaned[i] / 32768.0f;
+    for (int i = 0; i < fs; i++) fbuf[i] = mic[i] / 32768.0f;
     // Silero eats 16 kHz: direct at 16 kHz, miniaudio downsample at 48 kHz
     // (proven: resampled feed scores 0.945/0.008 vs native 0.956/0.010).
     static float fbuf16[192];
@@ -838,6 +847,13 @@ static void VadGateApply(int16_t* cleaned, int fs) {
         float ms = (float)std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - t0).count() / 1000.0f;
         g_vadMs.store(ms);
+    }
+    // Gate off: detector state stays live for NearEndProtect, but no gain.
+    if (!g_vadEnabled.load()) {
+        g_vadGain = 1.0f;
+        g_vadHang = 0;
+        g_vadCloseVotes = 0;
+        return;
     }
     // Calibrated hysteresis (defaults 0.50/0.30). One-tap calibration
     // rewrites these from measured speech/silence probs — never drifting
@@ -891,6 +907,87 @@ static void VadGateApply(int16_t* cleaned, int fs) {
 }
 
 // ============================================================
+//  Near-end protector — voice is never cut, all engines
+// ============================================================
+// The AEC/gate chain can duck the voice hard on loud-speaker sessions.
+// While Silero says the near end is speaking, cap the reduction: if
+// post-gate output energy sits more than 15 dB below the raw mic,
+// blend a little dry mic back in (attack ~1 frame, release ~200 ms).
+// Engine-agnostic (AEC3/NKF/DTLN), runs after the gate, before meters
+// so meters show what Discord hears. Lock-free, no allocation.
+static float g_protEnvMic = 0.0f;   // EMA of per-frame mic mean-square
+static float g_protEnvOut = 0.0f;   // EMA of per-frame output mean-square
+static float g_protBlend  = 0.0f;   // current mic blend (0 .. ~0.178)
+
+static void NearEndProtect(int16_t* cleaned, const int16_t* mic, int fs) {
+    // Detector state is valid even with the gate checkbox off (the
+    // Silero feed keeps running whenever the model + rate allow) —
+    // the protector must not depend on the gate being on, or the
+    // default configuration would ship no protection at all.
+    const bool speech = g_vadSmooth >= g_vadClose.load() * 0.75f;
+    if (!g_vad || !speech) {
+        // Release the blend smoothly instead of snapping.
+        g_protBlend += (0.0f - g_protBlend) * 0.05f;
+        if (g_protBlend < 0.001f) { g_protBlend = 0.0f; return; }
+    } else {
+        double m = 0, o = 0;
+        for (int i = 0; i < fs; i++) {
+            m += (double)mic[i] * mic[i];
+            o += (double)cleaned[i] * cleaned[i];
+        }
+        m /= fs; o /= fs;
+        g_protEnvMic += 0.2f * ((float)m - g_protEnvMic);
+        g_protEnvOut += 0.2f * ((float)o - g_protEnvOut);
+        static const float kCap = 0.1778f;  // -15 dB floor on out/mic
+        float target = 0.0f;
+        if (g_protEnvMic > 1.0f) {
+            float r = g_protEnvOut / g_protEnvMic;
+            if (r < kCap && r < 1.0f)
+                target = (kCap - r) / (1.0f - r);  // max ~17.8% mic
+        }
+        // Attack ~1 frame toward protection, ~200 ms release.
+        float coeff = (target > g_protBlend) ? 0.5f : 0.05f;
+        g_protBlend += (target - g_protBlend) * coeff;
+        if (g_protBlend < 0.001f) g_protBlend = 0.0f;
+    }
+    if (g_protBlend <= 0.0f) return;
+    const float a = g_protBlend;
+    for (int i = 0; i < fs; i++) {
+        float v = (float)cleaned[i] + ((float)mic[i] - (float)cleaned[i]) * a;
+        cleaned[i] = clamp_s16((int)v);
+    }
+}
+
+// Soft limiter for the final gain stage: linear to -3 dBFS, tanh knee
+// to full scale above it. Hard clamp stays as last-resort safety.
+static inline int16_t SoftLimit(float v) {
+    static const float kKnee = 0.7079f;  // -3 dBFS
+    float a = fabsf(v);
+    if (a <= kKnee) return clamp_s16((int)(v * 32768.0f));
+    // Map [knee, inf) -> [knee, 1) with tanh, then clamp.
+    float y = kKnee + (1.0f - kKnee) * tanhf((a - kKnee) / (1.0f - kKnee));
+    if (v < 0.0f) y = -y;
+    return clamp_s16((int)(y * 32768.0f));
+}
+
+// Fail-open gap: emit the last good frame fading to silence instead of
+// a hard mute (10 ms of zeros is an audible click on every starve).
+// The fade lands at ~0, so a following gap may hard-zero inaudibly.
+static void EmitFading(int16_t* out, ma_uint32 frameCount) {
+    if (g_lastOutValid && g_lastOutLen > 0) {
+        for (ma_uint32 i = 0; i < frameCount; i++) {
+            int16_t s = (i < (ma_uint32)g_lastOutLen) ? g_lastOutFrame[i] : 0;
+            float fade = 1.0f - (float)i / (float)(frameCount ? frameCount : 1);
+            out[i] = clamp_s16((int)((float)s * fade));
+        }
+    } else {
+        memset(out, 0, frameCount * sizeof(int16_t));
+    }
+    g_lastOutLen = 0;
+    g_lastOutValid = false;
+}
+
+// ============================================================
 //  Audio callbacks
 // ============================================================
 void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
@@ -904,7 +1001,7 @@ void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCou
 void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
     int16_t* out = (int16_t*)pOutput;
     int fs = frameSizeForRate(g_sampleRate.load());
-    if ((int)frameCount != fs) { memset(out, 0, frameCount * sizeof(int16_t)); return; }
+    if ((int)frameCount != fs) { EmitFading(out, frameCount); return; }
 
     const size_t DRIFT_TARGET = (size_t)fs * 2;
     const size_t DRIFT_THRESHOLD = (size_t)fs / 16;
@@ -920,7 +1017,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // the speakers; monitor sessions never starved because they always
     // drive the speakers — same bug, masked.)
     if (g_micRing.available() < (size_t)fs) {
-        memset(out, 0, frameCount * sizeof(int16_t));
+        EmitFading(out, frameCount);
         return;
     }
 
@@ -945,7 +1042,10 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
     // Silero voice gate: speech passes, silence pushed down (16 + 48 kHz).
-    VadGateApply(cleanedFrame, fs);
+    VadGateApply(cleanedFrame, micFrame, fs);
+    // Near-end protector: while Silero says speech, cap how far the
+    // chain may duck the voice (-15 dB) by blending dry mic back in.
+    NearEndProtect(cleanedFrame, micFrame, fs);
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
     for (int i = 0; i < fs; i++) {
@@ -973,7 +1073,11 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
 
     float gain = g_micGain.load() * g_outputGain.load();
     for (int i = 0; i < fs; i++)
-        out[i] = clamp_s16((int)((float)cleanedFrame[i] * gain));
+        out[i] = SoftLimit((float)cleanedFrame[i] * gain / 32768.0f);
+    // Remember what we emitted for fail-open fades (mic starve etc).
+    memcpy(g_lastOutFrame, out, fs * sizeof(int16_t));
+    g_lastOutLen = fs;
+    g_lastOutValid = true;
 }
 
 // ============================================================
@@ -1389,7 +1493,8 @@ void DrawEngineSection() {
             "AEC3 = strongest echo suppression, voice sounds processed.\n"
             "Very loud speakers make it mistake your voice for echo - lower them or use DTLN\n"
             "NKF-AEC = tiny linear research engine (ICASSP 2023), needs delay alignment real-time\n"
-            "paths lack - can distort. Core is small; Residual echo kill adds a full AEC3 pass.");
+            "paths lack - can distort. Core is small; stack Noise reduction +\n"
+            "Dereverb (WPE) for the full NKF pipeline.");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -1413,7 +1518,7 @@ void DrawEngineSection() {
         ImGui::TextDisabled("AEC3 tunes itself - no extra settings.");
     } else if (g_engineIndex == ENGINE_NKF) {
         ImGui::TextDisabled("Small neural core at 16 kHz - linear research model (ICASSP 2023).");
-        ImGui::TextDisabled("Residual echo kill adds a WebRTC AEC3 pass (more CPU, better echo cut).");
+        ImGui::TextDisabled("Dereverb (WPE) strips room reverb after the canceller.");
     } else if (g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("Recommended default - cleanest output, neural echo + noise removal. Runs at 16 kHz automatically.");
         ImGui::TextDisabled("Needs an extra download - see About for details.");
@@ -1629,9 +1734,9 @@ void DrawAudioTab() {
             ImGui::SetTooltip(
                 "One-click setups for common uses.\n"
                 "Changing anything by hand switches this to Manual settings.\n"
-                "Low CPU: bare NKF-AEC at 16 kHz, residual echo kill OFF\n"
-                "(that pass costs about as much as running AEC3 alone).\n"
-                "If echo returns, tick Residual echo kill on Audio.");
+                "Low CPU: bare NKF-AEC at 16 kHz with Noise reduction and\n"
+                "Dereverb (WPE) off - the cheapest NKF path.\n"
+                "If room reverb or hiss returns, tick those boxes on Audio.");
         else
             ImGui::SetTooltip("One-click setups for common uses.\n"
                               "Changing anything by hand switches this to Manual settings.");
@@ -1657,45 +1762,25 @@ void DrawAudioTab() {
                                "for WebRTC AEC3 and NKF-AEC.");
     }
 
-    // Residual echo kill: the post-NKF WebRTC AEC3 pass. Default ON
-    // (it eats the echoey leftovers strict-linear NKF can't); offer
-    // OFF because its multi-band suppressor can sound processed or
-    // robotic on some setups while speakers play. NKF only.
+    // WPE dereverb: streaming weighted prediction error post-filter on
+    // NKF — cuts room reverb of your mic (late reflections) on top of
+    // echo cancellation. Default ON; offer OFF because prediction can
+    // soften consonants slightly on some mics. NKF only, live-toggle
+    // like Noise reduction (engine restarts for a split second).
     if (g_engineIndex == ENGINE_NKF) {
-        bool ra = g_residualAec.load();
-        if (ImGui::Checkbox("Residual echo kill (AEC3)", &ra)) {
-            g_residualAec.store(ra);
+        bool wpf = g_wpe.load();
+        if (ImGui::Checkbox("Dereverb (WPE)", &wpf)) {
+            g_wpe.store(wpf);
             MarkPresetCustom();
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("WebRTC AEC3 pass after NKF: aggressive cut of the\n"
-                               "echoey leftovers a strictly-linear NKF can't remove.\n"
-                               "While speakers play its suppressor can sound processed\n"
-                               "or robotic - untick to hear raw NKF output (echo may\n"
-                               "come back). Engine restarts briefly when toggled.\n"
-                               "NKF-AEC only.");
-    }
-
-    // Dry voice: GTCRN enhancement on NKF only — less room reverb of
-    // your mic. Same live-toggle pattern as Noise reduction; hidden
-    // everywhere else so it's never a dead control.
-    if (g_engineIndex == ENGINE_NKF) {
-        bool dry = g_dryVoice.load();
-        if (ImGui::Checkbox("Dry voice (room reverb)", &dry)) {
-            g_dryVoice.store(dry);
-            MarkPresetCustom();
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Drier mic sound: GTCRN reduces room reverb (echoey\n"
-                               "reflections) of your voice on top of echo cancellation.\n"
-                               "It also cuts noise, so the Noise reduction box is\n"
-                               "skipped while this is on. Small extra CPU and ~32 ms\n"
-                               "extra delay - the engine restarts briefly when toggled.\n"
-                                "NKF-AEC only. Missing model file? Stage stays off.");
+            ImGui::SetTooltip("Streaming dereverb after NKF: weighted prediction\n"
+                               "echoes of your voice out of the mic signal (less\n"
+                               "room reverb, more presence). Small extra CPU and\n"
+                               "~32 ms extra delay - engine restarts briefly when\n"
+                               "toggled. NKF-AEC only.");
     }
 
     // Voice gate: soft neural detector at the top of Audio (not behind

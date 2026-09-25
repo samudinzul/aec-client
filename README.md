@@ -47,10 +47,10 @@ No more headphones. No more echo. No dead-air noise.
 - **3 selectable AEC engines** in one app:
   - **DTLN-AEC 128** — recommended default: dual-LSTM echo + noise canceller (ICASSP 2021; 128 LSTM units for lower CPU)
   - **WebRTC AEC3** — strongest echo suppression, same engine used by Chrome and Google Meet (voice sounds processed)
-  - **NKF-AEC** — tiny neural Kalman filter core (ICASSP 2023, 45 KB model; needs delay alignment; optional Residual echo kill runs a second AEC3 pass)
+  - **NKF-AEC** — tiny neural Kalman filter core (ICASSP 2023, 45 KB model; needs delay alignment; linear-only canceller — stack Noise reduction + Dereverb (WPE) for the full NKF pipeline)
 - **Noise reduction** (AEC3 and NKF-AEC) — optional WebRTC noise suppression on top of echo cancellation, one checkbox
-- **Residual echo kill** (NKF-AEC) — post-NKF WebRTC AEC3 pass, default ON; untick to hear raw NKF
-- **Dry voice** (NKF-AEC) — optional GTCRN stage for less room reverb (off by default; ~32 ms extra delay)
+- **Dereverb (WPE)** (NKF-AEC) — model-free streaming late-reverb canceller after the engine (default ON; ~32 ms extra delay)
+- **Voice never cut** (all engines) — near-end protector caps engine ducking at 15 dB, gate decisions run on the raw mic, a soft limiter replaces hard clipping, and every fail path fades instead of muting
 - **Low CPU usage** — typically well under 2% per stream on a typical desktop (all three engines)
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -76,11 +76,12 @@ No more headphones. No more echo. No dead-air noise.
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is a tiny 16 kHz core (Residual echo kill adds a second AEC3 pass — leave it on for quality, off for lower CPU). Optionally tick **Noise reduction** on AEC3 or NKF-AEC. On NKF you can also use **Dry voice** (optional GTCRN dereverb). Or use the **Low CPU (NKF)** quick preset for bare NKF.
-6. **Click Start**. Keep speakers at a moderate volume — very loud
-   speakers make any canceller mistake your voice for echo (AEC3 will
-   cut you mid-sentence in double-talk). If the room must be loud,
-   use DTLN-AEC instead.
+5. **Pick an engine** under Advanced — DTLN-AEC is the default; AEC3 is the strongest echo pick; NKF-AEC is a tiny 16 kHz core (linear-only — **Dereverb (WPE)** and **Noise reduction** stack on top, both default ON). Or use the **Low CPU (NKF)** quick preset for bare NKF (WPE/NS off).
+6. **Click Start**. Keep speakers at a moderate volume. Your voice is
+   protected — the near-end protector keeps the chain from ducking you
+   more than 15 dB even in double-talk — but very loud speakers still
+   make any canceller leave echo behind (and can push AEC3 into
+   cutting mid-sentence). If the room must be loud, use DTLN-AEC.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
    - **Input Profile**: **Voice Isolation** — one tap that turns on
@@ -108,7 +109,7 @@ Done. Talk normally with speakers on.
 After echo cancellation, a tiny neural network checks for speech many times a second. Speech and natural breath pauses pass through on a soft knee; only true silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence (neural voice detector)** at the top of the Audio tab to enable. No recording; one-tap calibration optional under Advanced → Voice gate.
 
 - Green **SPEAKING** pill at the top = speech going out (only when the gate is on). Grey **SILENT** = pushed down.
-- It hears *any* speech, not just yours — it sits after the echo canceller, so what's left is overwhelmingly your voice.
+- It hears *any* speech, not just yours — the detector runs on the raw mic (so the engine's own processing can't fool it), while the gentle ducking applies to the cleaned output.
 - Uncheck **Push down silence** in the Audio tab to pass original audio through.
 - **Calibrate for my mic** (Advanced → Voice gate, idle or running): starts audio if needed (you'll hear yourself, live meters, no CABLE needed), you speak normally 5 s, then back to idle — press Start to use it. Sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
 - Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — NKF and DTLN run at 16000 (locked); AEC3 offers 16000 or 48000.
@@ -121,14 +122,14 @@ After echo cancellation, a tiny neural network checks for speech many times a se
 |--------|------------|--------------|-----|----------------|
 | **DTLN-AEC 128** *(default)* | Sounds natural | Very good | Moderate | **Start here.** Cleanest overall; also removes background noise. |
 | **WebRTC AEC3** | Can sound a bit processed | Strongest | Moderate (more at 48 kHz) | Echo still getting through (loud speakers, echoey room). |
-| **NKF-AEC** | Usually natural | Good (better with residual on) | Small core; residual ON ≈ another AEC3 | Busy PC with residual off; or natural voice with residual on. |
+| **NKF-AEC** | Usually natural | Good (linear-only) | Small core + light WPE | Busy PC with the Low CPU preset; or natural voice with NS/WPE stacked. |
 
 **Voice** = how natural you sound when both sides talk at once. **Echo** = how much of the other person’s speaker sound is cancelled out.
 
 **Quick pick:**
 1. Stay on **DTLN** unless something is wrong.
 2. Still hearing echo? Try **AEC3** (strongest cancellation; voice may sound cleaned up).
-3. Busy PC / want bare NKF? Try **Low CPU (NKF)** preset (residual off — enable residual if echo returns). Can glitch if speaker delay drifts.
+3. Busy PC / want bare NKF? Try **Low CPU (NKF)** preset (NS and WPE off — re-enable them if the room sounds noisy or reverberant). Can glitch if speaker delay drifts.
 
 DTLN also cleans noise by itself. AEC3 and NKF can add noise removal with the **Noise reduction** checkbox. Keep speaker volume moderate — very loud speakers make any engine treat your voice as echo.
 
@@ -143,7 +144,7 @@ The release ZIP bundles all required DLLs:
 | `aec_gui.exe` | ~2.4 MB | Main application |
 | `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 + noise suppression |
-| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback, Silero, GTCRN) |
+| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback, Silero) |
 | `tensorflowlite_c.dll` | ~4.5 MB | TFLite runtime for DTLN (primary path) |
 | `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
 | `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
@@ -151,7 +152,6 @@ The release ZIP bundles all required DLLs:
 | `models/nkf.onnx` | ~45 KB | NKF model |
 | `models/dtln_aec_128_{1,2}.tflite` | ~7 MB | DTLN-AEC 128 pair (default engine) |
 | `models/silero_vad.onnx` | ~2.2 MB | Voice gate (Silero VAD) |
-| `models/gtcrn_stream.onnx` | ~0.5 MB | NKF Dry voice stage (GTCRN) |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
 
@@ -217,8 +217,8 @@ Settings are saved automatically. Only one copy of the app runs at a time (openi
 | **[GLFW](https://www.glfw.org/)** | C | Window + OpenGL context |
 | **[OpenGL](https://www.opengl.org/)** | — | Rendering backend |
 | **[stb_image](https://github.com/nothings/stb)** | C (single-header) | Image loading for wallpapers |
-| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback, Silero VAD, GTCRN) |
-| **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC and DTLN-AEC |
+| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback, Silero VAD) |
+| **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC, DTLN-AEC and the WPE dereverb stage |
 | **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
 
 ### Windows APIs
@@ -235,9 +235,10 @@ Settings are saved automatically. Only one copy of the app runs at a time (openi
 ### DSP Concepts
 
 - Acoustic echo cancellation via adaptive subband filtering (AEC3)
-- Neural Kalman filtering (NKF-AEC) with delay alignment (TDC) + residual WebRTC AEC3 stage
+- Neural Kalman filtering (NKF-AEC) with delay alignment (TDC)
 - Dual-signal LSTM echo + noise cancellation (DTLN-AEC)
-- Optional streaming speech enhancement / dereverb (GTCRN “Dry voice” on NKF)
+- Streaming WPE late-reverb cancellation (NKF "Dereverb" post-filter)
+- Near-end protector + soft limiter (voice ducking capped at 15 dB)
 - Optional WebRTC noise suppression (AEC3, NKF-AEC)
 - Frame buffering at 10–16 ms intervals
 - Lock-free SPSC ring buffers (audio thread ↔ UI thread)
@@ -256,18 +257,23 @@ NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research m
 - **Model size**: 45 KB (~5.3K parameters — tiny *neural* core)
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms
-- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. Default **Residual echo kill ON** runs a full WebRTC AEC3 pass on top — that path costs about as much as standalone AEC3@16 kHz (or more). **Low CPU (NKF)** preset turns residual off for the cheapest NKF mode.
-- **Requires**: ONNX Runtime (28 MB DLL); optional `models/gtcrn_stream.onnx` for Dry voice
+- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. NKF is strictly linear since 1.9 (the residual AEC3 pass was retired) — the stack is NKF + optional WebRTC NS + light WPE dereverb, so the busy-PC path is the **Low CPU (NKF)** preset (NS/WPE off).
+- **Requires**: ONNX Runtime (28 MB DLL) — no other model files
 
-Production path adds: **time-delay compensation** (cross-correlation vs loopback), staged exposure (no cold-start spikes), a **divergence guard**, a **self-monitor loop detector** (Listen-to-myself / Discord mic test), a toggleable **residual WebRTC AEC3** pass (**Residual echo kill**, default ON), and an optional **GTCRN Dry voice** stage.
+Production path adds: **time-delay compensation** (cross-correlation vs loopback), staged exposure (no cold-start spikes), a **divergence guard**, a **self-monitor loop detector** (Listen-to-myself / Discord mic test), optional **WebRTC NS**, and the toggleable **WPE dereverb** stage (on by default).
 
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
 The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and builds to `libnkf_aec.dll` (1.3 MB).
 
-### GTCRN (Dry voice)
+### WPE (Dereverb)
 
-Ultra-light streaming speech enhancement / dereverb used only as the optional NKF **Dry voice** stage (~0.5 MB ONNX, MIT, [Xiaobin-Rong/gtcrn](https://github.com/Xiaobin-Rong/gtcrn)). Off by default; fail-open if the model file is missing.
+Streaming single-channel Weighted Prediction Error dereverberation
+(NKF's **Dereverb (WPE)** post-filter, default ON): per-bin
+recursive weighted least squares over a 512/128 sqrt-Hann STFT —
+no model file, ~32 ms latency, fail-open. Replaces the retired GTCRN
+"Dry voice" stage; hard-bounded so it can never cut a bin by more
+than 6 dB or add gain. Toggle it on Advanced → NKF-AEC.
 
 ### DTLN-AEC 128
 
@@ -341,9 +347,6 @@ curl -L -o models/dtln_aec_128_2.tflite \
 # Silero VAD voice gate (~2.2 MB, MIT, sha256 1a153a22… = upstream v6.2.1)
 curl -L -o models/silero_vad.onnx \
   "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
-
-# GTCRN Dry voice (NKF optional stage, ~0.5 MB)
-#   models/gtcrn_stream.onnx  (see MODELS.md for sha256)
 ```
 
 See [MODELS.md](MODELS.md) for sizes and SHA-256 checks.
@@ -378,9 +381,9 @@ aec-client/
 ├── src/
 │   ├── main.cpp                    Entry point, GUI, audio pipeline
 │   ├── aec3_wrapper.cpp/.h         WebRTC AEC3 C wrapper
-│   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper (+ residual AEC3, GTCRN dry stage)
+│   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper (+ NS, WPE dereverb stage)
 │   ├── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
-│   ├── gtcrn_wrapper.cpp/.h        GTCRN streaming wrapper (NKF Dry voice)
+│   ├── wpe.cpp/.h                  Streaming WPE dereverb post-filter (NKF)
 │   └── silero_wrapper.cpp/.h       Silero VAD C wrapper (voice gate)
 │
 ├── include/
@@ -400,7 +403,6 @@ aec-client/
 │   ├── nkf.onnx                    NKF model (45 KB)
 │   ├── dtln_aec_128_{1,2}.tflite   DTLN-AEC 128 pair (default engine)
 │   ├── silero_vad.onnx             Silero VAD model (voice gate, 2.2 MB)
-│   └── gtcrn_stream.onnx           GTCRN Dry voice model (~0.5 MB)
 │
 ├── screenshots/
 │   └── main.png                    README image
@@ -435,7 +437,6 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **WebRTC Audio Processing** — Google (BSD-3)
 - **NKF-AEC** — Jiang et al., ICASSP 2023 (MIT)
 - **DTLN-AEC** — Westhausen & Meyer, ICASSP 2021 (MIT)
-- **GTCRN** — Xiaobin Rong et al. (MIT) — NKF Dry voice stage
 - **Silero VAD** — Silero Team (MIT)
 - **ONNX Runtime** — Microsoft (MIT)
 - **Dear ImGui** — Omar Cornut (MIT)

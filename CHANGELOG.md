@@ -5,6 +5,57 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-09-25
+
+### Added
+
+- **Near-end protector (all engines).** After echo cancellation and
+  the voice gate, near-end speech is compared against the raw mic:
+  when the engine's output sits more than 15 dB below the mic the
+  difference is blended back in, so loud near-end speech is ducked at
+  most 15 dB instead of being eaten. Speech-only (holds during
+  silence), smooth attack/release, never clips.
+- **Soft limiter.** Output peaks now run through a −3 dBFS knee
+  (`tanh` above it) instead of a hard `int16` clamp, so over-driven
+  passages (high mic gain, hot levels) gently saturate rather than
+  crackle. Below the knee the signal is bit-transparent.
+- **NKF: "Dereverb (WPE)" stage (default ON).** Replaces the GTCRN
+  "Dry voice" model with a model-free streaming Weighted Prediction
+  Error dereverberation post-filter: single-channel, per-bin
+  recursive weighted least squares (5 taps, 2-frame delay,
+  forgetting 0.995), pocketfft STFT (512/128), chain order
+  **NS → WPE**. ~32 ms latency, hard-bounded (never cuts a bin by
+  more than 6 dB, never adds gain), fail-open pass-through.
+  Toggleable live (same engine restart as Noise reduction).
+
+### Changed
+
+- **Voice gate decisions run on the raw mic.** The Silero detector
+  now always sees the mic signal (not the already-gated/cancelled
+  output), so gate decisions can't be corrupted by what the engine
+  did to the audio. Gate processing is skipped entirely when the
+  checkbox is off (no wasted inference, smoothed state stays live).
+- **No hard mutes anywhere (fade-out fail-open).** Frame-size
+  mismatches and mic underruns that previously emitted instant zeros
+  now fade the last good frame out instead — gaps read as a natural
+  duck, not a click. All engine wrappers (AEC3, DTLN, NKF) ship mic
+  on any internal error (fail-open) rather than silence.
+- **Config generation 4.** `aec_config.txt` retires the two legacy
+  slots (dry/residual flags); gen ≤ 3 files still load (dry slot is
+  skipped, residual ignored, WPE defaults ON), gen 4 stores the WPE
+  flag.
+
+### Removed
+
+- **NKF: "Residual echo kill (AEC3)" pass.** The post-NKF WebRTC
+  AEC3 stage is gone; NKF is now strictly linear + WebRTC NS +
+  WPE. Tradeoff accepted: under extreme speaker volumes some echo
+  leftovers may pass that the nonlinear suppressor used to eat.
+  (The standalone AEC3 engine keeps its full pipeline unchanged.)
+- **NKF: "Dry voice" (GTCRN).** Superseded by WPE — `gtcrn_stream.onnx`
+  is no longer bundled or required; the release model allowlist
+  shrinks accordingly.
+
 ## [1.8.1] — 2026-09-24
 
 ### Added

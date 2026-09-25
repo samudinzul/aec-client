@@ -31,15 +31,16 @@ QUICK START
 4. Pick an engine (or a Quick preset on the Audio tab):
    - DTLN-AEC 128         recommended default: neural echo + noise (16 kHz)
    - WebRTC AEC3          strongest echo removal (16 / 48 kHz; 48 kHz costs more CPU)
-   - NKF-AEC              small neural core (16 kHz). Residual echo kill
-                          (default ON) adds a second AEC3 pass — more CPU,
-                          better leftover echo. "Low CPU (NKF)" preset =
-                          bare NKF with residual off.
+   - NKF-AEC              small neural core (16 kHz), strictly linear.
+                          "Dereverb (WPE)" (default ON) and "Noise
+                          reduction" stack on top. "Low CPU (NKF)"
+                          preset = bare NKF with both off.
 
 5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
    for WebRTC noise suppression on top of echo cancellation. On
-   NKF-AEC you can also tick "Dry voice (room reverb)" for a drier
-   mic with less room echo (small extra CPU, ~32 ms extra delay).
+   NKF-AEC, "Dereverb (WPE)" (default ON) strips room reverb after
+   the canceller (small extra CPU, ~32 ms extra delay) — untick it
+   to hear the raw canceller output.
 
 6. Click Start. Optional: tick "Push down silence (neural voice
    detector)" at the top of the Audio tab — the green SPEAKING pill
@@ -59,19 +60,18 @@ QUICK START
 
 TIPS
 ----
-- CPU-sensitive? Try the "Low CPU (NKF)" preset (bare NKF, residual
-  echo kill off). DTLN/AEC3/NKF are all usually well under 2% on a
-  typical desktop; NKF with residual ON also runs a second AEC3 pass.
+- CPU-sensitive? Try the "Low CPU (NKF)" preset (bare NKF, dereverb
+  and noise reduction off). DTLN/AEC3/NKF are all usually well under
+  2% on a typical desktop.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
   loops your voice back into the mic — NKF adapts live and is the most
   sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
   for mic tests.
 - If echo comes back after a long call, click Stop then Start.
-- On NKF-AEC, if your voice sounds processed or robotic while the
-  speakers play, untick "Residual echo kill (AEC3)" — you trade the
-  aggressive leftover-echo cut for raw (rawer) NKF output.
-- On NKF-AEC, if echo gets through with Residual echo kill off, tick
-  it back on (better echo cut; costs a WebRTC AEC3 pass).
+- Your voice is protected: the near-end protector keeps the chain
+  from ducking you more than 15 dB, even in double-talk. Very loud
+  speakers can still let some echo through (or make AEC3 cut mid-
+  sentence) — keep them moderate, or switch to DTLN-AEC.
 - If your voice sounds processed or robotic on AEC3, stay on the
   default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
 - The X button minimizes to the system tray (toggle in Appearance tab).
@@ -80,8 +80,6 @@ TIPS
   (bundled). Without them it reports "Failed to load DTLN model".
 - The voice gate needs models/silero_vad.onnx (bundled). Without
   it the gate stays off and audio passes through unchanged.
-- The NKF "Dry voice" option needs models/gtcrn_stream.onnx
-  (bundled). Without it the option just has no effect.
 
 TROUBLESHOOTING
 ---------------

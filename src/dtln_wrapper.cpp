@@ -647,8 +647,10 @@ DtlnHandle* DtlnNew(const char* modelPrefix) {
 
 void DtlnProcess(DtlnHandle* h, const int16_t* mic, const int16_t* ref,
                  int16_t* out, int frameSize) {
+    // Fail-open: dead backend ships mic, never silence.
     if (!h || h->backend == DTLN_NONE) {
-        if (out && frameSize > 0) memset(out, 0, (size_t)frameSize * sizeof(int16_t));
+        if (out && mic && frameSize > 0)
+            memcpy(out, mic, (size_t)frameSize * sizeof(int16_t));
         return;
     }
     for (int i = 0; i < frameSize; i++) {

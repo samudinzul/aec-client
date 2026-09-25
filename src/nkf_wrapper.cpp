@@ -1,6 +1,6 @@
 #include "nkf_wrapper.h"
 #include "NKFImpl.h"
-#include "gtcrn_wrapper.h"
+#include "wpe.h"
 #include "modules/audio_processing/include/audio_processing.h"
 #include "api/scoped_refptr.h"
 #include <vector>
@@ -113,21 +113,21 @@ struct NkfHandle {
     int loopConf = 0;               // consecutive-ish hit score (0..4)
     int loopQuiet = 0;              // silent detections in a row
 
-    // Residual stage: WebRTC APM after NKF — AEC3 (toggleable via
-    // residualAec; NKF is strictly linear, AEC3's nonlinear
-    // strictly linear, AEC3's nonlinear suppressor eats what it
-    // leaves) + optional WebRTC NS (nsEnabled checkbox) on top.
+    // Post stage: WebRTC NS (nsEnabled checkbox) on top of NKF
+    // (AEC3/residual cancellation retired in v1.9 — NKF is strictly
+    // linear and that tradeoff was accepted).
     rtc::scoped_refptr<webrtc::AudioProcessing> nsApm;
     std::vector<int16_t> nsInAccum;   // NKF output awaiting the post stage
     std::vector<float> nsMicFloat;    // 10 ms frame scratch
     std::vector<float> nsOutFloat;    // 10 ms frame scratch
-    std::vector<float> refFloat;      // 10 ms reverse-stream scratch
 
-    // Optional GTCRN "Dry voice" stage (null = off): sits AFTER the
-    // APM, before outHist/outAccum, so VAD gate, meters, gain and the
-    // loop detector all see the dry signal.
-    GtcrnHandle* dry = nullptr;
-    std::vector<float> dryOut;        // dry-stage output scratch
+    // Optional streaming WPE dereverb stage (null = off): sits AFTER
+    // NS (chain NS -> WPE), before outHist/outAccum, so VAD gate,
+    // meters, gain and the loop detector all see the dereverbed
+    // signal. Fail-open like GTCRN was: a bad Process call just
+    // passes audio through internally.
+    WpeHandle* wpe = nullptr;
+    std::vector<float> wpeOut;        // dereverb-stage output scratch
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -282,14 +282,14 @@ static void NkfDetectLoop(NkfHandle* h) {
 }
 
 // Ship finished post-APM samples (float, ±1) to the wire: optional
-// GTCRN dry stage first, then outHist (loop detector tap — what the
+// WPE dereverb first, then outHist (loop detector tap — what the
 // speakers actually get) and the clamped int16 outAccum.
 static void NkfEmit(NkfHandle* h, const float* v, int n) {
-    if (h->dry) {
-        h->dryOut.resize((size_t)n);
-        if (GtcrnProcess(h->dry, v, h->dryOut.data(), n) > 0)
-            v = h->dryOut.data();
-        // else: Process already latched pass-through internally (v = in)
+    if (h->wpe) {
+        h->wpeOut.resize((size_t)n);
+        if (WpeProcess(h->wpe, v, h->wpeOut.data(), n) > 0)
+            v = h->wpeOut.data();
+        // else: bad args (cannot happen here) — ship v unchanged
     }
     for (int i = 0; i < n; i++) {
         h->outHist.push_back(v[i]);
@@ -300,8 +300,9 @@ static void NkfEmit(NkfHandle* h, const float* v, int n) {
     }
 }
 
-// Drain raw output through the post stage (residual AEC3 + optional
-// NS) into outAccum. Ordering is preserved: leftovers (< 1 frame) wait.
+// Drain raw output through the post stage (optional WebRTC NS) into
+// outAccum; NkfEmit then applies WPE (chain NS -> WPE). Ordering is
+// preserved: leftovers (< 1 frame) wait.
 static void NkfDrainPost(NkfHandle* h) {
     webrtc::StreamConfig sc(NS_SAMPLE_RATE, 1);  // mono
     while (h->nsInAccum.size() - h->nsInHead >= (size_t)NS_FRAME_SIZE) {
@@ -348,7 +349,7 @@ static void NkfDrainOut(NkfHandle* h, int16_t* out, int frameSize) {
 extern "C" {
 
 NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
-                  const char* dryModelPath, bool residualAec) {
+                  bool wpeEnabled) {
     auto* h = new NkfHandle();
     try {
         h->engine = new NKFImpl(modelPath);
@@ -362,30 +363,15 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
     h->outAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->nsInAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->outHist.reserve(LOOP_WIN + LOOP_DMAX);
-    // Optional dry-voice stage: only when the caller passed a path;
-    // a missing/broken model leaves it off (fail-open) — never kills NKF.
-    if (dryModelPath && dryModelPath[0]) {
-        h->dry = GtcrnNew(dryModelPath);
-        if (h->dry && !GtcrnReady(h->dry)) {
-            GtcrnDestroy(h->dry);
-            h->dry = nullptr;
-        }
-    }
-    if (h->dry) h->dryOut.reserve(NKF_BLOCK_SHIFT);
-    // Post stage: mirror the AEC3 wrapper's production config — AEC3
-    // residual cancellation follows the residualAec toggle (default
-    // on: aggressive nonlinear echo kill after linear NKF, incl.
-    // shadow/give-up passthrough; off = raw NKF output when the
-    // multi-band suppressor sounds too processed/robotic), NS tied to
-    // the checkbox EXCEPT when the dry stage is loaded (GTCRN already
-    // denoises — stacking WebRTC NS on top only over-suppresses),
-    // HPF like standalone AEC3, no AGC.
+    // Post stage: WebRTC NS tied to the checkbox (no AEC3 — v1.9
+    // retired the residual pass), HPF like the standalone AEC3
+    // wrapper, no AGC.
     h->nsApm = webrtc::AudioProcessingBuilder().Create();
     if (h->nsApm) {
         webrtc::AudioProcessing::Config config;
-        config.echo_canceller.enabled     = residualAec;
+        config.echo_canceller.enabled     = false;
         config.echo_canceller.mobile_mode = false;
-        config.noise_suppression.enabled  = nsEnabled && !h->dry;
+        config.noise_suppression.enabled  = nsEnabled;
         config.noise_suppression.level    =
             webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
         config.high_pass_filter.enabled   = true;
@@ -394,14 +380,23 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
         h->nsApm->ApplyConfig(config);
         h->nsMicFloat.assign(NS_FRAME_SIZE, 0.0f);
         h->nsOutFloat.assign(NS_FRAME_SIZE, 0.0f);
-        h->refFloat.assign(NS_FRAME_SIZE, 0.0f);
     }
+    // Optional WPE dereverb: toggleable, default on in the UI. A
+    // null handle (allocation failure) just leaves the stage off —
+    // never kills NKF.
+    if (wpeEnabled) h->wpe = WpeNew(NS_SAMPLE_RATE);
+    if (h->wpe) h->wpeOut.reserve(NKF_BLOCK_SHIFT);
     return h;
 }
 
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize) {
-    if (!h || !h->engine) return;
+    // Fail-open: dead handle ships mic, never silence.
+    if (!h || !h->engine) {
+        if (out && mic && frameSize > 0)
+            memcpy(out, mic, (size_t)frameSize * sizeof(int16_t));
+        return;
+    }
 
     // int16 -> float: mic into the block accumulator, ref into the
     // absolute-addressed history, mic also into the estimator window.
@@ -418,17 +413,6 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
     if (h->micWin.size() > (size_t)TDC_WIN)
         h->micWin.erase(h->micWin.begin(),
                         h->micWin.begin() + (h->micWin.size() - TDC_WIN));
-
-    // Residual-stage far-end: feed the raw reference every frame so
-    // AEC3's delay estimator and suppressor track what the speakers
-    // are playing, independent of NKF's internal TDC alignment.
-    if (h->nsApm && frameSize == NS_FRAME_SIZE) {
-        for (int i = 0; i < frameSize; i++)
-            h->refFloat[i] = ref[i] / 32768.0f;
-        webrtc::StreamConfig sc(NS_SAMPLE_RATE, 1);
-        float* refPtr = h->refFloat.data();
-        h->nsApm->ProcessReverseStream(&refPtr, sc, sc, &refPtr);
-    }
 
     if (!h->giveUp) {
         h->samplesSinceTdc += frameSize;
@@ -501,7 +485,7 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         }
 
         // No-APM edge (builder Create failed): emit the block straight
-        // through (dry stage still applies inside NkfEmit).
+        // through (WPE stage still applies inside NkfEmit).
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
             float v = h->micBlock[i];
             if (g > 0.0f) v += (h->outBlock[i] - v) * g;
@@ -567,13 +551,13 @@ void NkfReset(NkfHandle* h) {
     h->samplesSinceLoop = 0;
     h->loopConf = 0;
     h->loopQuiet = 0;
-    if (h->dry) GtcrnReset(h->dry);
+    if (h->wpe) WpeReset(h->wpe);
     if (h->engine) h->engine->Reset();
 }
 
 void NkfDestroy(NkfHandle* h) {
     if (!h) return;
-    GtcrnDestroy(h->dry);
+    WpeDestroy(h->wpe);
     delete h->engine;
     delete h;
 }
