@@ -24,16 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Error dereverberation post-filter: single-channel, per-bin
   recursive weighted least squares (5 taps, 2-frame delay,
   forgetting 0.995), pocketfft STFT (512/128), chain order
-  **NS → WPE**. ~32 ms latency, hard-bounded (never cuts a bin by
-  more than 6 dB, never adds gain), fail-open pass-through.
-  Toggleable live (same engine restart as Noise reduction).
+  **NS → WPE**. ~32 ms latency, hard-bounded with a speech-adaptive
+  predictor cap — voice is cut at most ~2.5 dB while the near end
+  talks (measured −2.7 dB on synthetic vowels), up to 6 dB between
+  speech where only reverb/echo tails remain, never adds gain,
+  fail-open pass-through. Toggleable live (same engine restart as
+  Noise reduction).
 
 ### Changed
 
-- **Voice gate decisions run on the raw mic.** The Silero detector
-  now always sees the mic signal (not the already-gated/cancelled
-  output), so gate decisions can't be corrupted by what the engine
-  did to the audio. Gate processing is skipped entirely when the
+- **Voice gate: dual-feed detector (loud-speaker fix).** The gate now
+  combines two Silero streams, each with its own detector state: the
+  engine-cleaned output (always — the engine strips speaker playback,
+  so this tracks the person), plus the raw mic when the loopback isn't
+  the dominant thing in the mic. The previous raw-mic-only feed judged
+  the speaker's playback on loud sessions (music/game audio isn't
+  speech), which parked the gate in its knee and ducked normal speech
+  until you yelled — and false-fired the near-end protector into
+  blending raw echo back in. Either arm can rescue a decision;
+  neither can veto. Gate processing is skipped entirely when the
   checkbox is off (no wasted inference, smoothed state stays live).
 - **No hard mutes anywhere (fade-out fail-open).** Frame-size
   mismatches and mic underruns that previously emitted instant zeros

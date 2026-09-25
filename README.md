@@ -50,7 +50,7 @@ No more headphones. No more echo. No dead-air noise.
   - **NKF-AEC** — tiny neural Kalman filter core (ICASSP 2023, 45 KB model; needs delay alignment; linear-only canceller — stack Noise reduction + Dereverb (WPE) for the full NKF pipeline)
 - **Noise reduction** (AEC3 and NKF-AEC) — optional WebRTC noise suppression on top of echo cancellation, one checkbox
 - **Dereverb (WPE)** (NKF-AEC) — model-free streaming late-reverb canceller after the engine (default ON; ~32 ms extra delay)
-- **Voice never cut** (all engines) — near-end protector caps engine ducking at 15 dB, gate decisions run on the raw mic, a soft limiter replaces hard clipping, and every fail path fades instead of muting
+- **Voice never cut** (all engines) — near-end protector caps engine ducking at 15 dB, the voice gate combines cleaned + mic detections so loud speakers can't mask your speech, a soft limiter replaces hard clipping, and every fail path fades instead of muting
 - **Low CPU usage** — typically well under 2% per stream on a typical desktop (all three engines)
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -109,7 +109,7 @@ Done. Talk normally with speakers on.
 After echo cancellation, a tiny neural network checks for speech many times a second. Speech and natural breath pauses pass through on a soft knee; only true silence is pushed down (−12 dB, not muted — so the level never pumps). **Off by default** — tick **Push down silence (neural voice detector)** at the top of the Audio tab to enable. No recording; one-tap calibration optional under Advanced → Voice gate.
 
 - Green **SPEAKING** pill at the top = speech going out (only when the gate is on). Grey **SILENT** = pushed down.
-- It hears *any* speech, not just yours — the detector runs on the raw mic (so the engine's own processing can't fool it), while the gentle ducking applies to the cleaned output.
+- Two detector feeds share the decision: the cleaned output (the engine strips the speaker's playback, so **loud speakers can't mask you**) and the raw mic when the speakers are quiet (so engine processing can't fool it either). The gentle ducking applies to the cleaned output.
 - Uncheck **Push down silence** in the Audio tab to pass original audio through.
 - **Calibrate for my mic** (Advanced → Voice gate, idle or running): starts audio if needed (you'll hear yourself, live meters, no CABLE needed), you speak normally 5 s, then back to idle — press Start to use it. Sets the speech/silence lines for your mic + engine combo. Re-calibrate after switching mic or engine; Reset restores defaults.
 - Works at **16 and 48 kHz** (the detector itself is 16 kHz fixed; at 48 kHz an internal downsample feeds only the detector, your audio stays full-rate) — NKF and DTLN run at 16000 (locked); AEC3 offers 16000 or 48000.
@@ -272,8 +272,10 @@ Streaming single-channel Weighted Prediction Error dereverberation
 (NKF's **Dereverb (WPE)** post-filter, default ON): per-bin
 recursive weighted least squares over a 512/128 sqrt-Hann STFT —
 no model file, ~32 ms latency, fail-open. Replaces the retired GTCRN
-"Dry voice" stage; hard-bounded so it can never cut a bin by more
-than 6 dB or add gain. Toggle it on Advanced → NKF-AEC.
+"Dry voice" stage; hard-bounded with a speech-adaptive cap — voice is
+cut at most ~2.5 dB while you talk, up to 6 dB between speech where
+only reverb/echo tails remain — and never adds gain. Toggle it on
+Advanced → NKF-AEC.
 
 ### DTLN-AEC 128
 

@@ -389,6 +389,11 @@ NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
     return h;
 }
 
+void NkfSetNearSpeech(NkfHandle* h, int speaking) {
+    if (!h || !h->wpe) return;
+    WpeSetSpeech(h->wpe, speaking);
+}
+
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize) {
     // Fail-open: dead handle ships mic, never silence.

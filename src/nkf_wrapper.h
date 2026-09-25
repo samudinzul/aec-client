@@ -12,10 +12,19 @@ typedef struct NkfHandle NkfHandle;
 // NKF block output. wpeEnabled = the streaming WPE dereverb
 // post-filter ("Dereverb (WPE)" checkbox, default on): model-free
 // late-reverb cancellation, NS -> WPE order, ~32 ms latency, hard
-// bounded so it can never cut voice harder than -6 dB on a bin.
+// bounded — voice cut at most ~2.5 dB while NkfSetNearSpeech says
+// the person is talking, up to 6 dB between speech (tails).
 // DTLN already removes noise itself, so it gets no flags.
 NkfHandle* NkfNew(const char* modelPath, bool nsEnabled,
                   bool wpeEnabled);
+
+// Near-end speech flag for the WPE stage (audio thread, call once per
+// frame BEFORE NkfProcess; one-frame staleness is intentional — the
+// decision comes from the previous frame's VAD). While the person is
+// talking, WPE runs its tight predictor bound so voice level survives;
+// between speech it widens to eat reverb/echo tails. No-op when the
+// WPE stage is disabled.
+void NkfSetNearSpeech(NkfHandle* h, int speaking);
 
 // Process one frame of audio.
 //   mic:   int16 mic input

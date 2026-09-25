@@ -218,8 +218,18 @@ float              g_vadGain = 1.0f;      // audio thread only
 float              g_vadSmooth = 0.0f;    // audio thread only (EMA of Silero prob)
 int                g_vadHang = 0;         // audio thread only (800 ms hangover)
 int                g_vadCloseVotes = 0;   // audio thread only (debounced release)
-ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the VAD feed
+ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the mic-arm VAD feed
 bool               g_vadResamplerReady = false;  // (un)init with the audio idle
+// Cleaned-arm detector: Silero's RNN state is per-stream, so each feed
+// gets its own handle (see VadGateApply). Created/destroyed with g_vad;
+// either missing == detector missing (both are the same model file).
+SileroHandle*      g_vadClean = nullptr;
+ma_data_converter  g_vadResamplerClean;   // 48 kHz -> 16 kHz for the cleaned-arm feed
+bool               g_vadResamplerCleanReady = false;
+float              g_micEnvEma = 0.0f;    // audio thread: mic frame mean-square EMA
+float              g_refEnvEma = 0.0f;    // audio thread: ref frame mean-square EMA
+bool               g_nearSpeech = false;  // audio thread: last speech decision, read
+                                          // by output_callback one frame BEFORE NkfProcess
 ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
 ma_context g_context;
 static bool g_contextInitialized = false;
@@ -768,23 +778,38 @@ void ReinitEngine() {
     // Voice gate models are rate-agnostic (16 kHz direct, 48 kHz via
     // internal downsample in VadGateApply).
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
+    if (g_vadClean) { SileroDestroy(g_vadClean); g_vadClean = nullptr; }
     g_vad = SileroNew("models/silero_vad.onnx");
+    g_vadClean = SileroNew("models/silero_vad.onnx");
     // Fail-open: a broken handle (missing model) must read as gate-off,
-    // never as eternal silence. Null it when unusable.
+    // never as eternal silence. Null BOTH when unusable so the UI's
+    // "detector missing" state matches what the gate actually does.
+    if (!g_vad || !g_vadClean) {
+        if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
+        if (g_vadClean) { SileroDestroy(g_vadClean); g_vadClean = nullptr; }
+    }
 }
 
 // Reset VAD state + gate. Call on Start/Stop/engine change (audio idle).
 static void VadReset() {
     if (g_vad) SileroReset(g_vad);
+    if (g_vadClean) SileroReset(g_vadClean);
     if (g_vadResamplerReady) {
         ma_data_converter_uninit(&g_vadResampler, NULL);
         g_vadResamplerReady = false;
+    }
+    if (g_vadResamplerCleanReady) {
+        ma_data_converter_uninit(&g_vadResamplerClean, NULL);
+        g_vadResamplerCleanReady = false;
     }
     g_vadGain = 1.0f;
     g_vadSmooth = 0.0f;
     g_vadHang = 0;
     g_vadCloseVotes = 0;
     g_vadProb.store(0.0f);
+    g_micEnvEma = 0.0f;
+    g_refEnvEma = 0.0f;
+    g_nearSpeech = false;
 }
 
 // Audio-thread gate. Called from output_callback after AEC, before
@@ -794,59 +819,121 @@ static void VadReset() {
 // a close->open knee to a target gain; anti-ducking -12 dB floor (never
 // mute), 800 ms hangover, ~160 ms close debounce against fricatives
 // and natural breath pauses.
-// The detector reads the RAW mic (not the cleaned signal): the gate
-// must judge "is the person talking" from what they said, not from
-// what the AEC/gate already did to it — loud-speaker sessions where
-// the chain heavily ducks output still see full speech probability.
-// Silero runs even when the gate checkbox is off (the near-end
-// protector needs the speech flag); only the gain stage is gated.
-static void VadGateApply(int16_t* cleaned, const int16_t* mic, int fs) {
+// DUAL FEED (Silero's RNN is stateful, so each stream gets its own
+// handle — interleaving two streams through one state would corrupt
+// both):
+//   cleaned arm: always pushed. The engine strips the speaker's
+//     playback, so this prob tracks the PERSON even with loud
+//     speakers — raw mic mostly heard the speaker's playback
+//     (music/game audio is not speech), which parked the gate in
+//     its knee/floor ("have to yell" failure) and false-fired the
+//     near-end protector into blending raw echo back in.
+//   mic arm: pushed always, but only COMBINED in when the loopback
+//     is not the dominant thing in the mic
+//     (g_refEnvEma < 0.5*g_micEnvEma). Raw mic is the ideal detector
+//     when speakers are idle (the engine can't fool it), and it
+//     rescues detection if the engine ever eats the voice.
+// Combined p = max(cleaned, mic-if-armed): either arm can rescue,
+// neither can veto. Silero runs even when the gate checkbox is off
+// (the near-end protector needs the speech flag); only the gain
+// stage is gated.
+static void VadGateApply(int16_t* cleaned, const int16_t* mic,
+                         const int16_t* ref, int fs) {
     int sr = g_sampleRate.load();
-    if (!g_vad || (sr != 16000 && sr != 48000)) {
+    if (!g_vad || !g_vadClean || (sr != 16000 && sr != 48000)) {
         g_vadGain = 1.0f;
         g_vadSmooth = 0.0f;
         g_vadHang = 0;
         g_vadCloseVotes = 0;
         return;
     }
-    static float fbuf[MAX_FRAME_SIZE];
-    for (int i = 0; i < fs; i++) fbuf[i] = mic[i] / 32768.0f;
+    // Frame mean-square EMAs (~4 frames): who owns the mic — the
+    // person or the loopback? Gates the mic arm only.
+    double me = 0, re = 0;
+    for (int i = 0; i < fs; i++) {
+        me += (double)mic[i] * mic[i];
+        re += (double)ref[i] * ref[i];
+    }
+    g_micEnvEma += 0.2f * ((float)(me / fs) - g_micEnvEma);
+    g_refEnvEma += 0.2f * ((float)(re / fs) - g_refEnvEma);
+    const bool micArmOk = g_refEnvEma < 0.5f * g_micEnvEma;
+
+    static float fbufM[MAX_FRAME_SIZE];
+    static float fbufC[MAX_FRAME_SIZE];
+    for (int i = 0; i < fs; i++) {
+        fbufM[i] = mic[i] / 32768.0f;
+        fbufC[i] = cleaned[i] / 32768.0f;
+    }
     // Silero eats 16 kHz: direct at 16 kHz, miniaudio downsample at 48 kHz
     // (proven: resampled feed scores 0.945/0.008 vs native 0.956/0.010).
-    static float fbuf16[192];
-    const float* feed = fbuf;
-    int feedN = fs;
+    static float fbuf16M[192];
+    static float fbuf16C[192];
+    const float* feedM = fbufM;  int feedNM = fs;
+    const float* feedC = fbufC;  int feedNC = fs;
+    bool armM = micArmOk;
+    bool armC = true;
     if (sr == 48000) {
-        if (!g_vadResamplerReady) {
-            ma_data_converter_config cfg = ma_data_converter_config_init(
-                ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
-            if (ma_data_converter_init(&cfg, NULL, &g_vadResampler) != MA_SUCCESS) {
-                g_vadGain = 1.0f;
-                g_vadSmooth = 0.0f;
-                g_vadHang = 0;
-                g_vadCloseVotes = 0;
-                return;  // fail-open
+        if (!g_vadResamplerReady || !g_vadResamplerCleanReady) {
+            if (!g_vadResamplerReady) {
+                ma_data_converter_config cfg = ma_data_converter_config_init(
+                    ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
+                if (ma_data_converter_init(&cfg, NULL, &g_vadResampler)
+                    != MA_SUCCESS) {
+                    g_vadGain = 1.0f;
+                    g_vadSmooth = 0.0f;
+                    g_vadHang = 0;
+                    g_vadCloseVotes = 0;
+                    return;  // fail-open
+                }
+                g_vadResamplerReady = true;
             }
-            g_vadResamplerReady = true;
+            if (!g_vadResamplerCleanReady) {
+                ma_data_converter_config cfg = ma_data_converter_config_init(
+                    ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
+                if (ma_data_converter_init(&cfg, NULL, &g_vadResamplerClean)
+                    != MA_SUCCESS) {
+                    g_vadGain = 1.0f;
+                    g_vadSmooth = 0.0f;
+                    g_vadHang = 0;
+                    g_vadCloseVotes = 0;
+                    return;  // fail-open
+                }
+                g_vadResamplerCleanReady = true;
+            }
         }
-        ma_uint64 inCount = (ma_uint64)fs, outCount = 192;
-        if (ma_data_converter_process_pcm_frames(&g_vadResampler, fbuf, &inCount,
-                                                 fbuf16, &outCount) != MA_SUCCESS ||
-            outCount == 0) {
-            return;  // hold last decision this frame (fail-soft)
+        if (armM) {
+            ma_uint64 inM = (ma_uint64)fs, outM = 192;
+            if (ma_data_converter_process_pcm_frames(&g_vadResampler, fbufM,
+                                                     &inM, fbuf16M, &outM)
+                    != MA_SUCCESS || outM == 0)
+                armM = false;  // this arm silent this frame (fail-soft)
+            else { feedM = fbuf16M; feedNM = (int)outM; }
         }
-        feed = fbuf16;
-        feedN = (int)outCount;
+        {
+            ma_uint64 inC = (ma_uint64)fs, outC = 192;
+            if (ma_data_converter_process_pcm_frames(&g_vadResamplerClean,
+                                                     fbufC, &inC, fbuf16C,
+                                                     &outC) != MA_SUCCESS ||
+                outC == 0)
+                armC = false;
+            else { feedC = fbuf16C; feedNC = (int)outC; }
+        }
+        if (!armM && !armC) return;  // both arms silent: hold decision
     }
-    float prob = 0.0f;
+    float pMic = -1.0f, pClean = -1.0f;
     auto t0 = Clock::now();
-    if (SileroPush(g_vad, feed, feedN, &prob)) {
+    bool okMic = false, okClean = false;
+    if (armM) okMic = SileroPush(g_vad, feedM, feedNM, &pMic) != 0;
+    if (armC) okClean = SileroPush(g_vadClean, feedC, feedNC, &pClean) != 0;
+    g_vadMs.store((float)std::chrono::duration_cast<std::chrono::microseconds>(
+                      Clock::now() - t0).count() / 1000.0f);
+    float prob = -1.0f;
+    if (okClean) prob = pClean;
+    if (okMic && pMic > prob) prob = pMic;  // mic arm is pre-gated by ref
+    if (prob >= 0.0f) {
         // EMA smooth: kill single-frame flicker that chops s/f/th.
         g_vadSmooth += (prob - g_vadSmooth) * 0.35f;
         g_vadProb.store(prob);
-        float ms = (float)std::chrono::duration_cast<std::chrono::microseconds>(
-            Clock::now() - t0).count() / 1000.0f;
-        g_vadMs.store(ms);
     }
     // Gate off: detector state stays live for NearEndProtect, but no gain.
     if (!g_vadEnabled.load()) {
@@ -925,6 +1012,10 @@ static void NearEndProtect(int16_t* cleaned, const int16_t* mic, int fs) {
     // the protector must not depend on the gate being on, or the
     // default configuration would ship no protection at all.
     const bool speech = g_vadSmooth >= g_vadClose.load() * 0.75f;
+    // Publish for the WPE voice guard. output_callback reads this BEFORE
+    // NkfProcess, so the engine sees last frame's decision (10 ms stale
+    // is nothing — the source smooth is an EMA anyway).
+    g_nearSpeech = (g_vad != nullptr) && speech;
     if (!g_vad || !speech) {
         // Release the blend smoothly instead of snapping.
         g_protBlend += (0.0f - g_protBlend) * 0.05f;
@@ -1034,15 +1125,20 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
 
     if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
         Aec3CancelEcho(g_engine.aec3, micFrame, refFrame, cleanedFrame, fs);
-    else if (g_engine.type == ENGINE_NKF && g_engine.nkf)
+    else if (g_engine.type == ENGINE_NKF && g_engine.nkf) {
+        // One frame stale on purpose (the VAD runs below, after the
+        // engine): WPE tightens its predictor bound while the person is
+        // talking so voice level survives; between speech it widens to
+        // eat reverb/echo tails.
+        NkfSetNearSpeech(g_engine.nkf, g_nearSpeech ? 1 : 0);
         NkfProcess(g_engine.nkf, micFrame, refFrame, cleanedFrame, fs);
-    else if (g_engine.type == ENGINE_DTLN && g_engine.dtln)
+    } else if (g_engine.type == ENGINE_DTLN && g_engine.dtln)
         DtlnProcess(g_engine.dtln, micFrame, refFrame, cleanedFrame, fs);
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
     // Silero voice gate: speech passes, silence pushed down (16 + 48 kHz).
-    VadGateApply(cleanedFrame, micFrame, fs);
+    VadGateApply(cleanedFrame, micFrame, refFrame, fs);
     // Near-end protector: while Silero says speech, cap how far the
     // chain may duck the voice (-15 dB) by blending dry mic back in.
     NearEndProtect(cleanedFrame, micFrame, fs);
@@ -2164,6 +2260,7 @@ int main(int, char**) {
     if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
+    if (g_vadClean) { SileroDestroy(g_vadClean); g_vadClean = nullptr; }
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

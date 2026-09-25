@@ -17,12 +17,18 @@
 //      O(1) whatever the level (no slow blow-up, no underflow)
 //    - RLS with forgetting lambda=0.995, solve (R + load*I) g = r
 //      with relative diagonal loading (1e-2 of mean trace)
-//    - output Z = Y - g^H u, hard-bounded: |pred| <= 0.5|Y|
-//      (worst case -6 dB on a sustained bin — pure tones are
-//      mathematically perfectly predictable, the cap is what
-//      keeps voice from being eaten) and |Z| <= 1.5|Y|
-//      (never adds gain). Unsolvable bin -> that bin resets and
-//      passes through this frame.
+//    - output Z = Y - g^H u, hard-bounded: |pred| <= cap|Y|
+//      and |Z| <= 1.5|Y| (never adds gain). The cap is what keeps
+//      voice from being eaten — vowels are quasi-stationary, hence
+//      perfectly predictable, and an uncapped predictor would
+//      subtract the direct path itself. Measured on synthetic
+//      syllabic vowels: cap 0.5 -> -5.3 dB voice (measured), cap
+//      0.25 -> about -2.5 dB (bounded worst case). So the cap is
+//      speech-adaptive via WpeSetSpeech: TIGHT (0.25) while the
+//      near-end person talks, WIDE (0.5) between speech where only
+//      reverb/echo tails remain and aggressive subtraction is the
+//      whole point. Unsolvable bin -> that bin resets and passes
+//      through this frame.
 //
 //  Streaming (1:1, mirrors GTCRN's proven ring/FIFO pattern):
 //    - input FIFO pre-padded with 384 zeros; a frame = q[0..512);
@@ -65,7 +71,8 @@ constexpr int kQCap    = 2048;                   // >= 511 + max call (512)
 constexpr double kForget   = 0.995;              // RLS forgetting
 constexpr double kLoad     = 0.01;               // rel. diagonal loading
 constexpr double kPowFloor = 1e-6;               // weight floor (unit scale)
-constexpr double kPredCap  = 0.5;                // |pred| <= 0.5|Y|
+constexpr double kPredCapSpeech = 0.25;          // |pred| <= 0.25|Y| (voice)
+constexpr double kPredCapOther  = 0.5;           // |pred| <= 0.5|Y| (tails)
 constexpr double kOutCap   = 1.5;                // |Z|    <= 1.5|Y|
 
 }  // namespace
@@ -99,6 +106,7 @@ struct WpeHandle {
     std::vector<ptrdiff_t> fftStrideOut;
 
     bool failed = false;                // latched pass-through
+    int speech = 1;                     // near-end talking (tight cap)
 };
 
 static void RingReset(WpeHandle* h) {
@@ -211,9 +219,12 @@ static bool WpeRunFrame(WpeHandle* h) {
         for (int i = 0; i < kTaps; i++) pred += std::conj(h->g[k][i]) * u[i];
 
         // Voice guards: bounded subtraction, bounded output gain.
+        // Cap tightens while the near-end person talks (protects
+        // voice level), widens between speech (eat the tails).
+        const double cap = h->speech ? kPredCapSpeech : kPredCapOther;
         const double py = std::sqrt(ay);
         const double pm = std::abs(pred);
-        if (pm > kPredCap * py) pred *= (kPredCap * py) / pm;
+        if (pm > cap * py) pred *= (cap * py) / pm;
         std::complex<double> z = y - pred;
         const double pz = std::abs(z);
         if (pz > kOutCap * py) z *= (kOutCap * py) / pz;
@@ -316,6 +327,11 @@ int WpeProcess(WpeHandle* h, const float* in, float* out, int n) {
         }
     }
     return 1;
+}
+
+void WpeSetSpeech(WpeHandle* h, int speaking) {
+    if (!h) return;
+    h->speech = speaking ? 1 : 0;
 }
 
 void WpeReset(WpeHandle* h) {
