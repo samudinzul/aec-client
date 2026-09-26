@@ -67,19 +67,42 @@ if(WIN32)
 endif()
 
 # ============================================================
-#  Resolve Absl DLLs at configure time (versioned filenames)
+#  ONNX Runtime — official Microsoft build (v1.29.0), vendored and
+#  UPX-compressed (~4.9 MB). Replaces the MSYS2 build (27.5 MB) and
+#  its 97-DLL absl/onnx/protobuf/re2 dependency cluster.
+#  Provenance: LICENSES/THIRD-PARTY.txt
 # ============================================================
-file(GLOB ABSL_DLLS "${MSYS2_ROOT}/bin/libabsl_*.dll")
-set(ABSL_COPY_COMMANDS "")
-foreach(_absl ${ABSL_DLLS})
-    list(APPEND ABSL_COPY_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_absl}" "$<TARGET_FILE_DIR:aec_gui>")
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll")
+    message(FATAL_ERROR
+        "libs/onnxruntime.dll missing — vendored Microsoft onnxruntime 1.29.0 (UPX-compressed)")
+endif()
+
+# ============================================================
+#  VC++ 14 runtime — required by onnxruntime.dll (MSVC-built).
+#  Copied app-local from the build machine's System32 so the app
+#  starts on machines without the VC++ redistributable.
+# ============================================================
+if(DEFINED ENV{WINDIR})
+    file(TO_CMAKE_PATH "$ENV{WINDIR}" _WIN_DIR)
+else()
+    set(_WIN_DIR "C:/Windows")
+endif()
+set(VC_COPY_COMMANDS "")
+foreach(_vc msvcp140 msvcp140_1 vcruntime140 vcruntime140_1)
+    if(EXISTS "${_WIN_DIR}/System32/${_vc}.dll")
+        list(APPEND VC_COPY_COMMANDS
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_WIN_DIR}/System32/${_vc}.dll" "$<TARGET_FILE_DIR:aec_gui>")
+    else()
+        message(WARNING "VC++ runtime not found: ${_WIN_DIR}/System32/${_vc}.dll "
+            "(app may fail to start without it)")
+    endif()
 endforeach()
 
 # ============================================================
 #  Copy every runtime DLL next to aec_gui.exe
 #  Includes transitive deps that load dynamically at runtime
-#  (ONNX Runtime, WebRTC, GLFW, Absl, OpenMP).
+#  (ONNX Runtime + VC++ CRT, WebRTC, GLFW).
 # ============================================================
 add_custom_command(TARGET aec_gui POST_BUILD
     # Our own engine DLLs
@@ -92,7 +115,7 @@ add_custom_command(TARGET aec_gui POST_BUILD
         ${MSYS2_ROOT}/bin/libwebrtc-audio-processing-1-3.dll
         $<TARGET_FILE_DIR:aec_gui>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/onnxruntime.dll
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
         $<TARGET_FILE_DIR:aec_gui>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${MSYS2_ROOT}/bin/glfw3.dll
@@ -107,25 +130,8 @@ add_custom_command(TARGET aec_gui POST_BUILD
         ${MSYS2_ROOT}/bin/libstdc++-6.dll
         $<TARGET_FILE_DIR:aec_gui>
 
-    # MSYS2 runtime — transitive deps (load dynamically)
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/libgomp-1.dll
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/libonnx.dll
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/libprotobuf-lite.dll
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/libre2-11.dll
-        $<TARGET_FILE_DIR:aec_gui>
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${MSYS2_ROOT}/bin/libutf8_validity.dll
-        $<TARGET_FILE_DIR:aec_gui>
-
-    # Absl runtime (copied individually — list built above)
-    ${ABSL_COPY_COMMANDS}
+    # VC++ 14 runtime for onnxruntime.dll (built above)
+    ${VC_COPY_COMMANDS}
 
     # Models
     COMMAND ${CMAKE_COMMAND} -E make_directory

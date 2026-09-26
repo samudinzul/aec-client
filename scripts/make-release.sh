@@ -57,7 +57,7 @@ sed "s/%%VERSION%%/${VER}/g" scripts/README.txt > "$STAGE/README.txt"
 
 # ---- contract asserts ----
 fail=0
-forbidden='imgui\.ini|aec_config\.txt|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/|enrollment|embedding|\.wav$|\.mp3$|\.flac$|gtcrn'
+forbidden='imgui\.ini|aec_config\.txt|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/|enrollment|embedding|\.wav$|\.mp3$|\.flac$|gtcrn|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp'
 bad=$(find "$STAGE" | grep -Ei "$forbidden" || true)
 if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
 test -f "$STAGE/aec_gui.exe" || { echo "missing exe" >&2; fail=1; }
@@ -71,6 +71,16 @@ if ls "$STAGE"/models/dtln_aec_512_* >/dev/null 2>&1; then
 fi
 test -f "$STAGE/README.txt" || { echo "missing README.txt" >&2; fail=1; }
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
+# Slim-runtime contract: vendored MS onnxruntime (UPX-compressed) + its
+# VC++ runtime; the old 27.5 MB MSYS2 build / absl cluster must not return.
+test -f "$STAGE/onnxruntime.dll" || { echo "missing onnxruntime.dll" >&2; fail=1; }
+ort_sz=$(stat -c %s "$STAGE/onnxruntime.dll" 2>/dev/null || echo 0)
+if [ "$ort_sz" -ge 16000000 ]; then
+    echo "onnxruntime.dll is ${ort_sz}B (>16MB) — MSYS2 build leaked in?"; fail=1
+fi
+for d in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
+    test -f "$STAGE/$d" || { echo "missing VC++ runtime: $d" >&2; fail=1; }
+done
 [ $fail -ne 0 ] && exit 1
 
 rm -f "release/AEC-Client-v${VER}-win64.zip"
@@ -80,10 +90,10 @@ rm -f "release/AEC-Client-v${VER}-win64.zip"
 python3 -c "
 import zipfile, re, sys
 names = zipfile.ZipFile('release/AEC-Client-v${VER}-win64.zip').namelist()
-assert len(names) > 100, f'zip suspiciously small ({len(names)})'
+assert len(names) > 15, f'zip suspiciously small ({len(names)})'
 roots = sorted({n.split('/')[0] for n in names})
 assert roots == ['AEC-Client-v${VER}-win64'], f'zip root layout wrong: {roots}'
-pat = re.compile(r'releases/|imgui\.ini|aec_config|config\.txt|\.pdb$|\.dll\.a$|enrollment|embedding|\.wav$|\.mp3$|\.flac$', re.I)
+pat = re.compile(r'releases/|imgui\.ini|aec_config|config\.txt|\.pdb$|\.dll\.a$|enrollment|embedding|\.wav$|\.mp3$|\.flac$|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp', re.I)
 bad = [n for n in names if pat.search(n)]
 assert not bad, f'forbidden files in zip: {bad}'
 print(f'zip entries: {len(names)}, single root OK, no strays')

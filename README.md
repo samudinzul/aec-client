@@ -144,7 +144,8 @@ The release ZIP bundles all required DLLs:
 | `aec_gui.exe` | ~2.4 MB | Main application |
 | `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 + noise suppression |
-| `onnxruntime.dll` | ~28 MB | Neural inference (NKF, DTLN ONNX fallback, Silero) |
+| `onnxruntime.dll` | ~4.9 MB | Neural inference (NKF, DTLN ONNX fallback, Silero; official MS build, UPX-compressed) |
+| `msvcp140/vcruntime140*.dll` | ~900 KB | VC++ 14 runtime (required by onnxruntime.dll) |
 | `tensorflowlite_c.dll` | ~4.5 MB | TFLite runtime for DTLN (primary path) |
 | `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
 | `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
@@ -258,7 +259,7 @@ NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research m
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms
 - **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. NKF is strictly linear since 1.9 (the residual AEC3 pass was retired) — the stack is NKF + optional WebRTC NS + light WPE dereverb, so the busy-PC path is the **Low CPU (NKF)** preset (NS/WPE off).
-- **Requires**: ONNX Runtime (28 MB DLL) — no other model files
+- **Requires**: ONNX Runtime (5 MB DLL) — no other model files
 
 Production path adds: **time-delay compensation** (cross-correlation vs loopback), staged exposure (no cold-start spikes), a **divergence guard**, a **self-monitor loop detector** (Listen-to-myself / Discord mic test), optional **WebRTC NS**, and the toggleable **WPE dereverb** stage (on by default).
 
@@ -306,7 +307,7 @@ pacman -S mingw-w64-ucrt-x86_64-ninja
 pacman -S mingw-w64-ucrt-x86_64-ccache
 pacman -S mingw-w64-ucrt-x86_64-glfw
 pacman -S mingw-w64-ucrt-x86_64-webrtc-audio-processing-1
-pacman -S mingw-w64-ucrt-x86_64-onnxruntime
+pacman -S mingw-w64-ucrt-x86_64-onnxruntime   # headers + import lib only; the runtime DLL ships in libs/
 pacman -S git zip
 ```
 

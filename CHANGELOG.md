@@ -5,6 +5,19 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Runtime payload ~38 MB → ~6 MB.** `onnxruntime.dll` is now the
+  official Microsoft x64 build (v1.29.0) instead of the MSYS2 one,
+  UPX-compressed 27.5 MB → 4.9 MB, and the 97-file absl/onnx/
+  protobuf/re2 dependency cluster it dragged in is gone (nothing but
+  ORT imported them). The VC++ 14 runtime (msvcp140/vcruntime140,
+  ~900 KB) ships app-local instead; link-time headers/import lib are
+  still MSYS2's (same 1.29.0 version). Install zip roughly halves
+  (~26.5 MB → ~14 MB) and the release drops from 117 to ~23 files.
+
 ## [1.9.1] — 2026-09-25
 
 ### Changed

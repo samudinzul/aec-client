@@ -19,6 +19,11 @@ AEC Client bundles the following open-source libraries:
 4.  ONNX Runtime
     Copyright (C) Microsoft Corporation
     License: MIT
+    Bundled binary: official onnxruntime-win-x64 1.29.0 build
+    (https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0),
+    UPX-compressed, SHA-256 e210d149…; shipped together with the
+    Microsoft VC++ 14 runtime (msvcp140/vcruntime140 — license:
+    Visual Studio redistributable terms).
 
 5.  Dear ImGui
     Copyright (C) 2014-2025 Omar Cornut

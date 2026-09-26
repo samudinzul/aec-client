@@ -5,6 +5,7 @@ third_party/REAL_TIME_NKF_AEC/c/build/
 # Compiled binaries
 *.exe
 *.dll
+!libs/onnxruntime.dll
 *.o
 *.obj
 *.a
