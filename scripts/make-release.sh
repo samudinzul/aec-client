@@ -6,7 +6,7 @@
 # Contract (matches v1.2.x precedent, enforced by asserts below):
 #   release/AEC-Client-vX-win64/
 #     aec_gui.exe + *.dll (runtime only) + libs/tensorflowlite_c.dll
-#   models/          (explicit allowlist: nkf, dtln pair, silero)
+#   models/          (explicit allowlist: nkf, dtln pair)
 #     LICENSES/        (third-party credits)
 #     README.txt       (end-user doc, version stamped)
 #     wallpapers/      (empty; users bring their own)
@@ -43,11 +43,10 @@ cp build/*.dll "$STAGE/"
 cp libs/tensorflowlite_c.dll "$STAGE/" 2>/dev/null || true
 
 # Models: explicit allowlist from repo source of truth (never build/
-# leftovers — stale files like the nuked ECAPA pair must not ship).
+# leftovers — stale files like the nuked ECAPA/Silero pair must not ship).
 for m in models/nkf.onnx \
          models/dtln_aec_128_1.tflite \
-         models/dtln_aec_128_2.tflite \
-         models/silero_vad.onnx; do
+         models/dtln_aec_128_2.tflite; do
     test -f "$m" || { echo "missing model: $m" >&2; exit 1; }
     cp "$m" "$STAGE/models/"
 done
@@ -57,13 +56,12 @@ sed "s/%%VERSION%%/${VER}/g" scripts/README.txt > "$STAGE/README.txt"
 
 # ---- contract asserts ----
 fail=0
-forbidden='imgui\.ini|aec_config\.txt|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/|enrollment|embedding|\.wav$|\.mp3$|\.flac$|gtcrn|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp'
+forbidden='imgui\.ini|aec_config\.txt|dfn|deepfilter|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/|enrollment|embedding|\.wav$|\.mp3$|\.flac$|gtcrn|silero|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp'
 bad=$(find "$STAGE" | grep -Ei "$forbidden" || true)
 if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
 test -f "$STAGE/aec_gui.exe" || { echo "missing exe" >&2; fail=1; }
 test -f "$STAGE/models/dtln_aec_128_1.tflite" || { echo "missing dtln 128 stage1" >&2; fail=1; }
 test -f "$STAGE/models/dtln_aec_128_2.tflite" || { echo "missing dtln 128 stage2" >&2; fail=1; }
-test -f "$STAGE/models/silero_vad.onnx" || { echo "missing silero" >&2; fail=1; }
 test -f "$STAGE/models/nkf.onnx" || { echo "missing nkf" >&2; fail=1; }
 # Old default must never ship again
 if ls "$STAGE"/models/dtln_aec_512_* >/dev/null 2>&1; then
@@ -93,7 +91,7 @@ names = zipfile.ZipFile('release/AEC-Client-v${VER}-win64.zip').namelist()
 assert len(names) > 15, f'zip suspiciously small ({len(names)})'
 roots = sorted({n.split('/')[0] for n in names})
 assert roots == ['AEC-Client-v${VER}-win64'], f'zip root layout wrong: {roots}'
-pat = re.compile(r'releases/|imgui\.ini|aec_config|config\.txt|\.pdb$|\.dll\.a$|enrollment|embedding|\.wav$|\.mp3$|\.flac$|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp', re.I)
+pat = re.compile(r'releases/|imgui\.ini|aec_config|dfn|deepfilter|config\.txt|\.pdb$|\.dll\.a$|enrollment|embedding|\.wav$|\.mp3$|\.flac$|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp', re.I)
 bad = [n for n in names if pat.search(n)]
 assert not bad, f'forbidden files in zip: {bad}'
 print(f'zip entries: {len(names)}, single root OK, no strays')

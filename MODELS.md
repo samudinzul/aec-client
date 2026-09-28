@@ -12,9 +12,13 @@ Sizes and SHA-256 hashes below were verified for the files currently in the tree
 | File | Size | Engine | Download from |
 |------|------|--------|---------------|
 | `nkf.onnx` | ~45 KB | NKF-AEC | Bundled with this repo (simplified with onnxsim; upstream: [fjiang9/NKF-AEC](https://github.com/fjiang9/NKF-AEC), via [REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC)) |
-| `silero_vad.onnx` | ~2.2 MB | Voice gate (Silero VAD v6.2.1, MIT) | [snakers4/silero-vad (raw)](https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx) |
 | `dtln_aec_128_1.tflite` | ~1.9 MB | DTLN-AEC 128 (stage 1) | [breizhn/DTLN-aec pretrained_models](https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models) |
 | `dtln_aec_128_2.tflite` | ~5.0 MB | DTLN-AEC 128 (stage 2) | [breizhn/DTLN-aec pretrained_models](https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models) |
+Retired in v2.0: `silero_vad.onnx` (voice gate) is gone;
+`gtcrn_stream.onnx` had already been retired in v1.9; the
+`dfn/` graphs (DeepFilterNet, evaluated pre-release) were cut before
+2.0.0. The WPE / notch post stages are model-free in-tree DSP —
+no files to download.
 
 ## Runtime library (in `libs/`)
 
@@ -26,10 +30,6 @@ Sizes and SHA-256 hashes below were verified for the files currently in the tree
 
 ```bash
 mkdir -p models
-
-# Silero VAD voice gate v6.2.1 (~2.2 MB, MIT)
-curl -L -o models/silero_vad.onnx \
-  "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
 
 # DTLN-AEC 128 pair (~1.9 MB + ~5.0 MB)
 curl -L -o models/dtln_aec_128_1.tflite \
@@ -47,19 +47,13 @@ curl -L -o models/dtln_aec_128_2.tflite \
 8d241b3a732af8ca140b2e30043e56a6c3c7800c46e22c26f4eea2f70974ad1e  dtln_aec_128_1.tflite
 350bb01a1152ae3cabe09fe5e868ef2f7d8b988a9f22aae44f140195f6493126  dtln_aec_128_2.tflite
 1d46987c5d3b4b7a555b054947fa4ae19e38999d3500cbb2cb10d8b9005f81d0  nkf.onnx
-1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3  silero_vad.onnx  (matches upstream v6.2.1)
 ```
 
 Check with: `sha256sum models/*`
 
 ## Notes
 
-- Without the DTLN pair, the DTLN-AEC engine reports `Failed to load DTLN model`
-  on Start; all other engines are unaffected. (Alternative: convert the pair to
-  `models/dtln_aec_128_1.onnx` + `models/dtln_aec_128_2.onnx` — the build already
-  links ONNX Runtime, so no extra DLL is needed. The release script currently
-  expects the `.tflite` pair.)
-- Without `silero_vad.onnx`, the voice gate reports "model not found" and audio
-  passes through unchanged.
+- Without the DTLN pair, the DTLN profile (Voice Isolation) reports
+  `Failed to load DTLN model` on Start; the other profiles are unaffected.
 - The release script (`scripts/make-release.sh`) hard-requires the model files
   in its allowlist — a missing file aborts the release with `missing model: ...`.

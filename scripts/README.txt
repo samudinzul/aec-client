@@ -5,11 +5,10 @@ Real-time acoustic echo cancellation for Windows.
 
 WHAT IT DOES
 ------------
-Routes your microphone through one of 3 AEC engines, cancels
-the sound coming from your speakers, and outputs a clean mic signal
-to a virtual audio cable that Discord / Zoom / Teams can use.
-A neural voice gate is available (off by default) to push silence down
-and pass speech automatically.
+Routes your microphone through a processing profile (echo canceller +
+noise filter), cancels the sound coming from your speakers, and
+outputs a clean mic signal to a virtual audio cable that Discord /
+Zoom / Teams can use.
 
 REQUIREMENTS
 ------------
@@ -28,64 +27,64 @@ QUICK START
    - Speaker Reference: your physical speakers (the sound to cancel)
    - Output:            CABLE Input (VB-Audio Virtual Cable)
 
-4. Pick an engine (or a Quick preset on the Audio tab):
-   - DTLN-AEC 128         recommended default: neural echo + noise (16 kHz)
-   - WebRTC AEC3          strongest echo removal (16 / 48 kHz; 48 kHz costs more CPU)
-   - NKF-AEC              small neural core (16 kHz), strictly linear.
-                          "Dereverb (WPE)" (default ON) and "Noise
-                          reduction" stack on top. "Low CPU (NKF)"
-                          preset = bare NKF with both off.
+4. Pick an engine at the top of the Audio tab — the label shows
+   the engine and its chain (the engine is not configurable on
+   its own):
+   - DTLN-AEC 128        dual-LSTM core — the default: best echo
+     + reverb handling, its own noise removal (16 kHz).
+   - WebRTC AEC3         the Chrome canceller — reliable,
+     well-tested baseline (16 kHz, 48 kHz optional).
+   - NKF-AEC             tiny Kalman core — for weak CPUs
+     (16 kHz).
 
-5. Optional: tick "Noise reduction" under Advanced on AEC3 or NKF-AEC
-   for WebRTC noise suppression on top of echo cancellation. On
-   NKF-AEC, "Dereverb (WPE)" (default ON) strips room reverb after
-   the canceller (small extra CPU, ~32 ms extra delay) — untick it
-   to hear the raw canceller output.
+5. Optional: two ticks under the profile control the post chain —
+   "Dereverb (WPE)" (eats reverb tails, ~32 ms delay) and
+   "Feedback suppression (notch)" (kills howling/ringing tones).
+   Both are ON by default for every profile, persist across
+   restarts, and are never reset by picking a profile; while
+   ticked the profile label reads "engine -> WPE -> Notch".
+   The sample rate under Advanced is also independent of the
+   profile.
 
-6. Click Start. Optional: tick "Push down silence (neural voice
-   detector)" at the top of the Audio tab — the green SPEAKING pill
-   then means speech is going out and grey SILENT means silence is
-   pushed down. Soft gate keeps breaths natural. OFF by default.
-   Calibrate under Advanced -> Voice gate.
+6. Click Start. The status line shows the active chain, e.g.
+   "Running (16000 Hz, AEC3 + WPE + Notch)".
 
 7. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)
-   - Input Profile:       Voice Isolation (one tap: Discord's noise
-      cleanup ON; echo is already removed by this app — DTLN and the
-      optional Noise reduction checkbox also remove noise, bare
-      AEC3/NKF-AEC are echo-only).
+   - Input Profile:       Voice Isolation (Discord's own noise
+      cleanup ON; echo and hiss are already removed by this app).
       Manual alternative: Custom profile with Echo Cancellation OFF
-      (this app does it), Noise Suppression Krisp (Standard on weak
+      (this app does it), Noise Suppression Krisp (NKF-AEC on weak
       PCs), Automatic Gain Control OFF.
 
 TIPS
 ----
-- CPU-sensitive? Try the "Low CPU (NKF)" preset (bare NKF, dereverb
-  and noise reduction off). DTLN/AEC3/NKF are all usually well under
-  2% on a typical desktop.
+- CPU-sensitive? Try "NKF-AEC". DTLN/AEC3/NKF are all usually
+  well under 2% on a typical desktop; the WPE + notch post stages
+  add a fraction of a percent.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
   loops your voice back into the mic — NKF adapts live and is the most
   sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
   for mic tests.
 - If echo comes back after a long call, click Stop then Start.
-- Your voice is protected: the near-end protector keeps the chain
-  from ducking you more than 15 dB, even in double-talk. Very loud
-  speakers can still let some echo through (or make AEC3 cut mid-
-  sentence) — keep them moderate, or switch to DTLN-AEC.
+- Very loud speakers can let some echo through (or make AEC3 mistake
+  your voice for echo) — keep them moderate, or switch to
+  DTLN-AEC 128.
 - If your voice sounds processed or robotic on AEC3, stay on the
-  default DTLN-AEC (or try NKF-AEC if it sounds clean on your setup).
+  default DTLN-AEC 128 (or try NKF-AEC if it sounds clean on your
+  setup).
 - The X button minimizes to the system tray (toggle in Appearance tab).
-- DTLN-AEC needs models/dtln_aec_128_1.tflite +
+- DTLN needs models/dtln_aec_128_1.tflite +
   models/dtln_aec_128_2.tflite (bundled) and tensorflowlite_c.dll
   (bundled). Without them it reports "Failed to load DTLN model".
-- The voice gate needs models/silero_vad.onnx (bundled). Without
-  it the gate stays off and audio passes through unchanged.
+- The WPE and notch post stages are model-free (in-tree DSP) —
+  nothing to install; toggle them off if you want the raw engine.
 
 TROUBLESHOOTING
 ---------------
 - "No devices found": click Refresh in the Devices section.
 - App won't start: make sure all DLLs are in the same folder as the .exe.
-- Choppy audio: switch to the 16000 sample rate in the Engine section.
+- Choppy audio: switch to the 16000 sample rate under Advanced.
 - DTLN quiet: it runs at 16 kHz only (auto-locked).
 
 LICENSE

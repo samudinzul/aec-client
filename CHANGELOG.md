@@ -5,6 +5,75 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] — 2026-09-27
+
+### Added
+
+- **Three engine profiles replace engines + presets.** One combo
+  at the top of the Audio tab selects the engine; the label shows the
+  engine name directly, plus `→ WPE` / `→ Notch` while the post
+  stages are ticked (no hidden state):
+  - *DTLN-AEC 128* — dual-LSTM echo + noise canceller (16 kHz).
+    Default: best echo + reverb handling.
+  - *WebRTC AEC3* — the canceller Chrome and Google Meet use.
+    Reliable, well-tested baseline, strongest canceller.
+  - *NKF-AEC* — tiny neural Kalman core. Cheap canceller for weak
+    CPUs.
+  Sample rate, gains and devices are independent knobs (only the
+  16-kHz-only engines force the rate down). Old configs migrate: the
+  five v1.9 presets map onto the three profiles, old *Manual* lands
+  on the profile for its engine.
+- **Dereverb (WPE) as a global post stage.** The in-tree streaming
+  single-channel Weighted Prediction Error dereverberator returns
+  (removed inside NKF in 2.0, now a standalone stage stacked after
+  every engine) and is extended to 48 kHz (frame geometry scales
+  512/1536 with the same 32 ms frames). Speech-gated predictor bound
+  protects voice level; model-free (pocketfft only), ~32 ms delay.
+- **Feedback suppression (adaptive notch).** Two cascaded
+  second-order notches (~60 Hz) whose centers track narrowband
+  howling/ringing via LMS on the quadrature component, slew-limited
+  (8000 Hz/s), frozen while you talk (voice can never latch it) and
+  exact-bypass until a tone is actually captured (>45% energy removed
+  for ~200 ms, engage-gating) — idle voice passes bit-exact. Runs at
+  16/48 kHz.
+- Both post stages are always-visible ticks, **ON by default for
+  every profile**, persist across restarts and are never reset by a
+  profile switch (config gen 6).
+
+### Changed
+
+- **Pipeline is now engine → WPE → Notch → meters → limiter →
+  gain.** Meters show what Discord hears (post-stage). Output status
+  line reports the stacked chain ("16000 Hz, AEC3 + WPE + Notch").
+  The speech flag driving both stages comes from a cheap RMS
+  hysteresis detector on the engine output (attack ~20 ms, release
+  ~300 ms) — no voice model needed.
+- **Config generation 6.** Slot 7 = WPE tick, slot 17 = notch tick.
+  Gen ≤ 5 files still load: presets migrate to profiles, old Manual
+  setups land on the profile for their engine, and both post stages
+  are forced ON (the slots held the retired preprocess/DFN and
+  custom-profile flags).
+
+### Removed
+
+- **Silero voice gate** — detector, calibration, the SPEAKING/SILENT
+  pill, dual-feed resamplers and the "Push down silence" checkbox are
+  all gone (models/silero_vad.onnx no longer ships).
+- **Near-end protector** (dry-mic blend) — no detector exists to
+  gate it.
+- **Noise reduction checkbox** — the WebRTC NS stages in AEC3/NKF
+  are gone (AEC3 keeps its high-pass filter).
+- **DeepFilterNet (cut before release).** The v2.0 pre-release line
+  stacked a full DeepFilterNet3 port after the engine; detail
+  testing showed the LSNR gating modulated voice level audibly
+  (voice pumping up/down mid-sentence), so the stage, its wrapper
+  and its ~8 MB of model files were cut before 2.0.0 shipped.
+  WPE + the adaptive notch carry the noise/reverb/howl cleanup
+  instead.
+- **Engine combo and Quick presets** — the engine only changes
+  through the profile menu.
+- **GTCRN dead code** (gtcrn_wrapper) and the Silero voice gate.
+
 ## [1.9.2] — 2026-09-26
 
 ### Changed

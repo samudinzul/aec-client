@@ -24,7 +24,7 @@ struct Aec3Handle {
 
 extern "C" {
 
-Aec3Handle* Aec3New(int sampleRate, int frameSize, bool nsEnabled) {
+Aec3Handle* Aec3New(int sampleRate, int frameSize) {
     auto h = new Aec3Handle();
     h->sampleRate = sampleRate;
     h->frameSize  = frameSize;
@@ -33,13 +33,12 @@ Aec3Handle* Aec3New(int sampleRate, int frameSize, bool nsEnabled) {
     h->apm = webrtc::AudioProcessingBuilder().Create();
     if (!h->apm) { delete h; return nullptr; }
 
-    // 2. Build the config and apply it
+    // 2. Build the config and apply it. v2.0: noise suppression is
+    // retired (the global WPE/notch post stages handle the rest);
+    // the high-pass filter stays with AEC3 itself.
     webrtc::AudioProcessing::Config config;
     config.echo_canceller.enabled     = true;
     config.echo_canceller.mobile_mode = false;
-    config.noise_suppression.enabled  = nsEnabled;
-    config.noise_suppression.level    =
-        webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
     config.high_pass_filter.enabled   = true;
     config.gain_controller1.enabled   = false;
     config.gain_controller2.enabled   = false;

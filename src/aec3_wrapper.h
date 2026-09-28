@@ -9,8 +9,9 @@ extern "C" {
 typedef struct Aec3Handle Aec3Handle;
 
 // Create AEC3 engine. frameSize = samples per 10 ms frame.
-// nsEnabled = WebRTC noise suppression (Moderate) alongside echo cancellation.
-Aec3Handle* Aec3New(int sampleRate, int frameSize, bool nsEnabled);
+// v2.0: the WebRTC noise-suppression stage is retired (the global
+// WPE/notch post stages carry the cleanup; see wpe.h / notch.h).
+Aec3Handle* Aec3New(int sampleRate, int frameSize);
 
 // Process one frame: mic + ref -> out
 void Aec3CancelEcho(Aec3Handle* h, const int16_t* mic, const int16_t* ref,

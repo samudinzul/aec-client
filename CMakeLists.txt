@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(aec VERSION 1.9.2 LANGUAGES CXX)
+project(aec VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,8 +40,8 @@ add_executable(aec_gui
     src/aec3_wrapper.cpp
     src/nkf_wrapper.cpp
     src/dtln_wrapper.cpp
-    src/silero_wrapper.cpp
     src/wpe.cpp
+    src/notch.cpp
 )
 
 target_include_directories(aec_gui PRIVATE
@@ -161,19 +161,6 @@ foreach(_dtln
             COMMENT "Copying ${_dtln}")
     endif()
 endforeach()
-# ============================================================
-#  Silero VAD model (optional — voice gate reports "model not found"
-#  until vendored). Guarded so a fresh clone without it still builds.
-#  Download (~2.2 MB, MIT), sha256-verified v6.2.1:
-#    https://github.com/snakers4/silero-vad/blob/master/src/silero_vad/data/silero_vad.onnx
-# ============================================================
-if(EXISTS "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx")
-    add_custom_command(TARGET aec_gui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/models/silero_vad.onnx"
-            "$<TARGET_FILE_DIR:aec_gui>/models/silero_vad.onnx"
-        COMMENT "Copying models/silero_vad.onnx")
-endif()
 # TFLite runtime (optional, loaded at runtime by dtln_wrapper)
 foreach(_tflite_dll
     "${CMAKE_SOURCE_DIR}/libs/tensorflowlite_c.dll"

@@ -23,7 +23,8 @@
 #include "aec3_wrapper.h"
 #include "nkf_wrapper.h"
 #include "dtln_wrapper.h"
-#include "silero_wrapper.h"
+#include "wpe.h"
+#include "notch.h"
 
 #include <cstdio>
 #include <cmath>
@@ -47,7 +48,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.9.2"
+#define APP_VERSION "2.0.0"
 
 // ============================================================
 //  Single-instance protection
@@ -152,84 +153,35 @@ struct EngineState {
     Aec3Handle* aec3  = nullptr;
     NkfHandle*  nkf   = nullptr;
     DtlnHandle* dtln  = nullptr;
+    WpeHandle*  wpe   = nullptr;   // WPE dereverb post stage (per g_wpeEnabled)
+    NotchHandle* notch = nullptr;  // adaptive notch post stage (per g_notchEnabled)
 };
 
 // ============================================================
-//  Presets
+//  Profiles
 // ============================================================
-struct Preset {
+// Profile = engine selection. The combo label shows the engine name
+// directly; the running chain is engine + the post stages while they
+// are ticked. Filter length comes from here; sample rate, gains,
+// devices and the two post-stage ticks are free knobs.
+struct Profile {
     const char* name;
     int   engine;
-    int   sampleRateIdx;
     int   filterIdx;
-    bool  preprocess;  // retired, always false (kept for initializer shape)
-    float micGain;
-    float outGain;
-    bool  ns;        // Noise reduction (AEC3/NKF only; ignored on DTLN)
-    bool  wpe;       // WPE dereverb post-filter (NKF only)
 };
 
-static const Preset PRESETS[] = {
-    // Manual: ApplyPreset returns early — trailing flags unused.
-    { "Manual settings",       4, 1, 1, false, 1.00f, 1.00f, false, true },
-    { "Discord (recommended)", 4, 0, 0, false, 1.00f, 1.00f, false, true },
-    // Echo-heavy rooms get AEC3 at 16 kHz: fewer subbands to adapt
-    // means faster convergence per band where voice lives, and long
-    // reverb tails are a convergence race. Full-band returns when
-    // the room allows it.
-    { "Echo-Heavy Room",       1, 0, 2, false, 1.00f, 1.00f, false, true },
-    { "Noisy Room",            4, 0, 3, false, 1.20f, 1.00f, false, true },
-    // Bare NKF @16 kHz for busy PCs: NS + dereverb (WPE) off — the
-    // cheapest NKF path (WPE is real FFT/filter work per frame).
-    { "Low CPU (NKF)",         2, 0, 0, false, 1.00f, 1.00f, false, false },
+static const Profile PROFILES[] = {
+    { "DTLN-AEC 128", ENGINE_DTLN, 0 },
+    { "WebRTC AEC3",  ENGINE_AEC3, 2 },
+    { "NKF-AEC",      ENGINE_NKF,  0 },
 };
-// Five slots, each distinct. "High Quality" stays cut (duplicated
-// Discord). Low CPU is back as bare NKF (NS/WPE off), not a
-// duplicate of Discord.
-const int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
+const int PROFILE_COUNT = (int)(sizeof(PROFILES) / sizeof(PROFILES[0]));
 
 // ============================================================
 //  Globals
 // ============================================================
 EngineState g_engine;
 
-// ============================================================
-//  Silero voice gate (neural VAD -> fixed gate -> output)
-//  Post-AEC: speech passes, silence is pushed down on every engine.
-//  Live at 16 kHz direct and 48 kHz via internal downsample
-//  (feed only). g_vadGain/g_vadHang live on the audio thread;
-//  UI only reads the atomics.
-// ============================================================
-SileroHandle*      g_vad = nullptr;  // (re)created in ReinitEngine (rate-agnostic; feed is 16 kHz)
-std::atomic<bool>  g_vadEnabled{ false }; // default OFF (opt-in, top of Audio tab)
-std::atomic<float> g_vadProb{ 0.0f };     // last chunk probability, for display
-std::atomic<float> g_vadMs{ 0.0f };       // last inference cost in ms, for display
-std::atomic<float> g_vadOpen{ 0.50f };    // calibrated open threshold (persisted)
-std::atomic<float> g_vadClose{ 0.30f };   // calibrated close threshold (persisted)
-std::atomic<bool>  g_vadCalibrating{ false };  // one-tap calibration in progress
-Clock::time_point  g_vadCalStart;          // UI thread only
-std::vector<float> g_vadCalSamples;        // UI thread only (prob samples)
-std::string        g_vadCalMsg;            // result / error line, UI thread only
-bool               g_vadCalMsgIsErr = false;
-bool               g_vadCalWasRunning = false;  // restore idle after auto-started calibration
-bool               g_calMonitor = false;  // one-shot: next StartAEC routes to speakers (calibration monitor)
-#define VAD_CAL_SECONDS 5
-float              g_vadGain = 1.0f;      // audio thread only
-float              g_vadSmooth = 0.0f;    // audio thread only (EMA of Silero prob)
-int                g_vadHang = 0;         // audio thread only (800 ms hangover)
-int                g_vadCloseVotes = 0;   // audio thread only (debounced release)
-ma_data_converter  g_vadResampler;        // 48 kHz -> 16 kHz for the mic-arm VAD feed
-bool               g_vadResamplerReady = false;  // (un)init with the audio idle
-// Cleaned-arm detector: Silero's RNN state is per-stream, so each feed
-// gets its own handle (see VadGateApply). Created/destroyed with g_vad;
-// either missing == detector missing (both are the same model file).
-SileroHandle*      g_vadClean = nullptr;
-ma_data_converter  g_vadResamplerClean;   // 48 kHz -> 16 kHz for the cleaned-arm feed
-bool               g_vadResamplerCleanReady = false;
-float              g_micEnvEma = 0.0f;    // audio thread: mic frame mean-square EMA
-float              g_refEnvEma = 0.0f;    // audio thread: ref frame mean-square EMA
-bool               g_nearSpeech = false;  // audio thread: last speech decision, read
-                                          // by output_callback one frame BEFORE NkfProcess
 ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
 ma_context g_context;
 static bool g_contextInitialized = false;
@@ -247,8 +199,14 @@ std::atomic<int>   g_sampleRate(16000);
 std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
-std::atomic<bool>  g_noiseReduction{ false };  // WebRTC NS Moderate on AEC3 + NKF; hidden on DTLN
-std::atomic<bool>  g_wpe{ true };             // WPE dereverb post-filter; NKF only, default ON
+// Post-stage ticks are global prefs (like the gains): a profile
+// switch never resets them. Both default ON for every engine.
+std::atomic<bool>  g_wpeEnabled{ true };      // WPE dereverb post stage
+std::atomic<bool>  g_notchEnabled{ true };    // adaptive notch feedback suppression
+// Speech flag state (audio thread): RMS hysteresis on the engine
+// output, feeding WpeSetSpeech/NotchSetSpeech each frame.
+float              g_speechEma = 0.0f;
+bool               g_speechOn  = true;        // speech-safe default
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -270,8 +228,8 @@ bool g_isFirstRun = false;      // no config file at launch: show the setup card
 bool g_sessionStartedOnce = false;  // setup card retires after first Start
 bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
-int  g_engineIndex = 4, g_sampleRateIndex = 0, g_filterIndex = 2;  // 4 = ENGINE_DTLN
-int  g_presetIndex = 1;
+int  g_engineIndex = 4, g_sampleRateIndex = 0, g_filterIndex = 0;  // 4 = ENGINE_DTLN; fresh = profile 0
+int  g_profileIndex = 0;         // active profile (PROFILES[])
 bool g_preprocessEnabled = false;
 bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
 char g_statusText[128] = "Idle";
@@ -544,23 +502,23 @@ void SaveSettings() {
     if (!f.is_open()) return;
     f << g_micIndex << "\n" << g_refIndex << "\n" << g_outIndex << "\n"
       << g_engineIndex << "\n" << g_sampleRateIndex << "\n" << g_filterIndex << "\n"
-      << (g_noiseReduction.load() ? 1 : 0) << "\n"  // retired preprocess slot: now noise reduction
+      << (g_wpeEnabled.load() ? 1 : 0) << "\n"  // WPE flag (was preprocess/DFN)
       << (int)(g_micGain.load() * 100) << "\n"
       << (int)(g_outputGain.load() * 100) << "\n"
       << g_wallpaperIndex << "\n"
-      << g_presetIndex << "\n"
+      << g_profileIndex << "\n"
        << (g_minimizeToTray ? 1 : 0) << "\n"
-       << (g_vadEnabled.load() ? 1 : 0) << "\n"
+       << 0 << "\n"  // retired: voice gate enable (kept for file alignment)
        << (g_listenToSelf ? 1 : 0) << "\n"
        << (g_advancedOpen ? 1 : 0) << "\n"
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
-       << 0 << "\n"  // retired: owner-only voice gate (PVAD/ECAPA nuked)
-       << g_vadOpen.load() << "\n"
-       << g_vadClose.load() << "\n"
-       << 0 << "\n"  // retired: show-legacy-engines toggle (SpeexDSP + LocalVQE nuked)
-       << 0 << "\n"  // retired: nuked DEC-toggle slot (kept for file alignment)
-       << 4 << "\n"  // config gen (4 = v1.9: dry/residual retired, WPE added)
-       << (g_wpe.load() ? 1 : 0) << "\n";  // NKF WPE dereverb, default ON
+       << (g_notchEnabled.load() ? 1 : 0) << "\n"  // notch flag (was custom-profile)
+       << 0 << "\n"  // retired: calibrated gate open threshold
+       << 0 << "\n"  // retired: calibrated gate close threshold
+       << 0 << "\n"  // retired: show-legacy-engines toggle
+       << 0 << "\n"  // retired: nuked DEC-toggle slot
+       << 6 << "\n"  // config gen (6 = v2.0: WPE + notch post stages)
+       << 0 << "\n"; // retired: NKF WPE dereverb (kept for file alignment)
 }
 
 void LoadSettings() {
@@ -568,11 +526,10 @@ void LoadSettings() {
     g_isFirstRun = !f.is_open();
     g_advancedOpen = !g_isFirstRun;  // newcomers start simple; regulars keep full view
     if (!f.is_open()) return;
-    int mg, og, nsFlag = 0;
+    int mg, og, wpeRaw = 1;
     if (f >> g_micIndex >> g_refIndex >> g_outIndex
           >> g_engineIndex >> g_sampleRateIndex >> g_filterIndex
-          >> nsFlag >> mg >> og) {
-        g_noiseReduction.store(nsFlag != 0);
+          >> wpeRaw >> mg >> og) {
         g_micGain.store(mg / 100.0f);
         g_outputGain.store(1.0f);  // single visible level: output stage fixed
         // Rates are {16000, 48000}: old index 1 (32 kHz, removed) and any
@@ -590,23 +547,23 @@ void LoadSettings() {
             g_engineIndex != ENGINE_DTLN)
             g_engineIndex = ENGINE_DTLN;
         g_selectedEngine.store(g_engineIndex);
-        g_enablePreprocess.store(g_preprocessEnabled);
-        // Speex cleanup retired: old configs with it on land on gate-only.
         g_preprocessEnabled = false;
         g_enablePreprocess.store(false);
         int wp = -1;
         if (f >> wp) g_wallpaperIndex = wp;
+        // Slot 11: gen<5 = preset index, gen5+ = profile index.
         int pi = -1;
-        if (f >> pi) g_presetIndex = pi;
-        int pgen = 1;  // preset layout generation (value read at end of file)
+        if (f >> pi) g_profileIndex = pi;
+        int pgen = 1;  // preset/profile layout generation (value read at end of file)
 
         // New field — default true if missing (backward compat with old config)
         int mt = 1;
         if (f >> mt) g_minimizeToTray = (mt != 0);
 
-        // New field — voice gate defaults OFF if missing (opt-in)
+        // (Retired field: voice gate enable, always 0. Read to keep
+        // old and new config files positionally aligned.)
         int ve = 0;
-        if (f >> ve) g_vadEnabled.store(ve != 0);
+        if (f >> ve) { (void)ve; }
 
         // New field — self-monitor defaults OFF if missing
         int ls = 0;
@@ -620,17 +577,17 @@ void LoadSettings() {
         // old and new config files positionally aligned.)
         int vd_skip = 0;
         if (f >> vd_skip) { (void)vd_skip; }
-        // (Retired field: owner-only voice gate, always 0. Kept aligned.)
-        int po_skip = 0;
-        if (f >> po_skip) { (void)po_skip; }
-        // New fields — calibrated gate thresholds (defaults 0.50/0.30)
-        float vo = 0.50f, vc = 0.30f;
-        if (f >> vo) {
-            if (vo >= 0.10f && vo <= 0.90f) g_vadOpen.store(vo);
-            if (f >> vc) {
-                if (vc >= 0.05f && vc < g_vadOpen.load()) g_vadClose.store(vc);
-            }
-        }
+        // Slot 17: notch flag (gen6); older files hold the retired
+        // custom-profile flag here — read positionally, decided after pgen.
+        int notchRaw = 1;
+        if (f >> notchRaw) { (void)notchRaw; }
+        // (Retired field: calibrated gate open threshold. Read to keep
+        // old and new config files positionally aligned.)
+        float vo = 0.0f;
+        if (f >> vo) { (void)vo; }
+        // (Retired field: calibrated gate close threshold. Kept aligned.)
+        float vc = 0.0f;
+        if (f >> vc) { (void)vc; }
         // (Retired field: show-legacy-engines toggle, always 0. Kept aligned.)
         int le_skip = 0;
         if (f >> le_skip) { (void)le_skip; }
@@ -645,29 +602,63 @@ void LoadSettings() {
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
         if (pgen == 1) {
-            if (g_presetIndex == 2) g_presetIndex = 1;  // HQ ≈ Discord
-            else if (g_presetIndex > 2 && g_presetIndex <= 5) g_presetIndex -= 1;
+            if (g_profileIndex == 2) g_profileIndex = 1;  // HQ ≈ Discord
+            else if (g_profileIndex > 2 && g_profileIndex <= 5) g_profileIndex -= 1;
         }
         // "Low CPU" was cut (it duplicated the NKF Discord): pre-cut
         // layouts slide again (3→Discord which is the same NKF engine,
         // 4→Noisy Room). Current files skip both remaps.
         if (pgen <= 2) {
-            if (g_presetIndex == 3) g_presetIndex = 1;  // Low CPU ≈ Discord (both NKF)
-            else if (g_presetIndex == 4) g_presetIndex = 3;
+            if (g_profileIndex == 3) g_profileIndex = 1;  // Low CPU ≈ Discord (both NKF)
+            else if (g_profileIndex == 4) g_profileIndex = 3;
         }
-        if (g_presetIndex < 0 || g_presetIndex >= PRESET_COUNT) g_presetIndex = 1;
-        if (pgen >= 4) {
-            // Config gen 4: NKF WPE dereverb (default ON if missing).
-            int wpf = 1;
-            if (f >> wpf) g_wpe.store(wpf != 0);
+        if (pgen >= 5) {
+            // Gen5+: slot 11 is already a profile index (0..2).
+            if (g_profileIndex < 0 || g_profileIndex >= PROFILE_COUNT)
+                g_profileIndex = 0;
         } else {
-            // Gen ≤3 files carry retired dry/residual slots here — read
-            // to stay aligned, keep WPE on its ON default.
-            int skip = 0;
-            if (f >> skip) { (void)skip; }
-            if (f >> skip) { (void)skip; }
-            g_wpe.store(true);
+            // Gen<5: 5-slot preset layout (Manual, Discord, Echo-Heavy,
+            // Noisy Room, Low CPU) -> 3 profiles.
+            if (g_profileIndex < 0 || g_profileIndex >= 5) g_profileIndex = 1;
+            static const int kPresetToProfile[5] = { 0, 0, 1, 0, 2 };
+            // Manual settings (old index 0): closest profile for the
+            // user's own engine; named presets map to their chain.
+            if (g_profileIndex == 0) {
+                g_profileIndex = (g_engineIndex == ENGINE_AEC3) ? 1
+                               : (g_engineIndex == ENGINE_NKF)  ? 2 : 0;
+            } else {
+                g_profileIndex = kPresetToProfile[g_profileIndex];
+            }
         }
+        if (g_filterIndex < 0 || g_filterIndex > 4) g_filterIndex = 0;
+        static const int rates[]   = { 16000, 48000 };
+        static const int filters[] = { 30, 50, 80, 120, 200 };
+        // Engine and filter always follow the profile (slot values above
+        // were only positional placeholders).
+        const Profile& p = PROFILES[g_profileIndex];
+        g_engineIndex = p.engine;
+        g_filterIndex = p.filterIdx;
+        // Sample rate is a free knob: keep the persisted value; only the
+        // 16-kHz-only engines force it back down.
+        if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
+            g_sampleRateIndex = 0;
+            g_sampleRate.store(rates[0]);
+        } else {
+            g_sampleRate.store(rates[g_sampleRateIndex == 0 ? 0 : 1]);
+        }
+        // Post stages: gen6 persists both live toggles. Older files
+        // carry the retired preprocess/DFN flag and the retired
+        // custom-profile flag in those slots — ignored; both stages
+        // default ON (global prefs, like the gains).
+        if (pgen >= 6) {
+            g_wpeEnabled.store(wpeRaw != 0);
+            g_notchEnabled.store(notchRaw != 0);
+        } else {
+            g_wpeEnabled.store(true);
+            g_notchEnabled.store(true);
+        }
+        g_filterLengthMs.store(filters[g_filterIndex]);
+        g_selectedEngine.store(g_engineIndex);
     }
 }
 
@@ -689,19 +680,12 @@ void ResetToDefaults() {
     g_outIndex = (cable >= 0) ? cable
                 : ((defRef >= 0) ? defRef : 0);
     BuildDisplayIndices();  // keep selections inside the filtered lists
-    g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 2;  // DTLN @16 kHz = Discord preset
-    g_presetIndex = 1;
+    g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 0;  // profile 0 (DTLN @16 kHz)
+    g_profileIndex = 0;
     g_preprocessEnabled = false;
-    g_noiseReduction.store(false);  // default OFF; retired preprocess slot carries it
-    g_wpe.store(true);              // default ON (NKF dereverb post-filter)
+    g_wpeEnabled.store(true);    // global prefs: both post stages ON
+    g_notchEnabled.store(true);
     g_minimizeToTray = true;
-    g_vadEnabled.store(false);   // default OFF (opt-in, top of Audio tab)
-    g_vadOpen.store(0.50f);
-    g_vadClose.store(0.30f);
-    g_vadCalibrating.store(false);
-    g_vadCalSamples.clear();
-    g_vadCalMsg.clear();
-    g_vadCalWasRunning = false;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
@@ -709,7 +693,7 @@ void ResetToDefaults() {
     g_advInitDone = false;  // re-apply the persisted default next frame
     g_sampleRate.store(16000);
     g_selectedEngine.store(ENGINE_DTLN);
-    g_filterLengthMs.store(50);
+    g_filterLengthMs.store(30);
     g_enablePreprocess.store(false);
     g_wallpaperIndex = 0;
     LoadWallpaperByIndex(0);
@@ -718,29 +702,26 @@ void ResetToDefaults() {
     snprintf(g_statusText, 128, "Defaults restored - press Start");
 }
 
-void ApplyPreset(int idx) {
-    if (idx <= 0 || idx >= PRESET_COUNT) return;
-    const Preset& p = PRESETS[idx];
+// Apply a profile: engine and filter length follow. Sample rate,
+// gains, devices and the post-stage ticks are untouched.
+void ApplyProfile(int idx) {
+    if (idx < 0 || idx >= PROFILE_COUNT) return;
+    const Profile& p = PROFILES[idx];
 
-    g_engineIndex      = p.engine;
-    g_sampleRateIndex  = p.sampleRateIdx;
-    g_filterIndex      = p.filterIdx;
-    g_preprocessEnabled= false;  // retired: gate does the silencing
-
-    static const int rates[] = { 16000, 48000 };
     static const int filters[] = { 30, 50, 80, 120, 200 };
 
+    g_engineIndex      = p.engine;
+    g_filterIndex      = p.filterIdx;
+    g_preprocessEnabled = false;
     g_selectedEngine.store(p.engine);
-    g_sampleRate.store(rates[p.sampleRateIdx]);
     g_filterLengthMs.store(filters[p.filterIdx]);
-    g_enablePreprocess.store(false);  // retired: gate does the silencing
-    g_micGain.store(p.micGain);
-    g_outputGain.store(1.00f);  // single visible level: output stage fixed
-    // NKF-related stages (ignored when engine is not NKF; kept in sync
-    // so switching away from Low CPU restores the quality defaults).
-    g_noiseReduction.store(p.ns);
-    g_wpe.store(p.wpe);
-    g_presetIndex = idx;
+    g_enablePreprocess.store(false);
+    g_profileIndex = idx;
+    // Rate is a free knob, but 16-kHz-only engines force it down.
+    if (p.engine == ENGINE_NKF || p.engine == ENGINE_DTLN) {
+        g_sampleRateIndex = 0;
+        g_sampleRate.store(16000);
+    }
 }
 
 // ============================================================
@@ -750,11 +731,12 @@ void ReinitEngine() {
     if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3); g_engine.aec3  = nullptr; }
     if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
+    if (g_engine.wpe)   { WpeDestroy(g_engine.wpe);    g_engine.wpe   = nullptr; }
+    if (g_engine.notch) { NotchDestroy(g_engine.notch); g_engine.notch = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
-    // NKF and DTLN run 16 kHz only (the voice gate eats natively instead
-    // of off a downsampled feed, which is where they under-scored).
+    // NKF and DTLN run 16 kHz only (their models are 16 kHz by design).
     if (eng == ENGINE_NKF || eng == ENGINE_DTLN) {
         g_sampleRate.store(16000);
         g_sampleRateIndex = 0;
@@ -764,303 +746,20 @@ void ReinitEngine() {
     int fs = frameSizeForRate(sr);
 
     if (eng == ENGINE_AEC3) {
-        g_engine.aec3 = Aec3New(sr, fs, g_noiseReduction.load());
+        g_engine.aec3 = Aec3New(sr, fs);
         g_engine.type = ENGINE_AEC3;
     } else if (eng == ENGINE_NKF) {
-        g_engine.nkf = NkfNew("models/nkf.onnx", g_noiseReduction.load(),
-                              g_wpe.load());
+        g_engine.nkf = NkfNew("models/nkf.onnx");
         g_engine.type = ENGINE_NKF;
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_128");
         g_engine.type = ENGINE_DTLN;
     }
 
-    // Voice gate models are rate-agnostic (16 kHz direct, 48 kHz via
-    // internal downsample in VadGateApply).
-    if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
-    if (g_vadClean) { SileroDestroy(g_vadClean); g_vadClean = nullptr; }
-    g_vad = SileroNew("models/silero_vad.onnx");
-    g_vadClean = SileroNew("models/silero_vad.onnx");
-    // Fail-open: a broken handle (missing model) must read as gate-off,
-    // never as eternal silence. Null BOTH when unusable so the UI's
-    // "detector missing" state matches what the gate actually does.
-    if (!g_vad || !g_vadClean) {
-        if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
-        if (g_vadClean) { SileroDestroy(g_vadClean); g_vadClean = nullptr; }
-    }
-}
-
-// Reset VAD state + gate. Call on Start/Stop/engine change (audio idle).
-static void VadReset() {
-    if (g_vad) SileroReset(g_vad);
-    if (g_vadClean) SileroReset(g_vadClean);
-    if (g_vadResamplerReady) {
-        ma_data_converter_uninit(&g_vadResampler, NULL);
-        g_vadResamplerReady = false;
-    }
-    if (g_vadResamplerCleanReady) {
-        ma_data_converter_uninit(&g_vadResamplerClean, NULL);
-        g_vadResamplerCleanReady = false;
-    }
-    g_vadGain = 1.0f;
-    g_vadSmooth = 0.0f;
-    g_vadHang = 0;
-    g_vadCloseVotes = 0;
-    g_vadProb.store(0.0f);
-    g_micEnvEma = 0.0f;
-    g_refEnvEma = 0.0f;
-    g_nearSpeech = false;
-}
-
-// Audio-thread gate. Called from output_callback after AEC, before
-// metering so meters show what Discord hears. Lock-free, no allocation.
-// Detector (Silero, 32 ms cadence) feeds calibrated open/close lines.
-// Same pair on every engine. Soft gate: asymmetrically EMA-smoothed
-// prob (fast rise / slow fall) maps through a close->open knee to a
-// target gain — breaths and weak speech never drop below -5 dB, only
-// firm silence (hangover gone + ~160 ms debounce) reaches the -12 dB
-// shelf (never mute). Fast attack (~30-40 ms) so onsets are never
-// cut, slow release so mid-speech dips glide; 800 ms hangover keeps
-// endings and natural breath pauses wide open.
-// DUAL FEED (Silero's RNN is stateful, so each stream gets its own
-// handle — interleaving two streams through one state would corrupt
-// both):
-//   cleaned arm: always pushed. The engine strips the speaker's
-//     playback, so this prob tracks the PERSON even with loud
-//     speakers — raw mic mostly heard the speaker's playback
-//     (music/game audio is not speech), which parked the gate in
-//     its knee/floor ("have to yell" failure) and false-fired the
-//     near-end protector into blending raw echo back in.
-//   mic arm: pushed always, but only COMBINED in when the loopback
-//     is not the dominant thing in the mic
-//     (g_refEnvEma < 0.5*g_micEnvEma). Raw mic is the ideal detector
-//     when speakers are idle (the engine can't fool it), and it
-//     rescues detection if the engine ever eats the voice.
-// Combined p = max(cleaned, mic-if-armed): either arm can rescue,
-// neither can veto. Silero runs even when the gate checkbox is off
-// (the near-end protector needs the speech flag); only the gain
-// stage is gated.
-static void VadGateApply(int16_t* cleaned, const int16_t* mic,
-                         const int16_t* ref, int fs) {
-    int sr = g_sampleRate.load();
-    if (!g_vad || !g_vadClean || (sr != 16000 && sr != 48000)) {
-        g_vadGain = 1.0f;
-        g_vadSmooth = 0.0f;
-        g_vadHang = 0;
-        g_vadCloseVotes = 0;
-        return;
-    }
-    // Frame mean-square EMAs (~4 frames): who owns the mic — the
-    // person or the loopback? Gates the mic arm only.
-    double me = 0, re = 0;
-    for (int i = 0; i < fs; i++) {
-        me += (double)mic[i] * mic[i];
-        re += (double)ref[i] * ref[i];
-    }
-    g_micEnvEma += 0.2f * ((float)(me / fs) - g_micEnvEma);
-    g_refEnvEma += 0.2f * ((float)(re / fs) - g_refEnvEma);
-    const bool micArmOk = g_refEnvEma < 0.5f * g_micEnvEma;
-
-    static float fbufM[MAX_FRAME_SIZE];
-    static float fbufC[MAX_FRAME_SIZE];
-    for (int i = 0; i < fs; i++) {
-        fbufM[i] = mic[i] / 32768.0f;
-        fbufC[i] = cleaned[i] / 32768.0f;
-    }
-    // Silero eats 16 kHz: direct at 16 kHz, miniaudio downsample at 48 kHz
-    // (proven: resampled feed scores 0.945/0.008 vs native 0.956/0.010).
-    static float fbuf16M[192];
-    static float fbuf16C[192];
-    const float* feedM = fbufM;  int feedNM = fs;
-    const float* feedC = fbufC;  int feedNC = fs;
-    bool armM = micArmOk;
-    bool armC = true;
-    if (sr == 48000) {
-        if (!g_vadResamplerReady || !g_vadResamplerCleanReady) {
-            if (!g_vadResamplerReady) {
-                ma_data_converter_config cfg = ma_data_converter_config_init(
-                    ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
-                if (ma_data_converter_init(&cfg, NULL, &g_vadResampler)
-                    != MA_SUCCESS) {
-                    g_vadGain = 1.0f;
-                    g_vadSmooth = 0.0f;
-                    g_vadHang = 0;
-                    g_vadCloseVotes = 0;
-                    return;  // fail-open
-                }
-                g_vadResamplerReady = true;
-            }
-            if (!g_vadResamplerCleanReady) {
-                ma_data_converter_config cfg = ma_data_converter_config_init(
-                    ma_format_f32, ma_format_f32, 1, 1, 48000, 16000);
-                if (ma_data_converter_init(&cfg, NULL, &g_vadResamplerClean)
-                    != MA_SUCCESS) {
-                    g_vadGain = 1.0f;
-                    g_vadSmooth = 0.0f;
-                    g_vadHang = 0;
-                    g_vadCloseVotes = 0;
-                    return;  // fail-open
-                }
-                g_vadResamplerCleanReady = true;
-            }
-        }
-        if (armM) {
-            ma_uint64 inM = (ma_uint64)fs, outM = 192;
-            if (ma_data_converter_process_pcm_frames(&g_vadResampler, fbufM,
-                                                     &inM, fbuf16M, &outM)
-                    != MA_SUCCESS || outM == 0)
-                armM = false;  // this arm silent this frame (fail-soft)
-            else { feedM = fbuf16M; feedNM = (int)outM; }
-        }
-        {
-            ma_uint64 inC = (ma_uint64)fs, outC = 192;
-            if (ma_data_converter_process_pcm_frames(&g_vadResamplerClean,
-                                                     fbufC, &inC, fbuf16C,
-                                                     &outC) != MA_SUCCESS ||
-                outC == 0)
-                armC = false;
-            else { feedC = fbuf16C; feedNC = (int)outC; }
-        }
-        if (!armM && !armC) return;  // both arms silent: hold decision
-    }
-    float pMic = -1.0f, pClean = -1.0f;
-    auto t0 = Clock::now();
-    bool okMic = false, okClean = false;
-    if (armM) okMic = SileroPush(g_vad, feedM, feedNM, &pMic) != 0;
-    if (armC) okClean = SileroPush(g_vadClean, feedC, feedNC, &pClean) != 0;
-    g_vadMs.store((float)std::chrono::duration_cast<std::chrono::microseconds>(
-                      Clock::now() - t0).count() / 1000.0f);
-    float prob = -1.0f;
-    if (okClean) prob = pClean;
-    if (okMic && pMic > prob) prob = pMic;  // mic arm is pre-gated by ref
-    if (prob >= 0.0f) {
-        // Asymmetric EMA: fast rise (speech onsets register
-        // immediately), slow fall (a single low frame — fricative,
-        // mic bump — can't yank the decision down).
-        g_vadSmooth += (prob - g_vadSmooth) * ((prob > g_vadSmooth) ? 0.45f
-                                                                    : 0.20f);
-        g_vadProb.store(prob);
-    }
-    // Gate off: detector state stays live for NearEndProtect, but no gain.
-    if (!g_vadEnabled.load()) {
-        g_vadGain = 1.0f;
-        g_vadHang = 0;
-        g_vadCloseVotes = 0;
-        return;
-    }
-    // Calibrated hysteresis (defaults 0.50/0.30). One-tap calibration
-    // rewrites these from measured speech/silence probs — never drifting
-    // mid-call, so the v1.3.1 adaptive-mute failure can't recur.
-    // Soft-knee dynamics: smoothed prob between close and open maps to a
-    // target gain in [knee-floor, 1.0] — breaths and weak speech stay
-    // mostly open (never below -5 dB). Above open -> full open; below
-    // close after hangover + ~160 ms debounce -> -12 dB shelf. 800 ms
-    // hangover keeps endings/pauses at full open.
-    const float kVadOpen = g_vadOpen.load(), kVadClose = g_vadClose.load();
-    static const float kVadFloor = 0.25f;      // -12 dB true-silence shelf
-    static const float kVadKneeFloor = 0.55f;  // -5 dB: breaths barely ducked
-    static const int   kHangFrames = 80;   // 800 ms hangover @ 10 ms frames
-    static const int   kCloseVotesNeed = 16;  // ~160 ms firm silent before release
-    float sm = g_vadSmooth;
-    float target = 1.0f;
-    if (sm >= kVadOpen) {
-        g_vadHang = kHangFrames;
-        g_vadCloseVotes = 0;
-        target = 1.0f;
-    } else if (sm <= kVadClose) {
-        if (g_vadHang > 0) {
-            g_vadHang--;
-            target = 1.0f;  // hangover holds full open through short breaths
-        } else if (++g_vadCloseVotes >= kCloseVotesNeed) {
-            target = kVadFloor;
-        } else {
-            target = g_vadGain;  // debouncing — hold, don't chop on flicker
-        }
-    } else {
-        // Soft knee: map close->open to knee-floor->1.0 (smoothstep).
-        // Weak speech/breaths land here and stay mostly open; only
-        // firm silence (below close, hangover gone, debounced) reaches
-        // the -12 dB shelf.
-        g_vadCloseVotes = 0;
-        if (g_vadHang > 0) g_vadHang--;
-        float t = (sm - kVadClose) / (kVadOpen - kVadClose);
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-        target = kVadKneeFloor +
-                 (1.0f - kVadKneeFloor) * (t * t * (3.0f - 2.0f * t));
-        if (g_vadHang > 0) {
-            // Still inside hangover: bias toward open so onsets/breaths
-            // recover without waiting for the knee to climb.
-            if (target < 1.0f) target = 1.0f - (1.0f - target) * 0.5f;
-        }
-    }
-    // Fast attack (onsets reach full open in ~30-40 ms — the start of
-    // speech is never cut), slow release (mid-speech dips glide, not
-    // snap).
-    float coeff = (target > g_vadGain) ? 0.60f : 0.08f;
-    g_vadGain += (target - g_vadGain) * coeff;
-    if (g_vadGain > 0.99f) g_vadGain = 1.0f;
-    if (g_vadGain < kVadFloor + 0.01f && target <= kVadFloor) g_vadGain = kVadFloor;
-    if (g_vadGain < 1.0f) {
-        for (int i = 0; i < fs; i++)
-            cleaned[i] = clamp_s16((int)((float)cleaned[i] * g_vadGain));
-    }
-}
-
-// ============================================================
-//  Near-end protector — voice is never cut, all engines
-// ============================================================
-// The AEC/gate chain can duck the voice hard on loud-speaker sessions.
-// While Silero says the near end is speaking, cap the reduction: if
-// post-gate output energy sits more than 15 dB below the raw mic,
-// blend a little dry mic back in (attack ~1 frame, release ~200 ms).
-// Engine-agnostic (AEC3/NKF/DTLN), runs after the gate, before meters
-// so meters show what Discord hears. Lock-free, no allocation.
-static float g_protEnvMic = 0.0f;   // EMA of per-frame mic mean-square
-static float g_protEnvOut = 0.0f;   // EMA of per-frame output mean-square
-static float g_protBlend  = 0.0f;   // current mic blend (0 .. ~0.178)
-
-static void NearEndProtect(int16_t* cleaned, const int16_t* mic, int fs) {
-    // Detector state is valid even with the gate checkbox off (the
-    // Silero feed keeps running whenever the model + rate allow) —
-    // the protector must not depend on the gate being on, or the
-    // default configuration would ship no protection at all.
-    const bool speech = g_vadSmooth >= g_vadClose.load() * 0.75f;
-    // Publish for the WPE voice guard. output_callback reads this BEFORE
-    // NkfProcess, so the engine sees last frame's decision (10 ms stale
-    // is nothing — the source smooth is an EMA anyway).
-    g_nearSpeech = (g_vad != nullptr) && speech;
-    if (!g_vad || !speech) {
-        // Release the blend smoothly instead of snapping.
-        g_protBlend += (0.0f - g_protBlend) * 0.05f;
-        if (g_protBlend < 0.001f) { g_protBlend = 0.0f; return; }
-    } else {
-        double m = 0, o = 0;
-        for (int i = 0; i < fs; i++) {
-            m += (double)mic[i] * mic[i];
-            o += (double)cleaned[i] * cleaned[i];
-        }
-        m /= fs; o /= fs;
-        g_protEnvMic += 0.2f * ((float)m - g_protEnvMic);
-        g_protEnvOut += 0.2f * ((float)o - g_protEnvOut);
-        static const float kCap = 0.1778f;  // -15 dB floor on out/mic
-        float target = 0.0f;
-        if (g_protEnvMic > 1.0f) {
-            float r = g_protEnvOut / g_protEnvMic;
-            if (r < kCap && r < 1.0f)
-                target = (kCap - r) / (1.0f - r);  // max ~17.8% mic
-        }
-        // Attack ~1 frame toward protection, ~200 ms release.
-        float coeff = (target > g_protBlend) ? 0.5f : 0.05f;
-        g_protBlend += (target - g_protBlend) * coeff;
-        if (g_protBlend < 0.001f) g_protBlend = 0.0f;
-    }
-    if (g_protBlend <= 0.0f) return;
-    const float a = g_protBlend;
-    for (int i = 0; i < fs; i++) {
-        float v = (float)cleaned[i] + ((float)mic[i] - (float)cleaned[i]) * a;
-        cleaned[i] = clamp_s16((int)v);
-    }
+    // Post stages: dereverb, then feedback suppression. Null handles
+    // are caught by StartAEC — the UI never runs a promised stage off.
+    if (g_wpeEnabled.load())   g_engine.wpe   = WpeNew(sr);
+    if (g_notchEnabled.load()) g_engine.notch = NotchNew(sr);
 }
 
 // Soft limiter for the final gain stage: linear to -3 dBFS, tanh knee
@@ -1129,6 +828,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     int16_t micFrame[MAX_FRAME_SIZE];
     int16_t refFrame[MAX_FRAME_SIZE];
     int16_t cleanedFrame[MAX_FRAME_SIZE];
+    float   wpeBuf[MAX_FRAME_SIZE];
     memset(cleanedFrame, 0, sizeof(cleanedFrame));
 
     g_micRing.read(micFrame, fs);
@@ -1139,23 +839,44 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
 
     if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
         Aec3CancelEcho(g_engine.aec3, micFrame, refFrame, cleanedFrame, fs);
-    else if (g_engine.type == ENGINE_NKF && g_engine.nkf) {
-        // One frame stale on purpose (the VAD runs below, after the
-        // engine): WPE tightens its predictor bound while the person is
-        // talking so voice level survives; between speech it widens to
-        // eat reverb/echo tails.
-        NkfSetNearSpeech(g_engine.nkf, g_nearSpeech ? 1 : 0);
+    else if (g_engine.type == ENGINE_NKF && g_engine.nkf)
         NkfProcess(g_engine.nkf, micFrame, refFrame, cleanedFrame, fs);
-    } else if (g_engine.type == ENGINE_DTLN && g_engine.dtln)
+    else if (g_engine.type == ENGINE_DTLN && g_engine.dtln)
         DtlnProcess(g_engine.dtln, micFrame, refFrame, cleanedFrame, fs);
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
-    // Silero voice gate: speech passes, silence pushed down (16 + 48 kHz).
-    VadGateApply(cleanedFrame, micFrame, refFrame, fs);
-    // Near-end protector: while Silero says speech, cap how far the
-    // chain may duck the voice (-15 dB) by blending dry mic back in.
-    NearEndProtect(cleanedFrame, micFrame, fs);
+    // Speech flag for the post stages: RMS hysteresis on the ENGINE
+    // output (never on the stages' own output, so a notch cut can't
+    // flip it back). Attack ~20 ms, release ~300 ms.
+    {
+        float engSq = 0;
+        for (int i = 0; i < fs; i++) engSq += (float)cleanedFrame[i] * cleanedFrame[i];
+        float engRms = sqrtf(engSq / fs);
+        static const float kAtk = 0.39f;   // 1 - e^(-10ms/20ms)
+        static const float kRel = 0.033f;  // 1 - e^(-10ms/300ms)
+        static const float kOn  = 500.0f;  // int16 RMS: -30 dBFS on
+        static const float kOff = 250.0f;  // -36 dBFS off (hiss floor < kOff)
+        g_speechEma += (engRms > g_speechEma ? kAtk : kRel) * (engRms - g_speechEma);
+        if (!g_speechOn && g_speechEma > kOn)   g_speechOn = true;
+        else if (g_speechOn && g_speechEma < kOff) g_speechOn = false;
+    }
+
+    // Post chain: WPE dereverb (float round-trip — the engine output is
+    // int16, the predictor runs in float), then the adaptive notch.
+    // Meters below show post-stage output, i.e. what Discord hears.
+    if (g_engine.wpe) {
+        WpeSetSpeech(g_engine.wpe, g_speechOn ? 1 : 0);
+        for (int i = 0; i < fs; i++)
+            wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+        WpeProcess(g_engine.wpe, wpeBuf, wpeBuf, fs);
+        for (int i = 0; i < fs; i++)
+            cleanedFrame[i] = clamp_s16((int)lrintf(wpeBuf[i] * 32768.0f));
+    }
+    if (g_engine.notch) {
+        NotchSetSpeech(g_engine.notch, g_speechOn ? 1 : 0);
+        NotchProcess(g_engine.notch, cleanedFrame, fs);
+    }
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
     for (int i = 0; i < fs; i++) {
@@ -1319,9 +1040,7 @@ void StartAEC() {
     // Without VB-CABLE installed/enabled there is nowhere to send the
     // cleaned mic, so refuse to start with a pointer at the fix.
     int outIdx = g_outIndex;
-    // Calibration monitor: hear yourself through the speakers while the
-    // 5 s listen runs (same path as Listen-to-myself; needs no CABLE).
-    if (g_listenToSelf || g_calMonitor) {
+    if (g_listenToSelf) {
         outIdx = g_refIndex;
     } else if (!CableInputPresent()) {
         snprintf(g_statusText, 128, "VB-CABLE not found - install/enable CABLE Input");
@@ -1340,10 +1059,17 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load DTLN model");
         return;
     }
+    if (g_wpeEnabled.load() && !g_engine.wpe) {
+        snprintf(g_statusText, 128, "Failed to init WPE (unsupported rate)");
+        return;
+    }
+    if (g_notchEnabled.load() && !g_engine.notch) {
+        snprintf(g_statusText, 128, "Failed to init notch (unsupported rate)");
+        return;
+    }
 
     g_micRing.reset();
     g_refRing.reset();
-    VadReset();
     g_peakMic.store(0); g_peakRef.store(0); g_peakOut.store(0);
 
     int sr = g_sampleRate.load();
@@ -1398,8 +1124,10 @@ void StartAEC() {
     const char* engineName =
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
-    snprintf(g_statusText, 128, "Running (%d Hz, %s)%s", sr, engineName,
-             (g_listenToSelf || g_calMonitor) ? " [monitor]" : "");
+    snprintf(g_statusText, 128, "Running (%d Hz, %s%s%s)%s", sr, engineName,
+             g_engine.wpe ? " + WPE" : "",
+             g_engine.notch ? " + Notch" : "",
+             g_listenToSelf ? " [monitor]" : "");
 }
 
 void StopAEC() {
@@ -1408,7 +1136,6 @@ void StopAEC() {
     ma_device_uninit(&g_loopbackDevice);
     ma_device_uninit(&g_outputDevice);
     g_isRunning = false;
-    VadReset();
     snprintf(g_statusText, 128, "Stopped");
 }
 
@@ -1468,10 +1195,6 @@ void DrawLevelMeter(const char* label, float rms, float peak, float maxValue) {
 // ============================================================
 //  UI sections
 // ============================================================
-static void MarkPresetCustom() {
-    g_presetIndex = 0;
-}
-
 static bool FilteredDeviceCombo(const char* label, const char* tooltip, int& index,
                                 const std::vector<ma_device_info>& devices,
                                 const std::vector<int>& displayIndices) {
@@ -1571,40 +1294,13 @@ void DrawDevicesSection() {
 }
 
 void DrawEngineSection() {
-    ImGui::SeparatorText("Engine");
+    // The engine only changes through the Profile menu; this section
+    // carries the remaining profile-agnostic knob (sample rate) where
+    // it has always lived, under Advanced.
+    ImGui::SeparatorText("Processing");
     const float labelCol = 190.0f;
 
     ImGui::BeginDisabled(g_isRunning);
-
-    ImGui::TextUnformatted("Engine");
-    ImGui::SameLine(labelCol);
-    ImGui::SetNextItemWidth(-1);
-    static const int kShown[] = { ENGINE_DTLN, ENGINE_AEC3, ENGINE_NKF };
-    static const char* kShownNames[] = {
-        "DTLN-AEC 128 (recommended default)",
-        "WebRTC AEC3 (strongest echo cut)",
-        "NKF-AEC (small neural core, 16 kHz)"
-    };
-    int comboIdx = 0;
-    for (int i = 0; i < 3; i++)
-        if (kShown[i] == g_engineIndex) { comboIdx = i; break; }
-    if (ImGui::Combo("##engine", &comboIdx, kShownNames, 3)) {
-        g_engineIndex = kShown[comboIdx];
-        g_selectedEngine.store(g_engineIndex);
-        if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
-            g_sampleRateIndex = 0;
-            g_sampleRate.store(16000);
-        }
-        MarkPresetCustom();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "DTLN-AEC 128 = recommended default: cleanest output, neural echo + noise removal (16 kHz automatic)\n"
-            "AEC3 = strongest echo suppression, voice sounds processed.\n"
-            "Very loud speakers make it mistake your voice for echo - lower them or use DTLN\n"
-            "NKF-AEC = tiny linear research engine (ICASSP 2023), needs delay alignment real-time\n"
-            "paths lack - can distort. Core is small; stack Noise reduction +\n"
-            "Dereverb (WPE) for the full NKF pipeline.");
 
     ImGui::TextUnformatted("Sample Rate");
     ImGui::SameLine(labelCol);
@@ -1614,24 +1310,15 @@ void DrawEngineSection() {
     if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("This engine always runs at 16 kHz - nothing to choose.");
+            ImGui::SetTooltip("This profile always runs at 16 kHz - nothing to choose.");
     } else {
         if (ImGui::Combo("##rate", &g_sampleRateIndex, rates, IM_ARRAYSIZE(rates))) {
             g_sampleRate.store(atoi(rates[g_sampleRateIndex]));
-            MarkPresetCustom();
+            SaveSettings();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Higher = better quality, more CPU\nAEC3 best at 48000");
-    }
-
-    if (g_engineIndex == ENGINE_AEC3) {
-        ImGui::TextDisabled("AEC3 tunes itself - no extra settings.");
-    } else if (g_engineIndex == ENGINE_NKF) {
-        ImGui::TextDisabled("Small neural core at 16 kHz - linear research model (ICASSP 2023).");
-        ImGui::TextDisabled("Dereverb (WPE) strips room reverb after the canceller.");
-    } else if (g_engineIndex == ENGINE_DTLN) {
-        ImGui::TextDisabled("Recommended default - cleanest output, neural echo + noise removal. Runs at 16 kHz automatically.");
-        ImGui::TextDisabled("Needs an extra download - see About for details.");
+            ImGui::SetTooltip("Higher = better quality, more CPU\nAEC3 best at 48000\n"
+                              "Sticks with your setup until the engine forces 16 kHz.");
     }
 
     ImGui::EndDisabled();
@@ -1647,153 +1334,10 @@ void DrawGainsSection() {
     ImGui::SetNextItemWidth(-80);
     if (ImGui::SliderFloat("##micgain", &micGain, 0.0f, 200.0f, "%.0f%%")) {
         g_micGain.store(micGain / 100.0f);
-        MarkPresetCustom();
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%.0f%%", micGain);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("How loud your voice goes out. Editable while running.");
-}
-
-void DrawVadSection() {
-    ImGui::SeparatorText("Voice gate");
-
-    // Enable checkbox lives at the top of the Audio tab (always visible).
-    // This section keeps status + calibration detail behind Advanced.
-
-    if (!g_vad) {
-        ImGui::TextDisabled("Voice detector is missing its data file - gate is off.");
-        ImGui::TextDisabled("Reinstall the app or see About for details.");
-    } else if (g_vadEnabled.load()) {
-        float prob = g_vadProb.load();
-        float open = g_vadOpen.load();
-        DrawInlineDot(prob >= open);
-        ImGui::SameLine();
-        if (prob >= open)
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Speaking (%.2f)", prob);
-        else
-            ImGui::TextDisabled("Silent (%.2f)", prob);
-        // One-tap calibration: 5 s of normal speech sets open/close from
-        // measured probs. Bounded + persisted — no mid-call drift.
-        if (g_vadCalibrating.load() && !g_isRunning) {
-            // User hit Stop mid-calibration — abort, don't judge stale audio.
-            g_vadCalibrating.store(false);
-            g_vadCalSamples.clear();
-            g_vadCalMsg = "Stopped - calibration cancelled.";
-            g_vadCalMsgIsErr = true;
-        }
-        if (g_vadCalibrating.load()) {
-            g_vadCalSamples.push_back(prob);
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                Clock::now() - g_vadCalStart).count();
-            int left = VAD_CAL_SECONDS - (int)(elapsed / 1000);
-            if (left < 0) left = 0;
-            int pct = (int)(elapsed * 100 / (VAD_CAL_SECONDS * 1000));
-            if (pct > 100) pct = 100;
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
-                "Calibrating... keep speaking normally (%d%%, %ds left)", pct, left);
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                g_vadCalibrating.store(false);
-                g_vadCalSamples.clear();
-                g_vadCalMsg.clear();
-                if (!g_vadCalWasRunning && g_isRunning) StopAEC();  // undo auto-start
-            }
-            if (elapsed >= VAD_CAL_SECONDS * 1000) {
-                g_vadCalibrating.store(false);
-                // Percentiles of what the detector actually saw.
-                std::vector<float> s = g_vadCalSamples;
-                g_vadCalSamples.clear();
-                if (s.size() < 30) {
-                    g_vadCalMsg = "Too few samples - try again while running.";
-                    g_vadCalMsgIsErr = true;
-                } else {
-                    std::sort(s.begin(), s.end());
-                    auto pct = [&](float p) { return s[(size_t)(p * (s.size() - 1))]; };
-                    float p10 = pct(0.10f), p50 = pct(0.50f), p90 = pct(0.90f);
-                    if (p90 < 0.25f || (p90 - p10) < 0.10f) {
-                        char buf[160];
-                        snprintf(buf, sizeof(buf),
-                            "Didn't hear clear speech (peak %.2f) - kept %.2f/%.2f. "
-                            "Move closer / turn up, then retry.",
-                            p90, (double)g_vadOpen.load(), (double)g_vadClose.load());
-                        g_vadCalMsg = buf;
-                        g_vadCalMsgIsErr = true;
-                    } else {
-                        float openT = (p10 + p50) * 0.5f;
-                        if (openT < 0.18f) openT = 0.18f;
-                        if (openT > 0.65f) openT = 0.65f;
-                        float closeT = openT * 0.6f;
-                        if (closeT < 0.10f) closeT = 0.10f;
-                        if (closeT > 0.45f) closeT = 0.45f;
-                        if (closeT > openT - 0.05f) closeT = openT - 0.05f;
-                        g_vadOpen.store(openT);
-                        g_vadClose.store(closeT);
-                        SaveSettings();
-                        char buf[160];
-                        snprintf(buf, sizeof(buf),
-                            "Calibrated for this mic: open %.2f close %.2f "
-                            "(speech %.2f, quiet %.2f).",
-                            (double)openT, (double)closeT, (double)p50, (double)p10);
-                        g_vadCalMsg = buf;
-                        g_vadCalMsgIsErr = false;
-                    }
-                }
-                // Learn-my-voice contract: always back to idle after, Start
-                // clickable. Calibration is a setup action, not a session.
-                if (g_isRunning) StopAEC();
-            }
-        } else {
-            float openT = g_vadOpen.load(), closeT = g_vadClose.load();
-            bool custom = (fabsf(openT - 0.50f) > 0.005f || fabsf(closeT - 0.30f) > 0.005f);
-            ImGui::TextDisabled("Sensitivity: %s (%.2f/%.2f)",
-                custom ? "calibrated" : "normal", (double)openT, (double)closeT);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Open/close lines. Calibrate rewrites them;\n"
-                                  "Reset restores 0.50/0.30.");
-            // Step-process like Learn my voice: works idle (auto-starts
-            // the session) or running; 5 s listen, then a kept result
-            // with Re-calibrate. Always back to idle after (Start
-            // clickable again) — like enrollment, not a session.
-            const char* calLabel = custom ? "Re-calibrate" : "Calibrate for my mic";
-            if (ImGui::Button(calLabel, ImVec2(180, 0))) {
-                g_vadCalWasRunning = g_isRunning;
-                // Idle path monitors through the speakers (hear yourself +
-                // live meters, no CABLE needed) — consumed by Start below.
-                g_calMonitor = !g_isRunning;
-                if (!g_isRunning) StartAEC();
-                g_calMonitor = false;
-                if (!g_isRunning || g_vad == nullptr) {
-                    g_vadCalMsg = "Couldn't start audio - check devices / status above.";
-                    g_vadCalMsgIsErr = true;
-                } else {
-                    g_vadCalSamples.clear();
-                    g_vadCalSamples.reserve(400);
-                    g_vadCalMsg.clear();
-                    g_vadCalStart = Clock::now();
-                    g_vadCalibrating.store(true);
-                }
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Starts audio if needed (you'll hear yourself),\n"
-                                  "then listens 5 s while you speak. Back to idle\n"
-                                  "after - press Start to use it.");
-            ImGui::SameLine();
-            if (custom && ImGui::Button("Reset", ImVec2(80, 0))) {
-                g_vadOpen.store(0.50f);
-                g_vadClose.store(0.30f);
-                g_vadCalMsg.clear();
-                SaveSettings();
-            }
-            if (!g_vadCalMsg.empty()) {
-                if (g_vadCalMsgIsErr)
-                    ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", g_vadCalMsg.c_str());
-                else
-                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", g_vadCalMsg.c_str());
-            }
-            ImGui::TextDisabled("Tip: re-calibrate after switching mic or engine.");
-        }
-    } else {
-        ImGui::TextDisabled("Gate is off - everything passes through unchanged.");
-    }
 }
 
 void DrawAudioTab() {
@@ -1818,101 +1362,74 @@ void DrawAudioTab() {
         ImGui::Spacing();
     }
 
-    ImGui::SeparatorText("Preset");
+    ImGui::SeparatorText("Profile");
 
-    ImGui::TextUnformatted("Quick preset");
+    ImGui::TextUnformatted("Profile");
     ImGui::SameLine(190.0f);
     ImGui::SetNextItemWidth(-1);
-    std::vector<const char*> presetNames;
-    for (int i = 0; i < PRESET_COUNT; i++) presetNames.push_back(PRESETS[i].name);
-
+    // The label shows the engine itself, plus the chain segments while
+    // the post stages are ticked — no hidden state.
+    std::string profilePreview = PROFILES[g_profileIndex].name;
+    if (g_wpeEnabled.load())   profilePreview += " -> WPE";
+    if (g_notchEnabled.load()) profilePreview += " -> Notch";
     bool wasRunning = g_isRunning;
-    if (ImGui::Combo("##preset", &g_presetIndex, presetNames.data(), (int)presetNames.size())) {
-        if (g_presetIndex > 0) {
-            ApplyPreset(g_presetIndex);
-            if (wasRunning) { StopAEC(); StartAEC(); }
+    if (ImGui::BeginCombo("##profile", profilePreview.c_str())) {
+        for (int i = 0; i < PROFILE_COUNT; i++) {
+            std::string label = PROFILES[i].name;
+            if (g_wpeEnabled.load())   label += " -> WPE";
+            if (g_notchEnabled.load()) label += " -> Notch";
+            bool sel = (g_profileIndex == i);
+            if (ImGui::Selectable(label.c_str(), sel)) {
+                if (!sel) {
+                    ApplyProfile(i);
+                    if (wasRunning) { StopAEC(); StartAEC(); }
+                }
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
         }
+        ImGui::EndCombo();
     }
-    if (ImGui::IsItemHovered()) {
-        if (g_presetIndex == 1)
-            ImGui::SetTooltip(
-                "One-click setups for common uses.\n"
-                "Changing anything by hand switches this to Manual settings.\n"
-                "Discord: use Input Profile Voice Isolation, or Custom with\n"
-                "Echo Cancellation off, Krisp noise suppression, AGC off.");
-        else if (g_presetIndex == 4)
-            ImGui::SetTooltip(
-                "One-click setups for common uses.\n"
-                "Changing anything by hand switches this to Manual settings.\n"
-                "Low CPU: bare NKF-AEC at 16 kHz with Noise reduction and\n"
-                "Dereverb (WPE) off - the cheapest NKF path.\n"
-                "If room reverb or hiss returns, tick those boxes on Audio.");
-        else
-            ImGui::SetTooltip("One-click setups for common uses.\n"
-                              "Changing anything by hand switches this to Manual settings.");
-    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Engine selection (the engine only changes through this menu):\n"
+            "DTLN-AEC 128 - default; best echo + reverb handling, no post filter.\n"
+            "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
+            "NKF-AEC - weak CPUs, still full cleanup.\n"
+            "The ticks below append '-> WPE' / '-> Notch' to the chain shown here.");
 
-    // Noise reduction: extra WebRTC suppression (Moderate) on top of echo
-    // removal. Always visible (not behind Advanced); hidden on DTLN, which
-    // already removes noise itself — never a dead control. Live-togglable:
-    // the engine restarts for a split second, same path as switching
-    // presets mid-call.
-    if (g_engineIndex != ENGINE_DTLN) {
-        bool ns = g_noiseReduction.load();
-        if (ImGui::Checkbox("Noise reduction", &ns)) {
-            g_noiseReduction.store(ns);
-            MarkPresetCustom();
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Extra cut of background hiss and fan noise on top of echo removal.\n"
-                               "Takes effect immediately - the engine restarts for a split second.\n"
-                               "DTLN already removes noise itself, so this box only shows\n"
-                               "for WebRTC AEC3 and NKF-AEC.");
-    }
-
-    // WPE dereverb: streaming weighted prediction error post-filter on
-    // NKF — cuts room reverb of your mic (late reflections) on top of
-    // echo cancellation. Default ON; offer OFF because prediction can
-    // soften consonants slightly on some mics. NKF only, live-toggle
-    // like Noise reduction (engine restarts for a split second).
-    if (g_engineIndex == ENGINE_NKF) {
-        bool wpf = g_wpe.load();
-        if (ImGui::Checkbox("Dereverb (WPE)", &wpf)) {
-            g_wpe.store(wpf);
-            MarkPresetCustom();
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Streaming dereverb after NKF: weighted prediction\n"
-                               "echoes of your voice out of the mic signal (less\n"
-                               "room reverb, more presence). Small extra CPU and\n"
-                               "~32 ms extra delay - engine restarts briefly when\n"
-                               "toggled. NKF-AEC only.");
-    }
-
-    // Voice gate: soft neural detector at the top of Audio (not behind
-    // Advanced) so it is one click away. Live atomic toggle — no engine
-    // restart. Calibration/status stay under Advanced -> Voice gate.
+    // Post stages: stacked after the engine (always visible, never
+    // dead controls). Live restart — same path as switching profiles
+    // mid-call. Global prefs: a profile switch does not reset them.
     {
-        bool vg = g_vadEnabled.load();
-        if (ImGui::Checkbox("Push down silence (neural voice detector)", &vg)) {
-            g_vadEnabled.store(vg);
+        bool wpe = g_wpeEnabled.load();
+        if (ImGui::Checkbox("Dereverb (WPE)", &wpe)) {
+            g_wpeEnabled.store(wpe);
             SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "After echo removal, a soft neural gate keeps speech and natural\n"
-                "breaths open and gently pushes true silence down (-12 dB).\n"
-                "No setup, no recording. Calibrate under Advanced -> Voice gate.");
+                "Weighted prediction error dereverberation: eats late room\n"
+                "echo and tail (~32 ms extra delay). Runs after the engine;\n"
+                "adaptation tightens while you talk so voice level survives.");
+
+        bool nch = g_notchEnabled.load();
+        if (ImGui::Checkbox("Feedback suppression (notch)", &nch)) {
+            g_notchEnabled.store(nch);
+            SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Two adaptive notch filters that track narrowband howling /\n"
+                "ringing tones (speaker-mic loops). Exact bypass until a tone\n"
+                "is actually captured; voice harmonics never latch it.");
     }
 
     ImGui::Spacing();
     DrawDevicesSection();
     ImGui::Spacing();
-    // Advanced: engine, levels, gate. No close-X — the header always
+    // Advanced: sample rate + levels. No close-X — the header always
     // stays visible and toggles. First frame applies the persisted
     // default (closed for newcomers, as left for regulars).
     if (!g_advInitDone) {
@@ -1928,8 +1445,6 @@ void DrawAudioTab() {
         DrawEngineSection();
         ImGui::Spacing();
         DrawGainsSection();
-        ImGui::Spacing();
-        DrawVadSection();
     }
 }
 
@@ -1991,13 +1506,12 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Three AEC engines: DTLN-AEC 128 (default), WebRTC AEC3, NKF-AEC");
-    ImGui::BulletText("Voice gate - neural speech detector pushes silence down");
+    ImGui::BulletText("Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC)");
+    ImGui::BulletText("WPE dereverb + adaptive notch feedback suppression on top of echo removal");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
     ImGui::BulletText("Live level meters with peak hold");
-    ImGui::BulletText("Presets for common scenarios");
     ImGui::BulletText("Optional minimize to system tray");
 
     ImGui::Spacing();
@@ -2005,7 +1519,8 @@ void DrawAboutTab() {
     ImGui::BulletText("WebRTC AP     - Google (BSD-3)");
     ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
     ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
-    ImGui::BulletText("Silero VAD    - Silero Team (MIT)");
+    ImGui::BulletText("WPE dereverb - in-tree (weighted prediction error)");
+    ImGui::BulletText("Adaptive notch - Widrow & Hoff LMS (1960)");
     ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
@@ -2042,25 +1557,6 @@ void DrawUI() {
         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Running  %s", FormatUptime().c_str());
     else
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Idle");
-
-    // Voice-gate pill: SPEAKING lights up on any speech, SILENT when lowered.
-    // Visible from every tab while the gate can act (16 or 48 kHz).
-    int vadSr = g_sampleRate.load();
-    if (g_vad && g_vadEnabled.load() && (vadSr == 16000 || vadSr == 48000)) {
-        bool speaking = g_vadProb.load() >= g_vadOpen.load();
-        ImGui::SameLine();
-        DrawStatusDot(speaking);
-        ImGui::SameLine();
-        if (speaking)
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "SPEAKING");
-        else
-            ImGui::TextDisabled("SILENT");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Green SPEAKING = speech going to Discord\n"
-                "Grey SILENT = gate lowered (no speech)\n"
-                "Toggle on Audio; detail under Advanced -> Voice gate");
-    }
 
     ImGui::Spacing();
 
@@ -2273,8 +1769,8 @@ int main(int, char**) {
     if (g_engine.aec3)  Aec3Destroy(g_engine.aec3);
     if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
-    if (g_vad) { SileroDestroy(g_vad); g_vad = nullptr; }
-    if (g_vadClean) { SileroDestroy(g_vadClean); g_vadClean = nullptr; }
+    if (g_engine.wpe)   WpeDestroy(g_engine.wpe);
+    if (g_engine.notch) NotchDestroy(g_engine.notch);
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

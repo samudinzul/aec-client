@@ -7,11 +7,14 @@ extern "C" {
 
 typedef struct WpeHandle WpeHandle;
 
-// Streaming single-channel WPE dereverb (NKF post-filter).
-//   sampleRate: must be 16000; anything else returns nullptr (stage off).
-//   WpeProcess: exactly n in -> n out (fixed ~32 ms algorithmic latency,
-//   zeros during the first window). Fail-open: a bad call or internal
-//   error latches pass-through, never kills the engine.
+// Streaming single-channel WPE dereverb ("Dereverb (WPE)" stage,
+// stacked after any engine).
+//   sampleRate: 16000 or 48000 (frame geometry scales so the
+//   algorithm sees identical 32 ms frames at both rates); anything
+//   else returns nullptr (stage off).
+//   WpeProcess: exactly n in -> n out (fixed ~32 ms algorithmic
+//   latency, zeros during the first window). Fail-open: a bad call
+//   or internal error latches pass-through, never kills the engine.
 WpeHandle* WpeNew(int sampleRate);
 int  WpeProcess(WpeHandle* h, const float* in, float* out, int n);
 // Near-end speech flag (audio thread, one frame stale is fine):
