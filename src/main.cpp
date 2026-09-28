@@ -1331,27 +1331,20 @@ void DrawEngineSection() {
             snprintf(nkfLine, sizeof nkfLine, "NKF: failed open (guard)");
         else if (!ns.locked)
             snprintf(nkfLine, sizeof nkfLine, "NKF: shadow (warm-up)");
-        else if (!ns.exposed) {
-            if (!ns.confident)
-                snprintf(nkfLine, sizeof nkfLine,
-                         "NKF: shadow (loop, waiting for delay lock)");
-            else if (ns.loopActive)
-                snprintf(nkfLine, sizeof nkfLine,
-                         "NKF: shadow (loop, adapting)");
-            else
-                snprintf(nkfLine, sizeof nkfLine, "NKF: shadow (settling)");
-        } else
+        else if (!ns.exposed)
+            snprintf(nkfLine, sizeof nkfLine, "NKF: shadow (settling)");
+        else
             snprintf(nkfLine, sizeof nkfLine, "NKF: live - delay %d ms%s%s",
                      ns.lagSamples / 16,
-                     ns.loopActive ? " (loop cancelled)" : "",
+                     ns.loopActive ? " (loop, frozen)" : "",
                      ns.confident ? " (locked)" : " (estimated)");
         ImGui::TextDisabled("%s", nkfLine);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Delay lock: how far the speaker reference lags the mic\n"
-                "(playback chain). Locked = aligned reference lets NKF cancel\n"
-                "even while a mic-test loop is active; estimated = best guess,\n"
-                "shadow holds until a real correlation lock or the loop clears.");
+                "(playback chain). Locked = aligned reference lets NKF cancel.\n"
+                "A mic-test loop never drops NKF to raw mic — the engine\n"
+                "stays live with adaptation frozen until the loop is quiet.");
     }
 }
 

@@ -26,13 +26,15 @@ NkfHandle* NkfNew(const char* modelPath);
 //   the wire while the engine runs and is monitored only; then a
 //   256 ms crossfade brings NKF in — cold-start spikes are never
 //   heard, and there are no engagement holes or replays. Guard trips
-//   drop back to shadow rather than exposing a reset; a self-monitor
-//   loop detector (ref vs our own output — Discord mic test / Listen to
-//   myself on speakers) holds exposure on mic while a feedback loop is
-//   present AND the ref->mic delay is not a confident cross-correlation
-//   lock; the first loop confirm then holds an 8 s convergence window
-//   (the engine freezes while it sits in an active loop), and after too
-//   many guard trips the session fails open to permanent mic passthrough.
+//   drop back to shadow rather than exposing a reset; after too many
+//   guard trips the session fails open to permanent mic passthrough.
+//   A self-monitor loop detector (ref vs our own output — Discord
+//   mic test / Listen to myself on speakers) NEVER un-exposes NKF:
+//   while a loop is active the engine freezes adaptation instead
+//   (a fixed, aligned filter is bounded and keeps cancelling the
+//   speaker pickup — raw mic on the wire would be the fuel a
+//   near-field howl grows on), and it resumes adapting once the
+//   loop goes quiet.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 

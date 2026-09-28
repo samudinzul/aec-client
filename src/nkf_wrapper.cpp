@@ -36,10 +36,13 @@ static const int NKF_BLOCK_SHIFT = 512;
 // estimate the ref->mic lag by normalized cross-correlation and feed
 // NKF a delay-aligned reference — the alignment the paper's "-a" flag
 // (GCC-PHAT) provides offline, done continuously here.
-static const int   TDC_DMAX       = 4800;   // 300 ms search range @16 kHz
-                                            // (was 1600: playback chains
-                                            // exceed 100 ms and the loop
-                                            // detector already searched 300)
+static const int   TDC_DMAX       = 12800;  // 800 ms search range @16 kHz
+                                            // (was 4800/300 ms: the mic-test
+                                            // round trip — app + Discord +
+                                            // speaker + loopback capture —
+                                            // can exceed 300 ms, and NKF's
+                                            // 128 ms filter span cannot
+                                            // cancel an unaligned delay)
 static const int   TDC_WIN        = 1024;   // 64 ms correlation window
 static const int   TDC_DEC        = 4;      // box-decimate x4: coarse pass
 static const int   TDC_EAGER      = 1024;   // pre-lock cadence: ~64 ms of audio
@@ -66,24 +69,21 @@ static const int   TDC_SHADOW     = 16;     // 512 ms internal warm-up
 static const int   TDC_FADE       = 8;      // 256 ms crossfade into NKF
 
 // Self-monitor loop detection: with "Listen to myself" or a Discord
-// mic test on SPEAKERS, ref carries our own recent output back around
-// (mic -> NKF -> Discord -> speakers -> loopback). A loop holds
-// exposure on mic WHILE the delay estimate is not confident; the
-// first loop confirm then buys an 8 s shadow hold (LOOP_HOLD) to
-// converge the filter, and while a loop stays active live NKF runs
-// frozen (echo-hat with a converged filter, no adaptation). Guard
-// trips remain the backstop.
+// mic test on SPEAKERS, ref carries our own output back around (app ->
+// Discord -> speakers -> loopback) and the speaker couples back to the
+// mic through the air. A loop must NEVER un-expose NKF — raw mic on
+// the wire is the fuel a near-field howl grows on (WPE/notch alone
+// cannot hold it; DTLN/AEC3 stay live and cancelling from t=0). So:
+// while a loop is active keep NKF live and FREEZE adaptation — a
+// fixed filter is bounded and keeps cancelling the pickup; adaptation
+// resumes when the loop goes quiet. Guard trips remain the backstop.
 static const int   LOOP_WIN      = 1024;    // correlation window
-static const int   LOOP_DMAX     = 4800;    // 300 ms search (playback chain)
+static const int   LOOP_DMAX     = 12800;   // same 800 ms round trip as TDC
 static const int   LOOP_DEC      = 4;       // box-decimate x4 (cheap NCC)
 static const int   LOOP_PERIOD   = 2048;    // check every ~128 ms of audio
 static const float LOOP_MIN_PEAK = 0.45f;   // NCC: delayed copy, not coincidence
 static const int   LOOP_ON       = 2;       // hits needed to engage (hysteresis)
 static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> release
-static const size_t LOOP_HOLD    = 8 * 16000; // first loop confirm: shadow 8 s
-                                              // so the filter converges before
-                                              // it is exposed (and frozen) in
-                                              // the feedback loop
 
 // ---- Divergence guard ---------------------------------------------------
 // Second line of defence: if output energy runs far above BOTH inputs,
@@ -145,7 +145,10 @@ struct NkfHandle {
     int samplesSinceLoop = 0;
     int loopConf = 0;               // consecutive-ish hit score (0..4)
     int loopQuiet = 0;              // silent detections in a row
-    size_t loopHoldUntil = 0;       // absolute time shadow is held to
+    // Last TDC measurement even when rejected — grace-lock log explains
+    // WHY no peak was accepted (out of range vs below threshold).
+    float lastTdcSc = -2.0f;
+    int   lastTdcD  = 0;
     // Phase-log transitions (crash diagnostics; see NkfPhase).
     bool engRanOnce = false;
     bool frozenApplied = false;
@@ -163,27 +166,34 @@ static void NkfTrimRef(NkfHandle* h) {
 
 // Normalized cross-correlation delay estimate: lag d maximizes
 //   sum_n mic[total-WIN+n] * ref[total-WIN+n-d]
-// (R is indexed so R[n + DMAX - d] = ref at the mic sample's time minus d).
-// Coarse-to-fine: a x4 box-decimated pass sweeps the full 300 ms range
-// (~0.3 M MACs), then a full-rate pass refines ±TDC_FINE samples around
-// the coarse peak (~17 k MACs) — same cost class as the old dense
-// 100 ms scan while covering 3x the range.
+// (R is indexed so R[n + dMax - d] = ref at the mic sample's time minus d).
+// Coarse-to-fine: a x4 box-decimated pass sweeps the available range
+// (up to 800 ms, ~0.7 M MACs worst case), then a full-rate pass
+// refines ±TDC_FINE samples around the coarse peak (~17 k MACs).
 static void NkfEstimateDelay(NkfHandle* h) {
     h->samplesSinceTdc = 0;
-    if (h->total < (size_t)(TDC_WIN + TDC_DMAX)) return;
     if (h->micWin.size() < (size_t)TDC_WIN) return;
-    if (h->refHist.size() < (size_t)(TDC_WIN + TDC_DMAX)) return;
+    if (h->refHist.size() < (size_t)(TDC_WIN + 512)) return;
+
+    // Sweep as deep as ref history allows: full 800 ms once complete,
+    // a shorter range in the first seconds — a typical <300 ms round
+    // trip locks as soon as its data exists instead of waiting for the
+    // whole buffer to fill.
+    int dMax = (int)h->refHist.size() - TDC_WIN;
+    if (dMax > TDC_DMAX) dMax = TDC_DMAX;
+    dMax &= ~(TDC_DEC - 1);         // keep the x4 decimation aligned
+    if (dMax < 512) return;         // need >= 32 ms of lag range
 
     const float* M = h->micWin.data();
     const long long front = (long long)h->total - (long long)h->refHist.size();
-    const long long refLo = (long long)h->total - TDC_WIN - TDC_DMAX;
+    const long long refLo = (long long)h->total - TDC_WIN - dMax;
     if (refLo < front) return;
     const float* R = h->refHist.data() + (refLo - front);
 
-    // ---- Coarse pass: box-decimated x4 over the full range -------------
+    // ---- Coarse pass: box-decimated x4 over the available range ---------
     const int WD = TDC_WIN / TDC_DEC;                 // 256
-    const int RD = (TDC_WIN + TDC_DMAX) / TDC_DEC;    // 1456
-    const int DB = TDC_DMAX / TDC_DEC;                // 1200
+    const int DB = dMax / TDC_DEC;
+    const int RD = DB + WD;                           // (dMax+WIN)/4
     float* Md = h->micD;
     float* Rd = h->refD;
     for (int k = 0; k < WD; k++)
@@ -220,7 +230,7 @@ static void NkfEstimateDelay(NkfHandle* h) {
         micE += (double)M[n] * M[n];
     if (micE / TDC_WIN < TDC_MIN_MEAN_E) return;
 
-    const int RLEN = TDC_WIN + TDC_DMAX;
+    const int RLEN = TDC_WIN + dMax;
     double* pref = h->tdcPref;
     pref[0] = 0.0;
     for (int i = 0; i < RLEN; i++)
@@ -230,12 +240,12 @@ static void NkfEstimateDelay(NkfHandle* h) {
     int dLo = cBestDb * TDC_DEC - TDC_FINE;
     if (dLo < 0) dLo = 0;
     int dHi = cBestDb * TDC_DEC + TDC_FINE;
-    if (dHi > TDC_DMAX) dHi = TDC_DMAX;
+    if (dHi > dMax) dHi = dMax;
 
     double best = -2.0;
     int bestD = h->alignDelay;
     for (int d = dLo; d <= dHi; d++) {
-        const int off = TDC_DMAX - d;
+        const int off = dMax - d;
         double num = 0;
         for (int n = 0; n < TDC_WIN; n++)
             num += (double)M[n] * R[n + off];
@@ -244,6 +254,8 @@ static void NkfEstimateDelay(NkfHandle* h) {
         const double sc = num / std::sqrt(micE * refE);
         if (sc > best) { best = sc; bestD = d; }
     }
+    h->lastTdcD = bestD;            // remembered even when rejected —
+    h->lastTdcSc = (float)best;     // grace-lock log explains why
 
     // Small tracking steps accept a moderate peak; a big lag jump needs
     // stronger evidence so noise can't teleport the alignment.
@@ -291,21 +303,29 @@ static bool NkfGuard(NkfHandle* h, const float* micB,
 }
 
 // Box-decimated NCC of ref's tail against our own output history's
-// tail: ref[n] ~ out[n - L] with L in [0, LOOP_DMAX] = a self-monitor
-// loop is on. Confirms with LOOP_ON hits, releases after LOOP_QUIET
-// consecutive silent windows (so a finished mic test re-exposes NKF).
+// tail: ref[n] ~ out[n - L] with L in [0, available range] = a
+// self-monitor loop is on. Confirms with LOOP_ON hits, releases after
+// LOOP_QUIET consecutive silent windows (mic test over -> unfreeze).
 static void NkfDetectLoop(NkfHandle* h) {
     h->samplesSinceLoop = 0;
-    const int W = LOOP_WIN, DMAX = LOOP_DMAX, D = LOOP_DEC;
+    const int W = LOOP_WIN, D = LOOP_DEC;
     const int Wd = W / D;
-    const int OdN = (W + DMAX) / D;
-    const int off = DMAX / D;         // out-bin lag 0 aligns tail-to-tail
-    if ((int)h->refHist.size() < W ||
-        (int)h->outHist.size() < W + DMAX)
+    if ((int)h->refHist.size() < W || (int)h->outHist.size() < W + 512)
         return;
 
+    // Partial range, like the TDC: full 800 ms once the buffer is
+    // complete, shorter early — a typical <300 ms loop is caught in
+    // the first half second instead of waiting for the whole buffer.
+    int dMax = (int)h->outHist.size() - W;
+    if (dMax > LOOP_DMAX) dMax = LOOP_DMAX;
+    dMax &= ~(D - 1);
+    if (dMax < 512) return;
+
+    const int OdN = dMax / D + Wd;   // (W+dMax)/D
+    const int off = dMax / D;        // out-bin lag 0 aligns tail-to-tail
+
     float* Rf = h->refHist.data() + (h->refHist.size() - W);
-    float* Of = h->outHist.data() + (h->outHist.size() - (W + DMAX));
+    float* Of = h->outHist.data() + (h->outHist.size() - (W + dMax));
 
     float* Rd = h->loopRd;
     float* Od = h->loopOd;
@@ -435,17 +455,12 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
         if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE) {
             h->tdcLocked = true;  // engage anyway; TDC keeps correcting
-            NkfPhase("t=%.2f TDC grace lock (no peak)", NKF_T(h));
+            NkfPhase("t=%.2f TDC grace lock (no peak; last d=%d sc=%.3f)",
+                     NKF_T(h), h->lastTdcD, (double)h->lastTdcSc);
         }
 
         h->samplesSinceLoop += frameSize;
         if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
-
-        // First confirmed loop: hold shadow for LOOP_HOLD so the
-        // filter converges on the (safe, non-looped) shadow output
-        // before it goes live — and frozen — inside the feedback loop.
-        if (h->loopConf >= LOOP_ON && h->tdcConfident && !h->loopHoldUntil)
-            h->loopHoldUntil = h->total + LOOP_HOLD;
     }
 
     while (h->micAccum.size() - h->micHead >= (size_t)NKF_BLOCK_SHIFT) {
@@ -522,18 +537,6 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             }
         }
 
-        // Self-monitor loop detected while exposed: yank to shadow
-        // ONLY while the delay estimate is not confident. A confident
-        // TDC lock means the aligned ref lets the Kalman work inside
-        // the loop (after the LOOP_HOLD convergence hold it sits there
-        // frozen — echo-hat with a converged filter); a blind lag
-        // inside a loop is what blows the filter.
-        if (h->loopConf >= LOOP_ON && h->shadowBlocks == 0 && processed &&
-            !h->tdcConfident) {
-            h->shadowBlocks = TDC_SHADOW;
-            h->fadePos = TDC_FADE;
-        }
-
         // Exposure mix: g=0 -> mic, g=1 -> full NKF.
         const bool shadowed = processed && h->shadowBlocks > 0;
         float g = 0.0f;
@@ -553,19 +556,15 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         }
         NkfEmit(h, h->emitBlock, NKF_BLOCK_SHIFT);
 
-        // Confirmed loop: keep shadow while the convergence hold runs
-        // (the delay is already confident — this is filter-compile
-        // time, not delay-lock time).
-        if (h->loopConf >= LOOP_ON && h->tdcConfident &&
-            h->total < h->loopHoldUntil)
-            h->shadowBlocks = TDC_SHADOW;
-
-        // Hold shadow while a self-monitor loop is active AND the
-        // delay is not confident; a confident lock (or a quiet loop)
-        // releases the countdown so the normal fade re-exposes NKF.
-        if (shadowed &&
-            (h->loopConf < LOOP_ON || h->tdcConfident) &&
-            --h->shadowBlocks == 0)
+        // Warm-up (or post-guard) shadow drains unconditionally. It used
+        // to be held by an active loop until the delay was confident —
+        // but pinning NKF on raw mic while a feedback loop runs strips
+        // the wire of all cancellation and the howl grows on exactly
+        // that fuel (WPE/notch cannot hold a near-field loop alone;
+        // DTLN/AEC3 never un-expose either). Live-in-loop is safe now:
+        // the engine freezes there (see above), a fixed filter is
+        // bounded and keeps cancelling the pickup.
+        if (shadowed && --h->shadowBlocks == 0)
             h->fadePos = 0;
         h->micHead += NKF_BLOCK_SHIFT;
         h->micConsumed += NKF_BLOCK_SHIFT;
@@ -632,7 +631,8 @@ void NkfReset(NkfHandle* h) {
     h->samplesSinceLoop = 0;
     h->loopConf = 0;
     h->loopQuiet = 0;
-    h->loopHoldUntil = 0;
+    h->lastTdcSc = -2.0f;
+    h->lastTdcD = 0;
     h->engRanOnce = false;
     h->frozenApplied = false;
     if (h->engine) { h->engine->SetFrozen(false); h->engine->Reset(); }
