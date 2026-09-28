@@ -5,6 +5,40 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] — 2026-09-28
+
+### Fixed
+
+- **NKF mic-test howl: the notch checkbox could not stop it.**
+  A sustained loud tone (howling/ringing loop) pinned the RMS
+  speech detector on for ever, so `NotchSetSpeech(1)` never
+  released: the notch froze adaptation *and* engagement
+  (bit-exact bypass) while the checkbox stayed ticked — toggling
+  WPE/notch changed nothing. The shared speech gate
+  (`src/speech_gate.h`) now carries a stuck-speech watchdog: after
+  ~5 s of continuous "speech" (no 250 ms quiet frame in between)
+  notch adaptation is released; the next real gap re-arms plain
+  hysteresis. WPE keeps the raw voice flag — voice protection is
+  unchanged. Harness-proven end-to-end with the real NKF engine:
+  gate releases at 5.0 s, the notch locks the 1100 Hz tone and
+  removes 45 dB, bursty speech still freezes the notch and never
+  trips the watchdog.
+
+### Added
+
+- The Notch checkbox tooltip now shows live telemetry: the two
+  section frequencies, engaged/bypassed state, and whether
+  adaptation is frozen (voice), running (sustained tone), or idle.
+
+### Notes
+
+- NKF self-monitor loop shadowing (investigated, report-only): in
+  the mic-test topology (ref carries our own recent output back)
+  the loop detector yanks NKF to raw-mic shadow for 100% of
+  processed blocks and holds it there until ~2 s of silence — by
+  design since 1.9. DTLN/AEC3 have no such mechanism. Left
+  unchanged this round.
+
 ## [2.0.0] — 2026-09-27
 
 ### Added

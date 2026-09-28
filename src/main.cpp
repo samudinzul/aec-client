@@ -25,6 +25,7 @@
 #include "dtln_wrapper.h"
 #include "wpe.h"
 #include "notch.h"
+#include "speech_gate.h"
 
 #include <cstdio>
 #include <cmath>
@@ -48,7 +49,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "2.0.0"
+#define APP_VERSION "2.0.1"
 
 // ============================================================
 //  Single-instance protection
@@ -203,10 +204,10 @@ std::atomic<bool>  g_enablePreprocess(false);
 // switch never resets them. Both default ON for every engine.
 std::atomic<bool>  g_wpeEnabled{ true };      // WPE dereverb post stage
 std::atomic<bool>  g_notchEnabled{ true };    // adaptive notch feedback suppression
-// Speech flag state (audio thread): RMS hysteresis on the engine
-// output, feeding WpeSetSpeech/NotchSetSpeech each frame.
-float              g_speechEma = 0.0f;
-bool               g_speechOn  = true;        // speech-safe default
+// Near-end speech gate (audio thread): RMS hysteresis on the engine
+// output + sustained-loudness watchdog feeding WpeSetSpeech /
+// NotchSetSpeech each frame (see speech_gate.h).
+SpeechGate          g_speechGate;             // .on / .stuck read by UI tooltip
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -846,27 +847,23 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
-    // Speech flag for the post stages: RMS hysteresis on the ENGINE
-    // output (never on the stages' own output, so a notch cut can't
-    // flip it back). Attack ~20 ms, release ~300 ms.
+    // Speech gate for the post stages: RMS hysteresis + stuck-tone
+    // watchdog on the ENGINE output (never on the stages' own output,
+    // so a notch cut can't flip it back). A sustained howl pins the
+    // voice flag for ever; the watchdog releases the *notch* gate
+    // after ~5 s so feedback suppression can actually latch the tone.
     {
         float engSq = 0;
         for (int i = 0; i < fs; i++) engSq += (float)cleanedFrame[i] * cleanedFrame[i];
-        float engRms = sqrtf(engSq / fs);
-        static const float kAtk = 0.39f;   // 1 - e^(-10ms/20ms)
-        static const float kRel = 0.033f;  // 1 - e^(-10ms/300ms)
-        static const float kOn  = 500.0f;  // int16 RMS: -30 dBFS on
-        static const float kOff = 250.0f;  // -36 dBFS off (hiss floor < kOff)
-        g_speechEma += (engRms > g_speechEma ? kAtk : kRel) * (engRms - g_speechEma);
-        if (!g_speechOn && g_speechEma > kOn)   g_speechOn = true;
-        else if (g_speechOn && g_speechEma < kOff) g_speechOn = false;
+        const float frameDurMs = 1000.0f * (float)fs / (float)g_sampleRate.load();
+        SpeechGateUpdate(&g_speechGate, sqrtf(engSq / fs), frameDurMs);
     }
 
     // Post chain: WPE dereverb (float round-trip — the engine output is
     // int16, the predictor runs in float), then the adaptive notch.
     // Meters below show post-stage output, i.e. what Discord hears.
     if (g_engine.wpe) {
-        WpeSetSpeech(g_engine.wpe, g_speechOn ? 1 : 0);
+        WpeSetSpeech(g_engine.wpe, SpeechGateForWpe(&g_speechGate));
         for (int i = 0; i < fs; i++)
             wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
         WpeProcess(g_engine.wpe, wpeBuf, wpeBuf, fs);
@@ -874,7 +871,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
             cleanedFrame[i] = clamp_s16((int)lrintf(wpeBuf[i] * 32768.0f));
     }
     if (g_engine.notch) {
-        NotchSetSpeech(g_engine.notch, g_speechOn ? 1 : 0);
+        NotchSetSpeech(g_engine.notch, SpeechGateForNotch(&g_speechGate));
         NotchProcess(g_engine.notch, cleanedFrame, fs);
     }
 
@@ -1419,11 +1416,37 @@ void DrawAudioTab() {
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
+        if (ImGui::IsItemHovered()) {
+            std::string tip =
                 "Two adaptive notch filters that track narrowband howling /\n"
                 "ringing tones (speaker-mic loops). Exact bypass until a tone\n"
-                "is actually captured; voice harmonics never latch it.");
+                "is actually captured; voice harmonics never latch it.";
+            if (g_engine.notch) {
+                const double f0 = NotchFreq(g_engine.notch, 0);
+                const double f1 = NotchFreq(g_engine.notch, 1);
+                const int e0 = NotchEngaged(g_engine.notch, 0);
+                const int e1 = NotchEngaged(g_engine.notch, 1);
+                char live[192];
+                if (e0 && e1)
+                    snprintf(live, sizeof live, "\nLive: engaged %.0f Hz + %.0f Hz",
+                             f0, f1);
+                else if (e0)
+                    snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (2nd idle)", f0);
+                else if (e1)
+                    snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (1st idle)", f1);
+                else
+                    snprintf(live, sizeof live, "\nLive: bypassed (no tone latched)");
+                tip += live;
+                const bool frozen = SpeechGateForNotch(&g_speechGate) != 0;
+                snprintf(live, sizeof live, "\nAdaptation: %s%s",
+                         frozen ? "frozen (voice)" : "running",
+                         g_speechGate.stuck ? " [sustained tone]" : "");
+                tip += live;
+            } else {
+                tip += "\nLive: not running";
+            }
+            ImGui::SetTooltip("%s", tip.c_str());
+        }
     }
 
     ImGui::Spacing();
