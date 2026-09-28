@@ -32,22 +32,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   100 % live, zero guard resets.
 
 - **NKF's mic-test howl: NKF itself stopped cancelling inside the
-  loop.** The detector pinned NKF on raw mic until a *confident*
-  delay lock — and if the 300 ms search missed the real round trip
-  (app + Discord + speaker + loopback easily exceeds it) the grace
-  lock never became confident, so the wire carried raw mic forever.
-  Zero cancellation on the wire is exactly the fuel a near-field
-  howl grows on: WPE is dereverb, the notch needed seconds, DTLN/
-  AEC3 stayed live and cancelling from t≈0. New policy: NKF is
-  **never un-exposed for a loop** — while exposed in a loop the
-  engine freezes adaptation instead (a fixed, aligned filter is
-  bounded and keeps cancelling the speaker pickup), the warm-up
+  loop.** Two policies kept the feedback loop alive: the detector
+  pinned NKF on raw mic until a *confident* delay lock — and if the
+  300 ms search missed the real round trip (app + Discord + speaker
+  + loopback easily exceeds it) the grace lock never became
+  confident, so the wire carried raw mic forever — and the fallback
+  for un-confident locks *froze* adaptation, so the filter never
+  learned the loop path either. A closed-loop test
+  (`nkf_howl_test`: mic = β·out delayed, ref = loopback, seed
+  noise) shows the frozen policy howling at coupling β ≥ 1.2 —
+  full-scale ringing, sustained — while the level-scaled engine
+  adapting straight through the loop stabilises it all the way to
+  β = 1.8 (0 guard resets), and the cold-start howl dies within
+  seconds of the delay lock. New policy: NKF is **never un-exposed
+  for a loop and never frozen in one** — the Kalman adapts
+  continuously so loop gain stays below 1 (the only real fix;
+  WPE/notch alone cannot hold a near-field loop), the warm-up
   shadow drains unconditionally, and the search range extends to
   800 ms with partial-range scheduling so the delay locks as soon
   as its data exists. Mic-test harness: loop engaged at 0.39 s,
   delay locked at 0.49 s (was the 3 s grace), 100 % live, exact
-  192-sample lag, freeze held for the whole loop, zero guard
-  resets, no give-up.
+  192-sample lag, zero guard resets, no give-up.
 
 - **NKF mic-test howl: the notch checkbox could not stop it.**
   A sustained loud tone (howling/ringing loop) pinned the RMS
@@ -101,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NkfGetState()` (`src/nkf_wrapper.h`): `failed open (guard)`
   / `shadow (warm-up)` / `shadow (settling)` / `live`,
   with `delay ~XX ms (locked|estimated)` and a
-  `(loop, frozen)` flag while a self-monitor loop is active,
+  `(loop, adapting)` flag while a self-monitor loop is active,
   plus a hover tooltip.
 
 - The Notch checkbox tooltip now shows live telemetry: the two
@@ -112,15 +117,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - NKF self-monitor loop policy: in the mic-test topology
   (ref carries our own recent output back) the loop detector
-  **never yanks NKF to raw mic** — like DTLN/AEC3, NKF stays
-  exposed and cancelling; while a loop is active the engine
-  runs frozen (echo-hat with the converged filter, no Kalman
-  updates — adapting against a self-referential ref diverges)
-  and resumes adapting once the loop goes quiet. The 8 s
-  convergence hold and the confident-lock release condition
-  are gone: they pinned NKF on the raw mic inside the very
-  loop that needed cancellation. Guard trips remain the
-  backstop.
+  **never yanks NKF to raw mic and never freezes it** — like
+  DTLN/AEC3, NKF stays exposed and *keeps adapting* through the
+  loop. Freezing looked safe when it was added (adaptation had
+  diverged back then), but that divergence was the pre-scale
+  level bug; with the scaled engine the closed-loop test shows
+  adaptation converging and holding the loop down at coupling
+  1.8 while the frozen variant howls from 1.2. The 8 s
+  convergence hold, the confident-lock release condition and
+  the freeze switch are all gone. The detector now feeds
+  telemetry only; guard trips remain the backstop.
 
 ## [2.0.0] — 2026-09-27
 

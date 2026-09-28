@@ -71,12 +71,14 @@ static const int   TDC_FADE       = 8;      // 256 ms crossfade into NKF
 // Self-monitor loop detection: with "Listen to myself" or a Discord
 // mic test on SPEAKERS, ref carries our own output back around (app ->
 // Discord -> speakers -> loopback) and the speaker couples back to the
-// mic through the air. A loop must NEVER un-expose NKF — raw mic on
-// the wire is the fuel a near-field howl grows on (WPE/notch alone
-// cannot hold it; DTLN/AEC3 stay live and cancelling from t=0). So:
-// while a loop is active keep NKF live and FREEZE adaptation — a
-// fixed filter is bounded and keeps cancelling the pickup; adaptation
-// resumes when the loop goes quiet. Guard trips remain the backstop.
+// mic through the air. A loop must NEVER un-expose NKF and must NEVER
+// freeze it either — raw mic on the wire or a stale filter are both
+// howl fuel (the frozen policy sustained full-scale ringing at
+// coupling >= 1.2 in the closed-loop test). Since the level-scaled
+// engine, the Kalman adapts straight through the loop: it learns the
+// pickup path, loop gain drops below 1 and the ringing dies (held to
+// coupling 1.8, zero guard resets). The detector stays as telemetry
+// (UI + phase log); guard trips remain the backstop.
 static const int   LOOP_WIN      = 1024;    // correlation window
 static const int   LOOP_DMAX     = 12800;   // same 800 ms round trip as TDC
 static const int   LOOP_DEC      = 4;       // box-decimate x4 (cheap NCC)
@@ -151,7 +153,6 @@ struct NkfHandle {
     int   lastTdcD  = 0;
     // Phase-log transitions (crash diagnostics; see NkfPhase).
     bool engRanOnce = false;
-    bool frozenApplied = false;
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -305,7 +306,8 @@ static bool NkfGuard(NkfHandle* h, const float* micB,
 // Box-decimated NCC of ref's tail against our own output history's
 // tail: ref[n] ~ out[n - L] with L in [0, available range] = a
 // self-monitor loop is on. Confirms with LOOP_ON hits, releases after
-// LOOP_QUIET consecutive silent windows (mic test over -> unfreeze).
+// LOOP_QUIET consecutive silent windows (mic test over -> telemetry
+// clears; no exposure policy hangs off this any more).
 static void NkfDetectLoop(NkfHandle* h) {
     h->samplesSinceLoop = 0;
     const int W = LOOP_WIN, D = LOOP_DEC;
@@ -486,17 +488,15 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         bool processed = false;
         if (h->tdcLocked && !h->giveUp) {
             try {
-                // Exposed inside a self-monitor loop: keep APPLYING the
-                // converged filter but freeze adaptation — the Kalman
-                // running inside a feedback loop diverges (observed
-                // guard churn / fail-open), a fixed filter is stable.
-                const bool freeze = h->loopConf >= LOOP_ON &&
-                                    h->shadowBlocks == 0;
-                if (freeze != h->frozenApplied) {
-                    h->frozenApplied = freeze;
-                    NkfPhase("t=%.2f freeze=%d", NKF_T(h), freeze ? 1 : 0);
-                }
-                h->engine->SetFrozen(freeze);
+                // Closed mic<->loudspeaker loop: keep ADAPTING. The old
+                // freeze policy (fixed filter while looped) sustained a
+                // howl — the frozen filter never learned the loop path
+                // (closed-loop test: howl at coupling >= 1.2). Since the
+                // level-scaled engine, in-loop adaptation converges and
+                // *stabilises* the loop (held to coupling 1.8, 0 guard
+                // resets): cancelling the pickup keeps loop gain < 1,
+                // which is the only real way to stop the ringing —
+                // raw mic or a stale filter is exactly the fuel.
                 if (!h->engRanOnce) {
                     h->engRanOnce = true;
                     NkfPhase("t=%.2f first ProcessBlock", NKF_T(h));
@@ -562,8 +562,8 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         // the wire of all cancellation and the howl grows on exactly
         // that fuel (WPE/notch cannot hold a near-field loop alone;
         // DTLN/AEC3 never un-expose either). Live-in-loop is safe now:
-        // the engine freezes there (see above), a fixed filter is
-        // bounded and keeps cancelling the pickup.
+        // the engine adapts straight through the loop (see above),
+        // cancelling the pickup so loop gain stays below 1.
         if (shadowed && --h->shadowBlocks == 0)
             h->fadePos = 0;
         h->micHead += NKF_BLOCK_SHIFT;
@@ -634,8 +634,7 @@ void NkfReset(NkfHandle* h) {
     h->lastTdcSc = -2.0f;
     h->lastTdcD = 0;
     h->engRanOnce = false;
-    h->frozenApplied = false;
-    if (h->engine) { h->engine->SetFrozen(false); h->engine->Reset(); }
+    if (h->engine) h->engine->Reset();
 }
 
 void NkfDestroy(NkfHandle* h) {

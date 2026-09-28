@@ -29,12 +29,12 @@ NkfHandle* NkfNew(const char* modelPath);
 //   drop back to shadow rather than exposing a reset; after too many
 //   guard trips the session fails open to permanent mic passthrough.
 //   A self-monitor loop detector (ref vs our own output — Discord
-//   mic test / Listen to myself on speakers) NEVER un-exposes NKF:
-//   while a loop is active the engine freezes adaptation instead
-//   (a fixed, aligned filter is bounded and keeps cancelling the
-//   speaker pickup — raw mic on the wire would be the fuel a
-//   near-field howl grows on), and it resumes adapting once the
-//   loop goes quiet.
+//   mic test / Listen to myself on speakers) neither un-exposes NKF
+//   nor freezes it: the engine adapts straight through the feedback
+//   loop, cancelling the speaker pickup so loop gain stays below 1
+//   (a fixed filter or raw mic on the wire both sustain the howl —
+//   verified against a closed mic<->loudspeaker loop). The detector
+//   feeds telemetry only.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
 

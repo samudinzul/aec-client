@@ -1336,15 +1336,15 @@ void DrawEngineSection() {
         else
             snprintf(nkfLine, sizeof nkfLine, "NKF: live - delay %d ms%s%s",
                      ns.lagSamples / 16,
-                     ns.loopActive ? " (loop, frozen)" : "",
+                     ns.loopActive ? " (loop, adapting)" : "",
                      ns.confident ? " (locked)" : " (estimated)");
         ImGui::TextDisabled("%s", nkfLine);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Delay lock: how far the speaker reference lags the mic\n"
                 "(playback chain). Locked = aligned reference lets NKF cancel.\n"
-                "A mic-test loop never drops NKF to raw mic — the engine\n"
-                "stays live with adaptation frozen until the loop is quiet.");
+                "During a mic-test loop the engine keeps adapting — it must\n"
+                "cancel the speaker pickup continuously or the loop howls.");
     }
 }
 
