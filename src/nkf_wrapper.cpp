@@ -464,11 +464,11 @@ static void NkfBackstopWindow(NkfHandle* h) {
         h->bsHeal = 0;
         if (h->bsRun < 1000) h->bsRun++;
         if (h->bsRun >= BS_RUN && h->bsEnabled) {
-            const float want = powf(0.5f, h->bsAttacks + 1);
+            const float want = powf(0.25f, h->bsAttacks + 1);
             if (want < h->bsTarget) {
                 h->bsTarget = want;
                 h->bsActive = true;
-                if (h->bsAttacks < 30) h->bsAttacks++;
+                if (h->bsAttacks < 6) h->bsAttacks++;
                 NkfPhase("t=%.2f backstop ATTACK #%d depth=%.1f dB "
                          "tonal=%d/%d gain -> %.1f dB",
                          NKF_T(h), h->bsAttacks, depth, h->bsHits, frames,
