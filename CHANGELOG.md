@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NKF crashed the whole app ~3 s after Start.** The engine linked
+  against a prebuilt `libnkf_aec.dll` from before this round's header
+  change; `m_frozen` was *inserted* at the top of `NKFImpl.h`'s
+  private section instead of appended, shifting every member offset.
+  The exe built with the new layout, the stale DLL read the old one →
+  garbage members → hard SEGV on the first `ProcessBlock` (phase log:
+  `model loaded … TDC grace lock … first ProcessBlock`, then nothing).
+  The class's own append-only rule is restored (`m_frozen` is now the
+  last member) **and** the engine is compiled directly into
+  `aec_gui` — no separate DLL, so header and code can never drift
+  again. The DLL build step and release entry are gone.
+
 - **NKF barely cancelled echo at real-world levels.** A delay
   sweep of the stock model showed it *amplifies* when fed the
   wrapper's int16/32768 floats at voice level but cancels

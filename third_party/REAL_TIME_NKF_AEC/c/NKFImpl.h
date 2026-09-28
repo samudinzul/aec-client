@@ -64,7 +64,12 @@ public:
     void SetFrozen(bool f) { m_frozen = f; }
 
 private:
-    bool m_frozen = false;
+    // APPEND-ONLY RULE (this file got burned by violating it): new data
+    // members go at the END of the class, never inserted — inserting
+    // shifts every member offset, and any binary still compiled from an
+    // older copy of this header then reads garbage (hard SEGV on first
+    // ProcessBlock). The engine is now compiled straight into aec_gui;
+    // keep the rule anyway.
     void init_engine_threads(int inter_threads, int intra_threads) {
         session_options.SetIntraOpNumThreads(intra_threads);
         session_options.SetInterOpNumThreads(inter_threads);
@@ -142,14 +147,14 @@ private:
 
     float m_windows[BLOCK_LEN] = { 0 };
 
-    // Appended (not inserted): keep every pre-existing member offset stable
-    // so a stale libnkf_aec.dll still matches this header. Rebuild the DLL
-    // to activate the OnnxInfer hoist; until then the old local-scratch
-    // OnnxInfer in the DLL runs against a compatible layout.
+    // Appended (not inserted): keep every pre-existing member offset stable.
     std::vector<cpx_type> mic_res;
     std::vector<cpx_type> lpb_res;
     std::vector<size_t>    fft_shape;
     std::vector<size_t>    fft_axes;
     std::vector<ptrdiff_t> fft_stride_in;
     std::vector<ptrdiff_t> fft_stride_out;
+
+    // Newest member — must stay LAST (see append-only rule above).
+    bool m_frozen = false;
 };

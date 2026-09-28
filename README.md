@@ -140,8 +140,7 @@ The release ZIP bundles all required DLLs:
 
 | File | Size | Purpose |
 |------|------|---------|
-| `aec_gui.exe` | ~2.4 MB | Main application |
-| `libnkf_aec.dll` | ~1.3 MB | NKF neural engine |
+| `aec_gui.exe` | ~2.4 MB | Main application (includes the NKF neural engine) |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 + high-pass filter |
 | `onnxruntime.dll` | ~4.9 MB | Neural inference (NKF, DTLN ONNX fallback; official MS build, UPX-compressed) |
 | `msvcp140/vcruntime140*.dll` | ~900 KB | VC++ 14 runtime (required by onnxruntime.dll) |
@@ -265,7 +264,7 @@ Production path adds: **time-delay compensation** (cross-correlation vs loopback
 
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
-The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and builds to `libnkf_aec.dll` (1.3 MB).
+The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and compiled directly into `aec_gui.exe` (a standalone `libnkf_aec.dll` went stale against the header once — no separate DLL build anymore).
 
 ### Post stages (WPE + adaptive notch)
 
@@ -317,14 +316,8 @@ cd aec-client
 
 ### Build NKF-AEC Engine
 
-```bash
-cd third_party/REAL_TIME_NKF_AEC/c
-cmake -B build -G "MinGW Makefiles"
-cmake --build build
-cd ../../..
-```
-
-Produces `libnkf_aec.dll`.
+No separate step: `third_party/REAL_TIME_NKF_AEC/c/NKFImpl.cpp` is part
+of the main `aec_gui` target and builds with the rest of the app.
 
 ### Download Models
 

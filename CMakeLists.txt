@@ -33,7 +33,6 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
 set(NKF_DIR ${CMAKE_SOURCE_DIR}/third_party/REAL_TIME_NKF_AEC/c)
-set(NKF_DLL ${NKF_DIR}/build/libnkf_aec.dll)
 
 add_executable(aec_gui
     src/main.cpp
@@ -42,6 +41,10 @@ add_executable(aec_gui
     src/dtln_wrapper.cpp
     src/wpe.cpp
     src/notch.cpp
+    # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
+    # stale against NKFImpl.h and crashed the app on first ProcessBlock
+    # (member offsets shifted). No separate DLL build anymore.
+    ${NKF_DIR}/NKFImpl.cpp
 )
 
 target_include_directories(aec_gui PRIVATE
@@ -56,7 +59,6 @@ target_link_libraries(aec_gui PRIVATE
     imgui
     glfw
     OpenGL::GL
-    ${NKF_DLL}
     ${MSYS2_ROOT}/lib/libwebrtc-audio-processing-1.dll.a
     onnxruntime
 )
@@ -105,11 +107,6 @@ endforeach()
 #  (ONNX Runtime + VC++ CRT, WebRTC, GLFW).
 # ============================================================
 add_custom_command(TARGET aec_gui POST_BUILD
-    # Our own engine DLLs
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${NKF_DLL}
-        $<TARGET_FILE_DIR:aec_gui>
-
     # MSYS2 runtime — direct deps
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${MSYS2_ROOT}/bin/libwebrtc-audio-processing-1-3.dll
