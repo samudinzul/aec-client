@@ -94,7 +94,7 @@ static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> relea
 // cancelling again (wire-vs-mic depth <= BS_HEAL_D on non-tonal audio)
 // — releasing on mere silence would let the howl regrow and cycle.
 static const int    BS_FRAMES   = 64;      // frames per window (64x512 = 2.048 s)
-static const int    BS_RUN      = 4;       // held windows -> attack (~8 s)
+static const int    BS_RUN      = 2;       // held windows -> attack (~4 s)
 static const int    BS_HEAL_RUN = 2;       // clean-cancel windows -> release
 static const double BS_TONAL    = 0.33;    // per-frame 3-bin power fraction
 static const int    BS_HITS     = 38;      // >=~60% of 64 frames tonal
