@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes 45 dB, bursty speech still freezes the notch and never
   trips the watchdog.
 
+- **Intermittent rings are caught too.** The watchdog only
+  counted *continuous* ON — any >0.8 s quiet gap re-armed it from
+  scratch, so ring-under-voice that starts/stops (mic-test playback
+  bursts) never released the notch. Two-tier trip replaces it:
+  4.5 s unbroken loudness (fast path, unchanged feel) or 6.8 s of
+  burst evidence that decays with a 700 ms gap time constant (the
+  EMA's own ~0.8 s release lag counts as ON, so pauses drain hard;
+  ordinary conversation peaks near 6.0 s and stays under). Harness:
+  2.5 s ring bursts trip inside burst 3 and the notch removes
+  38 dB; a 2 s/1.2 s conversation pattern never trips.
+- **Low-frequency howls (80–150 Hz) can be notched.** The search
+  floor was 150 Hz — lower tones were unreachable (both sections
+  clamped above the tone and the latch never accrued). Floor is
+  now 80 Hz: a 110 Hz ring is captured at −50 dB; voice-bypass
+  suites remain bit-exact.
+
 ### Added
 
 - The Notch checkbox tooltip now shows live telemetry: the two

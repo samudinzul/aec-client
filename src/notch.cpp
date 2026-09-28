@@ -43,7 +43,7 @@ namespace {
 constexpr int    kSections        = 2;
 constexpr double kPi              = 3.14159265358979323846;
 constexpr double kBandwidthHz     = 60.0;      // notch width
-constexpr double kMinHz           = 150.0;
+constexpr double kMinHz           = 80.0;   // low howls (150 was unreachable)
 constexpr double kInitHz0         = 500.0;     // spread start frequencies
 constexpr double kInitHz1         = 1500.0;
 constexpr double kSlewHzPerSec    = 8000.0;    // max track rate
