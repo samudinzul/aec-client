@@ -4,6 +4,23 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
+#include <cstdarg>
+
+// Transition-only phase log (nkf-phase.log in the working directory):
+// pins where a crash or exception happened on the audio thread. Written
+// only on state changes — never per block — so it is safe there.
+static void NkfPhase(const char* fmt, ...) {
+    FILE* f = fopen("nkf-phase.log", "a");
+    if (!f) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fputc('\n', f);
+    fclose(f);
+}
+#define NKF_T(h) ((double)(h)->total / 16000.0)
 
 // ============================================================
 //  NKF block parameters — must match NKFImpl.h
@@ -129,6 +146,9 @@ struct NkfHandle {
     int loopConf = 0;               // consecutive-ish hit score (0..4)
     int loopQuiet = 0;              // silent detections in a row
     size_t loopHoldUntil = 0;       // absolute time shadow is held to
+    // Phase-log transitions (crash diagnostics; see NkfPhase).
+    bool engRanOnce = false;
+    bool frozenApplied = false;
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -231,8 +251,12 @@ static void NkfEstimateDelay(NkfHandle* h) {
     if (diff < 0) diff = -diff;
     const bool jump = diff > TDC_JUMP;
     if (best >= (jump ? (double)TDC_JUMP_PEAK : (double)TDC_MIN_PEAK)) {
+        const bool wasLocked = h->tdcLocked;
         h->alignDelay = bestD;
         h->tdcLocked = true;
+        if (!h->tdcConfident)
+            NkfPhase("t=%.2f TDC lock%s d=%d sc=%.3f", NKF_T(h),
+                     wasLocked ? " (update)" : "", bestD, best);
         h->tdcConfident = true;   // real peak — safe to stay live in a loop
     }
 }
@@ -322,7 +346,11 @@ static void NkfDetectLoop(NkfHandle* h) {
 
     if (best >= (double)LOOP_MIN_PEAK) {
         if (h->loopConf < 4) h->loopConf++;
+        if (h->loopConf == LOOP_ON)
+            NkfPhase("t=%.2f loop engaged sc=%.3f", NKF_T(h), best);
     } else if (h->loopConf > 0) {
+        if (h->loopConf == LOOP_ON)
+            NkfPhase("t=%.2f loop released sc=%.3f", NKF_T(h), best);
         h->loopConf--;
     }
 }
@@ -366,9 +394,11 @@ NkfHandle* NkfNew(const char* modelPath) {
     try {
         h->engine = new NKFImpl(modelPath);
     } catch (...) {
+        NkfPhase("model load FAILED (%s)", modelPath ? modelPath : "?");
         delete h;
         return nullptr;
     }
+    NkfPhase("model loaded (%s)", modelPath ? modelPath : "?");
     h->micAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->refHist.reserve(TDC_WIN + TDC_DMAX + NKF_BLOCK_SHIFT * 4);
     h->micWin.reserve(TDC_WIN);
@@ -377,15 +407,8 @@ NkfHandle* NkfNew(const char* modelPath) {
     return h;
 }
 
-void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
-                int16_t* out, int frameSize) {
-    // Fail-open: dead handle ships mic, never silence.
-    if (!h || !h->engine) {
-        if (out && mic && frameSize > 0)
-            memcpy(out, mic, (size_t)frameSize * sizeof(int16_t));
-        return;
-    }
-
+static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
+                           const int16_t* ref, int16_t* out, int frameSize) {
     // int16 -> float: mic into the block accumulator, ref into the
     // absolute-addressed history, mic also into the estimator window.
     // Pushed unconditionally so ALL phases (warm-up, shadow, fade,
@@ -410,8 +433,10 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         const int tdcNeed =
             (h->tdcLocked && h->tdcConfident) ? TDC_PERIOD : TDC_EAGER;
         if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
-        if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE)
+        if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE) {
             h->tdcLocked = true;  // engage anyway; TDC keeps correcting
+            NkfPhase("t=%.2f TDC grace lock (no peak)", NKF_T(h));
+        }
 
         h->samplesSinceLoop += frameSize;
         if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
@@ -445,19 +470,40 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         // reaches the wire only past shadow, through the fade.
         bool processed = false;
         if (h->tdcLocked && !h->giveUp) {
-            // Exposed inside a self-monitor loop: keep APPLYING the
-            // converged filter but freeze adaptation — the Kalman
-            // running inside a feedback loop diverges (observed guard
-            // churn / fail-open), a fixed filter is stable.
-            h->engine->SetFrozen(h->loopConf >= LOOP_ON &&
-                                 h->shadowBlocks == 0);
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-                h->engMic[i] = h->micBlock[i] * ENG_IN_SCALE;
-                h->engRef[i] = h->refBlock[i] * ENG_IN_SCALE;
+            try {
+                // Exposed inside a self-monitor loop: keep APPLYING the
+                // converged filter but freeze adaptation — the Kalman
+                // running inside a feedback loop diverges (observed
+                // guard churn / fail-open), a fixed filter is stable.
+                const bool freeze = h->loopConf >= LOOP_ON &&
+                                    h->shadowBlocks == 0;
+                if (freeze != h->frozenApplied) {
+                    h->frozenApplied = freeze;
+                    NkfPhase("t=%.2f freeze=%d", NKF_T(h), freeze ? 1 : 0);
+                }
+                h->engine->SetFrozen(freeze);
+                if (!h->engRanOnce) {
+                    h->engRanOnce = true;
+                    NkfPhase("t=%.2f first ProcessBlock", NKF_T(h));
+                }
+                for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                    h->engMic[i] = h->micBlock[i] * ENG_IN_SCALE;
+                    h->engRef[i] = h->refBlock[i] * ENG_IN_SCALE;
+                }
+                h->engine->ProcessBlock(h->engMic, h->engRef, h->outBlock);
+                for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                    h->outBlock[i] *= ENG_OUT_SCALE;
+            } catch (...) {
+                // Ort::Exception (or worse) from the engine: fail open
+                // instead of taking the app down with it.
+                NkfPhase("t=%.2f EXCEPTION in ProcessBlock -> fail open",
+                         NKF_T(h));
+                h->giveUp = true;
+                h->engine->Reset();
+                h->shadowBlocks = TDC_SHADOW;
+                h->fadePos = TDC_FADE;
+                continue;
             }
-            h->engine->ProcessBlock(h->engMic, h->engRef, h->outBlock);
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
-                h->outBlock[i] *= ENG_OUT_SCALE;
             processed = true;
             if (NkfGuard(h, h->micBlock, h->refBlock,
                          h->outBlock)) {
@@ -470,6 +516,8 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 h->shadowBlocks = TDC_SHADOW;
                 h->fadePos = TDC_FADE;
                 if (++h->resets >= GUARD_MAX_RESETS) h->giveUp = true;
+                NkfPhase("t=%.2f guard reset #%d%s", NKF_T(h), h->resets,
+                         h->giveUp ? " -> give up (fail open)" : "");
                 processed = false;
             }
         }
@@ -539,6 +587,27 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
     NkfDrainOut(h, out, frameSize);
 }
 
+void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
+                int16_t* out, int frameSize) {
+    // Fail-open: dead handle ships mic, never silence.
+    if (!h || !h->engine) {
+        if (out && mic && frameSize > 0)
+            memcpy(out, mic, (size_t)frameSize * sizeof(int16_t));
+        return;
+    }
+    // Last-resort catch: an exception anywhere in the pipeline must not
+    // take the app down — log the phase and fail open to mic.
+    try {
+        NkfProcessImpl(h, mic, ref, out, frameSize);
+    } catch (...) {
+        NkfPhase("t=%.2f EXCEPTION in NkfProcess -> fail open",
+                 h->total ? (double)h->total / 16000.0 : 0.0);
+        h->giveUp = true;
+        if (out && mic && frameSize > 0)
+            memcpy(out, mic, (size_t)frameSize * sizeof(int16_t));
+    }
+}
+
 void NkfReset(NkfHandle* h) {
     if (!h) return;
     h->micAccum.clear();
@@ -564,6 +633,8 @@ void NkfReset(NkfHandle* h) {
     h->loopConf = 0;
     h->loopQuiet = 0;
     h->loopHoldUntil = 0;
+    h->engRanOnce = false;
+    h->frozenApplied = false;
     if (h->engine) { h->engine->SetFrozen(false); h->engine->Reset(); }
 }
 
