@@ -1,25 +1,16 @@
 #include "nkf_wrapper.h"
 #include "NKFImpl.h"
+#include "aec_log.h"
 #include <vector>
 #include <cstring>
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
-#include <cstdarg>
 
 // Transition-only phase log (nkf-phase.log in the working directory):
 // pins where a crash or exception happened on the audio thread. Written
 // only on state changes — never per block — so it is safe there.
-static void NkfPhase(const char* fmt, ...) {
-    FILE* f = fopen("nkf-phase.log", "a");
-    if (!f) return;
-    va_list ap;
-    va_start(ap, fmt);
-    vfprintf(f, fmt, ap);
-    va_end(ap);
-    fputc('\n', f);
-    fclose(f);
-}
+#define NkfPhase AecPhase
 #define NKF_T(h) ((double)(h)->total / 16000.0)
 
 // ============================================================
@@ -151,6 +142,11 @@ struct NkfHandle {
     // WHY no peak was accepted (out of range vs below threshold).
     float lastTdcSc = -2.0f;
     int   lastTdcD  = 0;
+    // Loop-depth accumulator: engine mic vs engine out energy while the
+    // self-monitor loop is engaged — 10log10(out/mic) tells whether
+    // cancellation actually HOLDS during the loop (howl fuel check).
+    double depMic = 0.0, depOut = 0.0;
+    int    depSamples = 0;
     // Phase-log transitions (crash diagnostics; see NkfPhase).
     bool engRanOnce = false;
 };
@@ -265,11 +261,15 @@ static void NkfEstimateDelay(NkfHandle* h) {
     const bool jump = diff > TDC_JUMP;
     if (best >= (jump ? (double)TDC_JUMP_PEAK : (double)TDC_MIN_PEAK)) {
         const bool wasLocked = h->tdcLocked;
+        const int prevD = h->alignDelay;
         h->alignDelay = bestD;
         h->tdcLocked = true;
         if (!h->tdcConfident)
             NkfPhase("t=%.2f TDC lock%s d=%d sc=%.3f", NKF_T(h),
                      wasLocked ? " (update)" : "", bestD, best);
+        else if (bestD - prevD >= 32 || prevD - bestD >= 32)
+            NkfPhase("t=%.2f TDC drift d=%d->%d sc=%.3f", NKF_T(h),
+                     prevD, bestD, best);
         h->tdcConfident = true;   // real peak — safe to stay live in a loop
     }
 }
@@ -537,6 +537,30 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             }
         }
 
+        // Loop-depth window (2 s): energy of the engine's own mic vs out.
+        // Logged only while the loop detector fires — howl fuel check:
+        // >= ~0 dB during a loop means cancellation is NOT holding.
+        if (processed) {
+            double sm = 0, so = 0;
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                sm += (double)h->micBlock[i] * h->micBlock[i];
+                so += (double)h->outBlock[i] * h->outBlock[i];
+            }
+            h->depMic += sm;
+            h->depOut += so;
+            h->depSamples += NKF_BLOCK_SHIFT;
+        } else {
+            h->depMic = h->depOut = 0.0;
+            h->depSamples = 0;
+        }
+        if (h->depSamples >= 32000) {
+            if (h->loopConf >= LOOP_ON && h->depMic > 0.0)
+                NkfPhase("t=%.2f loop depth=%.1f dB", NKF_T(h),
+                         10.0 * log10((h->depOut + 1e-12) / h->depMic));
+            h->depMic = h->depOut = 0.0;
+            h->depSamples = 0;
+        }
+
         // Exposure mix: g=0 -> mic, g=1 -> full NKF.
         const bool shadowed = processed && h->shadowBlocks > 0;
         float g = 0.0f;
@@ -633,6 +657,8 @@ void NkfReset(NkfHandle* h) {
     h->loopQuiet = 0;
     h->lastTdcSc = -2.0f;
     h->lastTdcD = 0;
+    h->depMic = h->depOut = 0.0;
+    h->depSamples = 0;
     h->engRanOnce = false;
     if (h->engine) h->engine->Reset();
 }

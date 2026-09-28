@@ -33,6 +33,7 @@
 //  stage passes audio unconditionally.
 // ============================================================
 #include "notch.h"
+#include "aec_log.h"
 
 #include <cmath>
 #include <cstring>
@@ -67,6 +68,7 @@ struct Section {
     double w  = 0.0;      // center frequency (rad/sample)
     double wInit = 0.0;   // startup frequency (telemetry)
     bool engaged = false; // latched: notch actually applied to output
+    double logF = -1.0;   // last hop-logged frequency (diagnostics)
     double pinE = 0.0, poutE = 0.0;   // block-power EMA (engage test)
     int engCount = 0;     // consecutive blocks over kEngRatio
     double r  = 0.0;      // pole radius (set from bandwidth)
@@ -89,6 +91,7 @@ struct NotchHandle {
     Section sec[kSections];
     int speaking = 1;               // frozen until told otherwise
     bool failed = false;
+    long long samples = 0;          // processed-sample clock (diagnostics)
 };
 
 static void SectionSetFreq(Section* s, double w) {
@@ -109,6 +112,7 @@ static void SectionInit(Section* s, double sr, double hz) {
     s->pinE = s->poutE = 0.0;
     s->engCount = 0;
     s->engaged = false;
+    s->logF = -1.0;
     s->wInit = hz;
     SectionSetFreq(s, 2.0 * kPi * hz / sr);
 }
@@ -137,6 +141,7 @@ void NotchSetSpeech(NotchHandle* h, int speaking) {
 
 void NotchProcess(NotchHandle* h, int16_t* buf, int n) {
     if (!h || !buf || n <= 0) return;
+    h->samples += n;
 
     // Block gate: adapt only above the silence floor (uses this
     // block's level; one block stale is fine, like WpeSetSpeech).
@@ -176,7 +181,22 @@ void NotchProcess(NotchHandle* h, int16_t* buf, int n) {
                     double w = s->w + dwe;
                     if (w < h->wMin) w = h->wMin;
                     if (w > h->wMax) w = h->wMax;
-                    if (w != s->w) SectionSetFreq(s, w);
+                    if (w != s->w) {
+                        SectionSetFreq(s, w);
+                        // A latched notch has ~zero gradient away from
+                        // its tone: a big hop it survives is a hop it
+                        // actually made — log it (howl frequency chase).
+                        if (s->engaged && s->logF >= 0.0) {
+                            const double dhz =
+                                (w - s->logF) * (double)h->sr / (2.0 * kPi);
+                            if (dhz > 150.0 || dhz < -150.0) {
+                                AecPhase("t=%.2f notch%d hop f=%.0f Hz",
+                                         h->samples / (double)h->sr, k,
+                                         w * (double)h->sr / (2.0 * kPi));
+                                s->logF = w;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -225,7 +245,13 @@ void NotchProcess(NotchHandle* h, int16_t* buf, int n) {
         Section* s = &h->sec[k];
         if (s->engaged) continue;
         if (adapt && k == best && ratio[k] > kEngRatio) {
-            if (++s->engCount >= kEngBlocks) s->engaged = true;
+            if (++s->engCount >= kEngBlocks) {
+                s->engaged = true;
+                s->logF = s->w;
+                AecPhase("t=%.2f notch%d ENG f=%.0f Hz",
+                         h->samples / (double)h->sr, k,
+                         s->w * (double)h->sr / (2.0 * kPi));
+            }
         } else if (adapt && ratio[k] > kEngRatio) {
             if (s->engCount > 0) s->engCount--;
         } else {

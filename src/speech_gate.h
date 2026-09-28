@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include "aec_log.h"
 
 // ============================================================
 //  Near-end speech gate for the post stages (WPE + adaptive notch)
@@ -48,11 +49,14 @@ struct SpeechGate {
     bool  stuck      = false;  // sustained-loudness override active
     float runMs      = 0.0f;   // continuous-ON time (reset on release)
     float evidenceMs = 0.0f;   // burst evidence (decays while quiet)
+    float totalMs    = 0.0f;   // session clock (diagnostics)
 };
 
 // Update for one frame; frameDurMs is the audio frame duration
 // (10 ms in this app — derived from fs/sr so rates stay correct).
 inline void SpeechGateUpdate(SpeechGate* g, float frameRms, float frameDurMs) {
+    const bool wasStuck = g->stuck;
+    g->totalMs += frameDurMs;
     const float kAtk = 1.0f - expf(-frameDurMs / 20.0f);    // ~0.39 @ 10 ms
     const float kRel = 1.0f - expf(-frameDurMs / 300.0f);   // ~0.033 @ 10 ms
     const float kOn  = 500.0f;   // int16 RMS: -30 dBFS
@@ -77,6 +81,9 @@ inline void SpeechGateUpdate(SpeechGate* g, float frameRms, float frameDurMs) {
         g->evidenceMs *= expf(-frameDurMs / kGapTauMs);
     }
     g->stuck = g->runMs >= kRunMs || g->evidenceMs >= kBurstMs;
+    if (g->stuck != wasStuck)
+        AecPhase("gate watchdog %s at %.1f s", g->stuck ? "TRIP" : "release",
+                 g->totalMs / 1000.0f);
 }
 
 // Flags for this frame (1 = asserted).
