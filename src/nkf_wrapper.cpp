@@ -454,7 +454,15 @@ static void NkfBackstopWindow(NkfHandle* h) {
     if (h->loopConf >= LOOP_ON && h->depMic > 0.0)
         NkfPhase("t=%.2f loop depth=%.1f dB", NKF_T(h), depth);
 
-    const bool floors = micMs >= BS_MIC_MS && outMs >= BS_OUT_MS;
+    // Release when the howl is gone and real audio is present at the
+    // mic. The old test also required the wire to be loud (outMs >=
+    // BS_OUT_MS), but the backstop's entire job is to keep the wire
+    // quiet -- so that clause could never be satisfied while the trim
+    // was deep, and the backstop held -84 dB forever, muting the
+    // near-end voice. The mic floor alone proves real audio is here;
+    // depth <= BS_HEAL_D still guards against releasing while the
+    // engine is amplifying (positive depth).
+    const bool floors = micMs >= BS_MIC_MS && depth <= BS_HEAL_D;
     const bool tonal = frames > 0 && h->bsHits >= BS_HITS;
     if (h->bsHits >= BS_HITS / 2 || h->bsActive)
         NkfPhase("t=%.2f bs-watch hits=%d/%d micMs=%.2e outMs=%.2e d=%.1f "
