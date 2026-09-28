@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **NKF barely cancelled echo at real-world levels.** A delay
+  sweep of the stock model showed it *amplifies* when fed the
+  wrapper's int16/32768 floats at voice level but cancels
+  21–30 dB on the same signals scaled ~16× down — the ONNX core
+  has a narrow operating level. `NkfProcess` now scales mic/ref
+  ×1/16 into the engine and the result ×16 back out, so the
+  guard, mix and emit all stay in the real domain. Echo-only
+  harness at 40/120/250 ms delay: 25.8/27.9/29.1 dB cancelled,
+  100 % live, zero guard resets.
+
+- **NKF froze and failed open forever inside the mic-test
+  feedback loop.** Adapting against a ref that carries our own
+  recent output diverged: the guard reset 6× and quit. The
+  engine is now frozen (ONNX pass skipped, echo-hat synthesis
+  still runs) whenever NKF is shadowed with the loop detector
+  active, and the first loop confirm holds an 8 s convergence
+  window before going live. Mic-test harness: 100 % live after
+  the hold, exact delay lock (192 samples), no guard resets,
+  no give-up.
+
 - **NKF mic-test howl: the notch checkbox could not stop it.**
   A sustained loud tone (howling/ringing loop) pinned the RMS
   speech detector on for ever, so `NotchSetSpeech(1)` never
@@ -42,18 +62,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **NKF time-delay compensation is coarse-to-fine over 300 ms**
+  (was a single full-rate sweep): a 4× box-decimated pass across
+  4800 samples followed by ±8 raw-sample refinement locks the
+  exact sample (correlation 1.000 at the true lag in tests).
+  The search runs eagerly every 256 ms until the first
+  confident peak, then every 512 ms; the mic-test loop hold
+  releases only on a confident lock, and delay jumps still need
+  a 0.55 peak. An on-screen dwell (grace) lock does not claim
+  confidence.
+
+- **Live NKF status telemetry on the Audio tab** via the new
+  `NkfGetState()` (`src/nkf_wrapper.h`): `failed open (guard)`
+  / `shadow (warm-up)` / `shadow (loop, waiting for delay lock)`
+  / `shadow (loop, adapting)` / `shadow (settling)` / `live`,
+  with `delay ~XX ms (locked|estimated)` and a loop-cancelled
+  flag, plus a hover tooltip.
+
 - The Notch checkbox tooltip now shows live telemetry: the two
   section frequencies, engaged/bypassed state, and whether
   adaptation is frozen (voice), running (sustained tone), or idle.
 
 ### Notes
 
-- NKF self-monitor loop shadowing (investigated, report-only): in
-  the mic-test topology (ref carries our own recent output back)
-  the loop detector yanks NKF to raw-mic shadow for 100% of
-  processed blocks and holds it there until ~2 s of silence — by
-  design since 1.9. DTLN/AEC3 have no such mechanism. Left
-  unchanged this round.
+- NKF self-monitor loop shadowing: in the mic-test topology
+  (ref carries our own recent output back) the loop detector
+  yanks NKF to raw-mic shadow for 100 % of processed blocks —
+  since this round that shadow persists until the first
+  *confident* TDC lock, then holds NKF frozen for an 8 s
+  convergence window before going live; the detector itself is
+  unchanged since 1.9. DTLN/AEC3 have no such mechanism.
 
 ## [2.0.0] — 2026-09-27
 

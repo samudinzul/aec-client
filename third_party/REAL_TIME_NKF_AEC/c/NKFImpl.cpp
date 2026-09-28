@@ -142,6 +142,7 @@ void NKFImpl::OnnxInfer() {
         input_feature_imag[k * i + NKF_LEN] = static_cast<float>(e_imag[i]);
     }
 
+    if (!m_frozen) {
     ort_inputs.clear();
     ort_inputs.resize(6);
 
@@ -179,6 +180,8 @@ void NKFImpl::OnnxInfer() {
                 + e_real[i] * kgimag[NKF_LEN * i + j];
         }
     }
+
+    } // !m_frozen — frozen: keep h, skip inference
 
     double echohat_real[FFT_OUT_SIZE] = { 0 };
     double echohat_imag[FFT_OUT_SIZE] = { 0 };

@@ -19,15 +19,27 @@ static const int NKF_BLOCK_SHIFT = 512;
 // estimate the ref->mic lag by normalized cross-correlation and feed
 // NKF a delay-aligned reference — the alignment the paper's "-a" flag
 // (GCC-PHAT) provides offline, done continuously here.
-static const int   TDC_DMAX       = 1600;   // 100 ms search range @16 kHz
+static const int   TDC_DMAX       = 4800;   // 300 ms search range @16 kHz
+                                            // (was 1600: playback chains
+                                            // exceed 100 ms and the loop
+                                            // detector already searched 300)
 static const int   TDC_WIN        = 1024;   // 64 ms correlation window
+static const int   TDC_DEC        = 4;      // box-decimate x4: coarse pass
 static const int   TDC_EAGER      = 1024;   // pre-lock cadence: ~64 ms of audio
 static const int   TDC_PERIOD     = 8192;   // re-estimate every ~0.512 s of audio
 static const int   TDC_LOCK_GRACE = 48000;  // 3 s: engage with best guess if no lock
 static const float TDC_MIN_PEAK   = 0.35f;  // NCC needed to accept a small lag step
 static const float TDC_JUMP_PEAK  = 0.55f;  // NCC needed to accept a jump (> 5 ms)
 static const int   TDC_JUMP       = 80;     // lag steps beyond this count as a jump
+static const int   TDC_FINE       = 8;      // raw-sample refine range around coarse peak
 static const float TDC_MIN_MEAN_E = 1e-5f;  // mean-square floor (don't chase silence)
+// The stock model is level-sensitive: fed float signals at ~0.15 rms it
+// amplifies (guard-trip runaway in a feedback loop), fed ~1/16 of that it
+// cancels 20-30 dB and stays stable. The wrapper works in int16/32768
+// (voice ~0.1-0.2), so scale into the engine's sweet spot and back:
+// guard, mix and emit all stay in the real domain.
+static const float ENG_IN_SCALE   = 1.0f / 16.0f;
+static const float ENG_OUT_SCALE  = 16.0f;
 
 // Exposure pipeline: after (re)lock the engine runs in SHADOW — mic
 // stays on the wire, guard monitors internally, so cold-start spikes
@@ -38,11 +50,12 @@ static const int   TDC_FADE       = 8;      // 256 ms crossfade into NKF
 
 // Self-monitor loop detection: with "Listen to myself" or a Discord
 // mic test on SPEAKERS, ref carries our own recent output back around
-// (mic -> NKF -> Discord -> speakers -> loopback). NKF's live Kalman
-// adaptation inside that feedback loop can ring/blow; DTLN (fixed
-// weights) and AEC3 (leakage guards) tolerate it. Correlate ref
-// against our own output history — a strong delayed match means a
-// loop is present -> hold exposure on mic (shadow) until it clears.
+// (mic -> NKF -> Discord -> speakers -> loopback). A loop holds
+// exposure on mic WHILE the delay estimate is not confident; the
+// first loop confirm then buys an 8 s shadow hold (LOOP_HOLD) to
+// converge the filter, and while a loop stays active live NKF runs
+// frozen (echo-hat with a converged filter, no adaptation). Guard
+// trips remain the backstop.
 static const int   LOOP_WIN      = 1024;    // correlation window
 static const int   LOOP_DMAX     = 4800;    // 300 ms search (playback chain)
 static const int   LOOP_DEC      = 4;       // box-decimate x4 (cheap NCC)
@@ -50,6 +63,10 @@ static const int   LOOP_PERIOD   = 2048;    // check every ~128 ms of audio
 static const float LOOP_MIN_PEAK = 0.45f;   // NCC: delayed copy, not coincidence
 static const int   LOOP_ON       = 2;       // hits needed to engage (hysteresis)
 static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> release
+static const size_t LOOP_HOLD    = 8 * 16000; // first loop confirm: shadow 8 s
+                                              // so the filter converges before
+                                              // it is exposed (and frozen) in
+                                              // the feedback loop
 
 // ---- Divergence guard ---------------------------------------------------
 // Second line of defence: if output energy runs far above BOTH inputs,
@@ -80,6 +97,8 @@ struct NkfHandle {
     float refBlock[NKF_BLOCK_SHIFT];
     float outBlock[NKF_BLOCK_SHIFT];
     float emitBlock[NKF_BLOCK_SHIFT];
+    float engMic[NKF_BLOCK_SHIFT];  // engine-domain copies (ENG_IN_SCALE)
+    float engRef[NKF_BLOCK_SHIFT];
 
     size_t total = 0;               // mic+ref samples pushed (lockstep)
     size_t micConsumed = 0;         // abs index of micAccum[0]
@@ -87,8 +106,12 @@ struct NkfHandle {
     int alignDelay = 0;             // current ref->mic lag (samples)
     int samplesSinceTdc = 0;        // estimate as soon as data allows
     bool tdcLocked = false;
-    // TDC / loop NCC prefix scratch (hoisted — used by DetectLoop/EstimateDelay)
+    bool tdcConfident = false;      // lag from a real NCC peak (not 3 s grace)
+    // TDC / loop NCC prefix scratch (hoisted: used by DetectLoop/EstimateDelay)
     double tdcPref[TDC_WIN + TDC_DMAX + 1];
+    float  micD[TDC_WIN / TDC_DEC];                       // coarse-pass scratch
+    float  refD[(TDC_WIN + TDC_DMAX) / TDC_DEC];
+    double refDPref[(TDC_WIN + TDC_DMAX) / TDC_DEC + 1];
     float  loopRd[(LOOP_WIN) / LOOP_DEC];
     float  loopOd[(LOOP_WIN + LOOP_DMAX) / LOOP_DEC];
     double loopPref[(LOOP_WIN + LOOP_DMAX) / LOOP_DEC + 1];
@@ -105,6 +128,7 @@ struct NkfHandle {
     int samplesSinceLoop = 0;
     int loopConf = 0;               // consecutive-ish hit score (0..4)
     int loopQuiet = 0;              // silent detections in a row
+    size_t loopHoldUntil = 0;       // absolute time shadow is held to
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -120,6 +144,10 @@ static void NkfTrimRef(NkfHandle* h) {
 // Normalized cross-correlation delay estimate: lag d maximizes
 //   sum_n mic[total-WIN+n] * ref[total-WIN+n-d]
 // (R is indexed so R[n + DMAX - d] = ref at the mic sample's time minus d).
+// Coarse-to-fine: a x4 box-decimated pass sweeps the full 300 ms range
+// (~0.3 M MACs), then a full-rate pass refines ±TDC_FINE samples around
+// the coarse peak (~17 k MACs) — same cost class as the old dense
+// 100 ms scan while covering 3x the range.
 static void NkfEstimateDelay(NkfHandle* h) {
     h->samplesSinceTdc = 0;
     if (h->total < (size_t)(TDC_WIN + TDC_DMAX)) return;
@@ -132,6 +160,41 @@ static void NkfEstimateDelay(NkfHandle* h) {
     if (refLo < front) return;
     const float* R = h->refHist.data() + (refLo - front);
 
+    // ---- Coarse pass: box-decimated x4 over the full range -------------
+    const int WD = TDC_WIN / TDC_DEC;                 // 256
+    const int RD = (TDC_WIN + TDC_DMAX) / TDC_DEC;    // 1456
+    const int DB = TDC_DMAX / TDC_DEC;                // 1200
+    float* Md = h->micD;
+    float* Rd = h->refD;
+    for (int k = 0; k < WD; k++)
+        Md[k] = (M[4*k] + M[4*k+1] + M[4*k+2] + M[4*k+3]) * 0.25f;
+    for (int j = 0; j < RD; j++)
+        Rd[j] = (R[4*j] + R[4*j+1] + R[4*j+2] + R[4*j+3]) * 0.25f;
+
+    double micEd = 0;
+    for (int k = 0; k < WD; k++) micEd += (double)Md[k] * Md[k];
+    if (micEd / WD < TDC_MIN_MEAN_E) return;
+
+    double* dpref = h->refDPref;
+    dpref[0] = 0.0;
+    for (int j = 0; j < RD; j++)
+        dpref[j + 1] = dpref[j] + (double)Rd[j] * Rd[j];
+    if (dpref[RD] / RD < TDC_MIN_MEAN_E) return;
+
+    double cBest = -2.0;
+    int cBestDb = 0;
+    for (int db = 0; db <= DB; db++) {
+        const int off = DB - db;
+        double num = 0;
+        for (int k = 0; k < WD; k++)
+            num += (double)Md[k] * Rd[off + k];
+        const double refEd = dpref[off + WD] - dpref[off];
+        if (refEd <= 0.0) continue;
+        const double sc = num / std::sqrt(micEd * refEd);
+        if (sc > cBest) { cBest = sc; cBestDb = db; }
+    }
+
+    // ---- Fine pass: full-rate NCC around the coarse peak ---------------
     double micE = 0;
     for (int n = 0; n < TDC_WIN; n++)
         micE += (double)M[n] * M[n];
@@ -144,9 +207,14 @@ static void NkfEstimateDelay(NkfHandle* h) {
         pref[i + 1] = pref[i] + (double)R[i] * R[i];
     if (pref[RLEN] / RLEN < TDC_MIN_MEAN_E) return;
 
+    int dLo = cBestDb * TDC_DEC - TDC_FINE;
+    if (dLo < 0) dLo = 0;
+    int dHi = cBestDb * TDC_DEC + TDC_FINE;
+    if (dHi > TDC_DMAX) dHi = TDC_DMAX;
+
     double best = -2.0;
     int bestD = h->alignDelay;
-    for (int d = 0; d <= TDC_DMAX; d++) {
+    for (int d = dLo; d <= dHi; d++) {
         const int off = TDC_DMAX - d;
         double num = 0;
         for (int n = 0; n < TDC_WIN; n++)
@@ -165,6 +233,7 @@ static void NkfEstimateDelay(NkfHandle* h) {
     if (best >= (jump ? (double)TDC_JUMP_PEAK : (double)TDC_MIN_PEAK)) {
         h->alignDelay = bestD;
         h->tdcLocked = true;
+        h->tdcConfident = true;   // real peak — safe to stay live in a loop
     }
 }
 
@@ -335,21 +404,32 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
 
     if (!h->giveUp) {
         h->samplesSinceTdc += frameSize;
-        const int tdcNeed = h->tdcLocked ? TDC_PERIOD : TDC_EAGER;
+        // Eager cadence until the lag is a *confident* peak — a grace
+        // lock (or no lock) keeps searching fast so a loop can exit
+        // shadow as soon as the delay is trustworthy.
+        const int tdcNeed =
+            (h->tdcLocked && h->tdcConfident) ? TDC_PERIOD : TDC_EAGER;
         if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
         if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE)
             h->tdcLocked = true;  // engage anyway; TDC keeps correcting
 
         h->samplesSinceLoop += frameSize;
         if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
+
+        // First confirmed loop: hold shadow for LOOP_HOLD so the
+        // filter converges on the (safe, non-looped) shadow output
+        // before it goes live — and frozen — inside the feedback loop.
+        if (h->loopConf >= LOOP_ON && h->tdcConfident && !h->loopHoldUntil)
+            h->loopHoldUntil = h->total + LOOP_HOLD;
     }
 
     while (h->micAccum.size() - h->micHead >= (size_t)NKF_BLOCK_SHIFT) {
-        // Aligned pairing: mic [micConsumed, +SHIFT) with ref SHIFT-delay
-        // samples earlier — the TDC slice NKF needs. Positions < 0 are
-        // stream warmup: feed zeros. (Pre-lock the engine isn't called;
-        // the slice just stays ready.)
-        const long long needStart = (long long)h->micConsumed - h->alignDelay;
+        // Aligned pairing: mic [micConsumed, +SHIFT) with ref
+        // alignDelay samples earlier — the TDC slice NKF needs.
+        // Positions < 0 are stream warmup: feed zeros. (Pre-lock the
+        // engine isn't called; the slice just stays ready.)
+        const long long needStart =
+            (long long)h->micConsumed - h->alignDelay;
         const long long front =
             (long long)h->total - (long long)h->refHist.size();
         for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
@@ -365,8 +445,19 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         // reaches the wire only past shadow, through the fade.
         bool processed = false;
         if (h->tdcLocked && !h->giveUp) {
-            h->engine->ProcessBlock(h->micBlock, h->refBlock,
-                                    h->outBlock);
+            // Exposed inside a self-monitor loop: keep APPLYING the
+            // converged filter but freeze adaptation — the Kalman
+            // running inside a feedback loop diverges (observed guard
+            // churn / fail-open), a fixed filter is stable.
+            h->engine->SetFrozen(h->loopConf >= LOOP_ON &&
+                                 h->shadowBlocks == 0);
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                h->engMic[i] = h->micBlock[i] * ENG_IN_SCALE;
+                h->engRef[i] = h->refBlock[i] * ENG_IN_SCALE;
+            }
+            h->engine->ProcessBlock(h->engMic, h->engRef, h->outBlock);
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                h->outBlock[i] *= ENG_OUT_SCALE;
             processed = true;
             if (NkfGuard(h, h->micBlock, h->refBlock,
                          h->outBlock)) {
@@ -383,10 +474,14 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
             }
         }
 
-        // Self-monitor loop detected while exposed: yank back to shadow
-        // NOW — NKF's live adaptation inside a feedback loop is what
-        // rings before the guard can trip.
-        if (h->loopConf >= LOOP_ON && h->shadowBlocks == 0 && processed) {
+        // Self-monitor loop detected while exposed: yank to shadow
+        // ONLY while the delay estimate is not confident. A confident
+        // TDC lock means the aligned ref lets the Kalman work inside
+        // the loop (after the LOOP_HOLD convergence hold it sits there
+        // frozen — echo-hat with a converged filter); a blind lag
+        // inside a loop is what blows the filter.
+        if (h->loopConf >= LOOP_ON && h->shadowBlocks == 0 && processed &&
+            !h->tdcConfident) {
             h->shadowBlocks = TDC_SHADOW;
             h->fadePos = TDC_FADE;
         }
@@ -410,9 +505,18 @@ void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
         }
         NkfEmit(h, h->emitBlock, NKF_BLOCK_SHIFT);
 
-        // Hold shadow while a self-monitor loop is active; release the
-        // countdown only when the loop is gone (then fade normally).
-        if (shadowed && h->loopConf < LOOP_ON &&
+        // Confirmed loop: keep shadow while the convergence hold runs
+        // (the delay is already confident — this is filter-compile
+        // time, not delay-lock time).
+        if (h->loopConf >= LOOP_ON && h->tdcConfident &&
+            h->total < h->loopHoldUntil)
+            h->shadowBlocks = TDC_SHADOW;
+
+        // Hold shadow while a self-monitor loop is active AND the
+        // delay is not confident; a confident lock (or a quiet loop)
+        // releases the countdown so the normal fade re-exposes NKF.
+        if (shadowed &&
+            (h->loopConf < LOOP_ON || h->tdcConfident) &&
             --h->shadowBlocks == 0)
             h->fadePos = 0;
         h->micHead += NKF_BLOCK_SHIFT;
@@ -449,6 +553,7 @@ void NkfReset(NkfHandle* h) {
     h->alignDelay = 0;
     h->samplesSinceTdc = 0;
     h->tdcLocked = false;
+    h->tdcConfident = false;
     h->micEnv = h->refEnv = h->outEnv = 0;
     h->hotBlocks = 0;
     h->resets = 0;
@@ -458,13 +563,34 @@ void NkfReset(NkfHandle* h) {
     h->samplesSinceLoop = 0;
     h->loopConf = 0;
     h->loopQuiet = 0;
-    if (h->engine) h->engine->Reset();
+    h->loopHoldUntil = 0;
+    if (h->engine) { h->engine->SetFrozen(false); h->engine->Reset(); }
 }
 
 void NkfDestroy(NkfHandle* h) {
     if (!h) return;
     delete h->engine;
     delete h;
+}
+
+void NkfGetState(NkfHandle* h, NkfState* s) {
+    if (!s) return;
+    s->lagSamples = 0;
+    s->confident = 0;
+    s->locked = 0;
+    s->exposed = 0;
+    s->loopActive = 0;
+    s->guardResets = 0;
+    s->giveUp = 0;
+    if (!h) return;
+    s->lagSamples = h->alignDelay;
+    s->confident = h->tdcConfident ? 1 : 0;
+    s->locked = h->tdcLocked ? 1 : 0;
+    s->exposed = (h->tdcLocked && !h->giveUp && h->shadowBlocks == 0 &&
+                  h->fadePos >= TDC_FADE) ? 1 : 0;
+    s->loopActive = h->loopConf >= LOOP_ON ? 1 : 0;
+    s->guardResets = h->resets;
+    s->giveUp = h->giveUp ? 1 : 0;
 }
 
 } // extern "C"

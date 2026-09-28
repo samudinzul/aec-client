@@ -28,11 +28,26 @@ NkfHandle* NkfNew(const char* modelPath);
 //   heard, and there are no engagement holes or replays. Guard trips
 //   drop back to shadow rather than exposing a reset; a self-monitor
 //   loop detector (ref vs our own output — Discord mic test / Listen to
-//   myself on speakers) holds exposure on mic while a feedback loop
-//   is present; after too many guard trips the session fails open to
-//   permanent mic passthrough.
+//   myself on speakers) holds exposure on mic while a feedback loop is
+//   present AND the ref->mic delay is not a confident cross-correlation
+//   lock; the first loop confirm then holds an 8 s convergence window
+//   (the engine freezes while it sits in an active loop), and after too
+//   many guard trips the session fails open to permanent mic passthrough.
 void NkfProcess(NkfHandle* h, const int16_t* mic, const int16_t* ref,
                 int16_t* out, int frameSize);
+
+// Telemetry snapshot for the UI (benign race: audio thread writes, UI
+// thread reads — same pattern as the speech gate status).
+typedef struct NkfState {
+    int lagSamples;    // current ref->mic alignment (samples @16 kHz)
+    int confident;     // 1 = lag from a real cross-correlation peak
+    int locked;        // 1 = lag accepted (real peak or 3 s grace)
+    int exposed;       // 1 = NKF output on the wire, 0 = mic shadow
+    int loopActive;    // 1 = self-monitor loop currently detected
+    int guardResets;   // divergence resets this session
+    int giveUp;        // 1 = failed open (permanent mic passthrough)
+} NkfState;
+void NkfGetState(NkfHandle* h, NkfState* s);
 
 // Reset all internal state (buffers, TDC lag, guard counters).
 // Engines are recreated on Stop/Start anyway; provided for completeness.

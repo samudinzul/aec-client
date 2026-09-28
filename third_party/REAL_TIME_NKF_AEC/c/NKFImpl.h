@@ -56,7 +56,15 @@ public:
 
     void ProcessBlock(const float* mic_new, const float* lpb_new, float* out);
 
+    // Freeze adaptation: keep applying the current filter (echohat
+    // synthesis still runs) but skip the ONNX inference and the
+    // Kalman/state updates. Used when the engine sits inside a
+    // self-monitor feedback loop — a converged filter is stable
+    // there, continued adaptation is not.
+    void SetFrozen(bool f) { m_frozen = f; }
+
 private:
+    bool m_frozen = false;
     void init_engine_threads(int inter_threads, int intra_threads) {
         session_options.SetIntraOpNumThreads(intra_threads);
         session_options.SetInterOpNumThreads(inter_threads);
