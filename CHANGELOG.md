@@ -5,6 +5,26 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-09-28
+
+### Fixed
+
+- **Howl backstop deepened too slowly and muted the near-end voice.**
+  The howl guard used to trim the wire in −6 dB steps (halving each
+  repeat), so a marginal loop rang for tens of seconds before the
+  trim actually broke it. It now quarters the wire gain per repeat
+  (−12 dB), breaking a marginal loop in ~2 repeats (~6 s), and caps
+  at 6 repeats so pathological cases cannot pin the mic at mute.
+  Separately, the release clause required the wire to be *loud*
+  (`outMs >= BS_OUT_MS`) — but the guard's whole job is to keep the
+  wire quiet, so that condition could never be satisfied while the
+  trim was deep, and the guard held −84 dB forever, muting the
+  near-end voice after the howl died. The release now requires only
+  real audio at the mic (`micMs >= BS_MIC_MS`) plus depth ≤ −1 dB
+  (engine not amplifying). Verified end-to-end: howl builds, guard
+  attacks to −36 dB, releases at t=14.34 (cancel proven), and the
+  near-end voice passes at full level.
+
 ## [2.0.1] — 2026-09-28
 
 ### Fixed
