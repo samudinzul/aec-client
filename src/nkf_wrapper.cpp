@@ -1,11 +1,14 @@
 #include "nkf_wrapper.h"
 #include "NKFImpl.h"
 #include "aec_log.h"
+#include "pocketfft_hdronly.h"
 #include <vector>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <complex>
 
 // Transition-only phase log (nkf-phase.log in the working directory):
 // pins where a crash or exception happened on the audio thread. Written
@@ -78,6 +81,29 @@ static const float LOOP_MIN_PEAK = 0.45f;   // NCC: delayed copy, not coincidenc
 static const int   LOOP_ON       = 2;       // hits needed to engage (hysteresis)
 static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> release
 
+// ---- Howl backstop: sustained tonal hold -> output trim ----------------
+// A feedback howl is ONE tone owning the wire for seconds; voice and
+// music spread across the spectrum. Measure per-frame spectral
+// concentration of what we actually emit (512-pt Hann, best 3-bin sum
+// over total) and attack only after 8 s of it above the energy floors
+// — a hold no speech pattern sustains, so voice can't false-trigger.
+// This protects cases the engine cannot: broken/absent ref (loop
+// detector blind), failed-open engine, coupling past what cancellation
+// can pull under 1. Attack trims the WIRE (-6 dB, deepening to -20 on
+// repeat); release requires two windows of PROOF the engine is
+// cancelling again (wire-vs-mic depth <= BS_HEAL_D on non-tonal audio)
+// — releasing on mere silence would let the howl regrow and cycle.
+static const int    BS_FRAMES   = 64;      // frames per window (64x512 = 2.048 s)
+static const int    BS_RUN      = 4;       // held windows -> attack (~8 s)
+static const int    BS_HEAL_RUN = 2;       // clean-cancel windows -> release
+static const double BS_TONAL    = 0.33;    // per-frame 3-bin power fraction
+static const int    BS_HITS     = 38;      // >=~60% of 64 frames tonal
+static const double BS_MIC_MS   = 8.4e-5;  // mic mean-square floor (RMS ~300)
+static const double BS_OUT_MS   = 9.3e-6;  // wire mean-square floor (RMS ~100)
+static const double BS_HEAL_D   = -1.0;    // depth (dB) proving cancellation
+static const double BS_TAU_ATK  = 0.35;    // gain step per 512 block, attacking
+static const double BS_TAU_REL  = 0.08;    // gain step per 512 block, releasing
+
 // ---- Divergence guard ---------------------------------------------------
 // Second line of defence: if output energy runs far above BOTH inputs,
 // reset the filter and drop back to shadow (mic on the wire). After too
@@ -147,6 +173,19 @@ struct NkfHandle {
     // cancellation actually HOLDS during the loop (howl fuel check).
     double depMic = 0.0, depOut = 0.0;
     int    depSamples = 0;
+    // Howl backstop state (tonal-hold detector + wire trim). bsHits/
+    // bsFrames = current window's frame census; bsRun/bsHeal = the
+    // attack/release hold counters fed by NkfBackstopWindow.
+    float bsGain = 1.0f, bsTarget = 1.0f;
+    int   bsHits = 0, bsFrames = 0;
+    int   bsRun = 0, bsHeal = 0, bsAttacks = 0;
+    bool  bsActive = false;
+    bool  bsEnabled = true;             // NKF_BACKSTOP=0 disables the trim
+    // Frame-analysis scratch (512-pt Hann + r2c), built in NkfNew.
+    std::vector<double> bsIn, bsHann;
+    std::vector<std::complex<double>> bsSpec;
+    std::vector<size_t> bsShape, bsAxes;
+    std::vector<ptrdiff_t> bsStrideIn, bsStrideOut;
     // Phase-log transitions (crash diagnostics; see NkfPhase).
     bool engRanOnce = false;
 };
@@ -377,6 +416,86 @@ static void NkfDetectLoop(NkfHandle* h) {
     }
 }
 
+// One 512-sample frame of the wire: is it a single dominant tone?
+// Mean out, Hann, r2c, then best 3-bin power sum vs total — a howl
+// frame lands ~0.45+, a voiced frame spreads over harmonics (<0.33).
+static bool NkfFrameTonal(NkfHandle* h, const float* v) {
+    double mean = 0.0;
+    for (int i = 0; i < NKF_BLOCK_SHIFT; i++) mean += (double)v[i];
+    mean /= (double)NKF_BLOCK_SHIFT;
+    for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+        h->bsIn[i] = (v[i] - mean) * h->bsHann[i];
+    pocketfft::r2c(h->bsShape, h->bsStrideIn, h->bsStrideOut,
+                   h->bsAxes, pocketfft::FORWARD,
+                   h->bsIn.data(), h->bsSpec.data(), 1.0);
+    // powers[1..255]; index 0 (DC) excluded from numerator and total.
+    auto powAt = [&](int k) -> double {
+        if (k < 1 || k > NKF_BLOCK_SHIFT / 2) return 0.0;
+        return std::norm(h->bsSpec[(size_t)k]);
+    };
+    double tot = 0.0, best3 = 0.0;
+    for (int k = 1; k <= NKF_BLOCK_SHIFT / 2; k++) tot += powAt(k);
+    if (!(tot > 1e-30)) return false;                 // silence
+    for (int k = 1; k <= NKF_BLOCK_SHIFT / 2; k++) {
+        const double s = powAt(k - 1) + powAt(k) + powAt(k + 1);
+        if (s > best3) best3 = s;
+    }
+    return best3 / tot >= BS_TONAL;
+}
+
+// Window boundary (64 frames): depth log + attack/release decision.
+static void NkfBackstopWindow(NkfHandle* h) {
+    const int frames = h->bsFrames;
+    const double micMs = h->depMic / (double)h->depSamples;
+    const double outMs = h->depOut / (double)h->depSamples;
+    const double depth =
+        10.0 * log10((h->depOut + 1e-12) / (h->depMic + 1e-12));
+
+    if (h->loopConf >= LOOP_ON && h->depMic > 0.0)
+        NkfPhase("t=%.2f loop depth=%.1f dB", NKF_T(h), depth);
+
+    const bool floors = micMs >= BS_MIC_MS && outMs >= BS_OUT_MS;
+    const bool tonal = frames > 0 && h->bsHits >= BS_HITS;
+    if (h->bsHits >= BS_HITS / 2 || h->bsActive)
+        NkfPhase("t=%.2f bs-watch hits=%d/%d micMs=%.2e outMs=%.2e d=%.1f "
+                 "run=%d heal=%d", NKF_T(h), h->bsHits, frames, micMs, outMs,
+                 depth, h->bsRun, h->bsHeal);
+    if (tonal) {
+        h->bsHeal = 0;
+        if (h->bsRun < 1000) h->bsRun++;
+        if (h->bsRun >= BS_RUN && h->bsEnabled) {
+            const float want = powf(0.5f, h->bsAttacks + 1);
+            if (want < h->bsTarget) {
+                h->bsTarget = want;
+                h->bsActive = true;
+                if (h->bsAttacks < 30) h->bsAttacks++;
+                NkfPhase("t=%.2f backstop ATTACK #%d depth=%.1f dB "
+                         "tonal=%d/%d gain -> %.1f dB",
+                         NKF_T(h), h->bsAttacks, depth, h->bsHits, frames,
+                         20.0 * log10((double)want));
+            }
+        }
+    } else if (!tonal && floors && depth <= BS_HEAL_D) {
+        h->bsRun = 0;
+        if (h->bsHeal < 1000) h->bsHeal++;
+        if (h->bsHeal >= BS_HEAL_RUN && h->bsActive) {
+            h->bsTarget = 1.0f;
+            h->bsActive = false;
+            h->bsAttacks = 0;
+            h->bsRun = h->bsHeal = 0;
+            NkfPhase("t=%.2f backstop release (cancel proven, depth=%.1f dB)",
+                     NKF_T(h), depth);
+        }
+    } else {
+        h->bsRun = 0;
+        h->bsHeal = 0;
+    }
+
+    h->depMic = h->depOut = 0.0;
+    h->depSamples = 0;
+    h->bsHits = h->bsFrames = 0;
+}
+
 // Ship finished post-NKF samples (float, ±1) to the wire: outHist
 // (loop detector tap — what the speakers actually get) and the clamped
 // int16 outAccum. v2.0: WebRTC NS retired — dereverb runs as the
@@ -426,6 +545,25 @@ NkfHandle* NkfNew(const char* modelPath) {
     h->micWin.reserve(TDC_WIN);
     h->outAccum.reserve(NKF_BLOCK_SHIFT * 4);
     h->outHist.reserve(LOOP_WIN + LOOP_DMAX);
+    // Howl backstop: 512-pt Hann frame analysis, one frame per block.
+    const char* bs = getenv("NKF_BACKSTOP");
+    h->bsEnabled = !(bs && bs[0] == '0');
+    if (!h->bsEnabled) NkfPhase("backstop disabled (NKF_BACKSTOP=0)");
+    if (getenv("NKF_FORCE_GIVEUP")) {
+        h->giveUp = true;
+        NkfPhase("forced fail-open (NKF_FORCE_GIVEUP)");
+    }
+    h->bsIn.assign((size_t)NKF_BLOCK_SHIFT, 0.0);
+    h->bsSpec.assign((size_t)(NKF_BLOCK_SHIFT / 2 + 1),
+                     std::complex<double>(0.0, 0.0));
+    h->bsHann.assign((size_t)NKF_BLOCK_SHIFT, 0.0);
+    for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+        h->bsHann[i] = 0.5 - 0.5 * cos(3.14159265358979323846 * 2.0 *
+                                       (double)i / (double)NKF_BLOCK_SHIFT);
+    h->bsShape.assign(1, (size_t)NKF_BLOCK_SHIFT);
+    h->bsAxes.assign(1, (size_t)0);
+    h->bsStrideIn.assign(1, (ptrdiff_t)sizeof(double));
+    h->bsStrideOut.assign(1, (ptrdiff_t)sizeof(std::complex<double>));
     return h;
 }
 
@@ -460,10 +598,12 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             NkfPhase("t=%.2f TDC grace lock (no peak; last d=%d sc=%.3f)",
                      NKF_T(h), h->lastTdcD, (double)h->lastTdcSc);
         }
-
-        h->samplesSinceLoop += frameSize;
-        if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
     }
+    // Loop detection runs even after fail-open: it reads only ref/out
+    // histories (no engine), and the UI must show a live loop while
+    // the notch + gate watchdog carry the ring by themselves.
+    h->samplesSinceLoop += frameSize;
+    if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
 
     while (h->micAccum.size() - h->micHead >= (size_t)NKF_BLOCK_SHIFT) {
         // Aligned pairing: mic [micConsumed, +SHIFT) with ref
@@ -537,30 +677,6 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             }
         }
 
-        // Loop-depth window (2 s): energy of the engine's own mic vs out.
-        // Logged only while the loop detector fires — howl fuel check:
-        // >= ~0 dB during a loop means cancellation is NOT holding.
-        if (processed) {
-            double sm = 0, so = 0;
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-                sm += (double)h->micBlock[i] * h->micBlock[i];
-                so += (double)h->outBlock[i] * h->outBlock[i];
-            }
-            h->depMic += sm;
-            h->depOut += so;
-            h->depSamples += NKF_BLOCK_SHIFT;
-        } else {
-            h->depMic = h->depOut = 0.0;
-            h->depSamples = 0;
-        }
-        if (h->depSamples >= 32000) {
-            if (h->loopConf >= LOOP_ON && h->depMic > 0.0)
-                NkfPhase("t=%.2f loop depth=%.1f dB", NKF_T(h),
-                         10.0 * log10((h->depOut + 1e-12) / h->depMic));
-            h->depMic = h->depOut = 0.0;
-            h->depSamples = 0;
-        }
-
         // Exposure mix: g=0 -> mic, g=1 -> full NKF.
         const bool shadowed = processed && h->shadowBlocks > 0;
         float g = 0.0f;
@@ -578,6 +694,33 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             if (g > 0.0f) v += (h->outBlock[i] - v) * g;
             h->emitBlock[i] = v;
         }
+
+        // Howl backstop: smooth toward the target gain, trim the wire.
+        h->bsGain += (float)((h->bsTarget - h->bsGain) *
+                             ((h->bsTarget < h->bsGain) ? BS_TAU_ATK
+                                                        : BS_TAU_REL));
+        if (h->bsGain != 1.0f)
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                h->emitBlock[i] *= h->bsGain;
+
+        // Window accumulators on the WIRE vs mic: the howl fuel check
+        // now sees what the loop actually carries (shadow and fail-open
+        // included — emit == mic there, i.e. 0 dB, uncancelled). The
+        // frame census feeds the tonal-hold trigger; every 64th frame
+        // closes the window and runs attack/release + the depth log.
+        {
+            double sm = 0, so = 0;
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                sm += (double)h->micBlock[i] * h->micBlock[i];
+                so += (double)h->emitBlock[i] * h->emitBlock[i];
+            }
+            h->depMic += sm;
+            h->depOut += so;
+            h->depSamples += NKF_BLOCK_SHIFT;
+            if (NkfFrameTonal(h, h->emitBlock)) h->bsHits++;
+            if (++h->bsFrames >= BS_FRAMES) NkfBackstopWindow(h);
+        }
+
         NkfEmit(h, h->emitBlock, NKF_BLOCK_SHIFT);
 
         // Warm-up (or post-guard) shadow drains unconditionally. It used
@@ -659,6 +802,11 @@ void NkfReset(NkfHandle* h) {
     h->lastTdcD = 0;
     h->depMic = h->depOut = 0.0;
     h->depSamples = 0;
+    h->bsGain = 1.0f;
+    h->bsTarget = 1.0f;
+    h->bsHits = h->bsFrames = 0;
+    h->bsRun = h->bsHeal = h->bsAttacks = 0;
+    h->bsActive = false;
     h->engRanOnce = false;
     if (h->engine) h->engine->Reset();
 }
@@ -678,6 +826,7 @@ void NkfGetState(NkfHandle* h, NkfState* s) {
     s->loopActive = 0;
     s->guardResets = 0;
     s->giveUp = 0;
+    s->backstopDb = 0.0f;
     if (!h) return;
     s->lagSamples = h->alignDelay;
     s->confident = h->tdcConfident ? 1 : 0;
@@ -687,6 +836,7 @@ void NkfGetState(NkfHandle* h, NkfState* s) {
     s->loopActive = h->loopConf >= LOOP_ON ? 1 : 0;
     s->guardResets = h->resets;
     s->giveUp = h->giveUp ? 1 : 0;
+    s->backstopDb = (float)(20.0 * log10((double)h->bsGain + 1e-9));
 }
 
 } // extern "C"
