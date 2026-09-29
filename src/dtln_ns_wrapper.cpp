@@ -401,8 +401,9 @@ static bool TryOnnx(DtlnNsHandle* h, const std::string& prefix) {
             GraphOptimizationLevel::ORT_ENABLE_ALL);
         h->mem = new Ort::MemoryInfo(
             Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeCPU));
-        h->sess1 = new Ort::Session(*h->env, p1.c_str(), *h->opts);
-        h->sess2 = new Ort::Session(*h->env, p2.c_str(), *h->opts);
+        std::wstring w1(p1.begin(), p1.end()), w2(p2.begin(), p2.end());
+        h->sess1 = new Ort::Session(*h->env, w1.c_str(), *h->opts);
+        h->sess2 = new Ort::Session(*h->env, w2.c_str(), *h->opts);
         Ort::AllocatorWithDefaultOptions alloc;
         for (int i = 0; i < (int)h->sess1->GetInputCount(); i++) {
             h->in1Names.push_back(h->sess1->GetInputNameAllocated(
