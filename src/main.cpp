@@ -742,7 +742,7 @@ void ReinitEngine() {
     if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3); g_engine.aec3  = nullptr; }
     if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
-    if (g_engine.ns)   { DtnsDestroy(g_engine.ns);   g_engine.ns   = nullptr; }
+    if (g_engine.ns)   { DtlnNsDestroy(g_engine.ns);   g_engine.ns   = nullptr; }
     if (g_engine.wpe)   { WpeDestroy(g_engine.wpe);    g_engine.wpe   = nullptr; }
     if (g_engine.notch) { NotchDestroy(g_engine.notch); g_engine.notch = nullptr; }
 
@@ -773,7 +773,7 @@ void ReinitEngine() {
     // mic feed) runs after it. AEC3 also gets it (WebRTC NS is retired).
     // NKF keeps its own WPE + notch post chain — no DTLN NS there.
     if (g_nsEnabled.load() && (eng == ENGINE_AEC3 || eng == ENGINE_DTLN))
-        g_engine.ns = DtnsNew("models/dtln_ns_128");
+        g_engine.ns = DtlnNsNew("models/dtln_ns_128");
 
     // WPE dereverb + adaptive notch are NKF-only: the DTLN and AEC3 paths
     // use the DTLN-NR noise reduction stage instead (WebRTC NS retired).
@@ -886,7 +886,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     if (g_engine.ns && g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
             wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        DtnsProcess(g_engine.ns, wpeBuf, wpeBuf, fs);
+        DtlnNsProcess(g_engine.ns, wpeBuf, wpeBuf, fs);
         for (int i = 0; i < fs; i++)
             cleanedFrame[i] = clamp_s16((int)lrintf(wpeBuf[i] * 32768.0f));
     }
@@ -1435,10 +1435,10 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
         (g_engineIndex == ENGINE_DTLN || g_engineIndex == ENGINE_AEC3))
         profilePreview += " -> NS";
     bool wasRunning = g_isRunning;
-    if (Gui::BeginCombo("##profile", profilePreview.c_str())) {
+    if ( ImGui::BeginCombo("##profile", profilePreview.c_str())) {
         for (int i = 0; i < PROFILE_COUNT; i++) {
             std::string label = PROFILES[i].name;
-            EngineType le = PROFILES[i].engine;
+            EngineType le = (EngineType)PROFILES[i].engine;
             if (g_wpeEnabled.load() && le == ENGINE_NKF) label += " -> WPE";
             if (g_notchEnabled.load() && le == ENGINE_NKF) label += " -> Notch";
             if (g_nsEnabled.load() &&
@@ -1535,7 +1535,7 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "WPE dereverb + notch instead.");
     }
 
-    Gui::Spacing();
+    ImGui::Spacing();
     DrawDevicesSection();
     ImGui::Spacing();
     // Advanced: sample rate + levels. No close-X — the header always
@@ -1878,7 +1878,7 @@ int main(int, char**) {
     if (g_engine.aec3)  Aec3Destroy(g_engine.aec3);
     if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
-    if (g_engine.ns)   DtnsDestroy(g_engine.ns);
+    if (g_engine.ns)   DtlnNsDestroy(g_engine.ns);
     if (g_engine.wpe)   WpeDestroy(g_engine.wpe);
     if (g_engine.notch) NotchDestroy(g_engine.notch);
     if (g_contextInitialized) {
