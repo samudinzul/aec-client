@@ -39,6 +39,7 @@ add_executable(aec_gui
     src/aec3_wrapper.cpp
     src/nkf_wrapper.cpp
     src/dtln_wrapper.cpp
+    src/dtln_ns_wrapper.cpp   // DTLN noise reduction (DTLN/AEC3 only)
     src/wpe.cpp
     src/notch.cpp
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
