@@ -501,6 +501,13 @@ void RenderWallpaper(int vpW, int vpH) {
 // ============================================================
 //  Settings
 // ============================================================
+// Post-stage prefs are engine-scoped (WPE + notch = NKF, DTLN-NR =
+    // DTLN/AEC3). Syncs each stage to the engine's defaults so a toggle
+    // left on for another engine cannot leak into a chain that doesn't
+    // run it — the panel hides the irrelevant toggles anyway, but stale
+    // prefs were what made Start look broken after a switch.
+static void SyncStagePrefsToEngine();
+
 void SaveSettings() {
     std::ofstream f("aec_config.txt");
     if (!f.is_open()) return;
@@ -647,6 +654,9 @@ void LoadSettings() {
         const Profile& p = PROFILES[g_profileIndex];
         g_engineIndex = p.engine;
         g_filterIndex = p.filterIdx;
+        // Post-stage prefs are engine-scoped — re-sync after load so a
+        // toggle left on for another engine never leaks into this one.
+        SyncStagePrefsToEngine();
         // Sample rate is a free knob: keep the persisted value; only the
         // 16-kHz-only engines force it back down.
         if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
@@ -694,8 +704,10 @@ void ResetToDefaults() {
     g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 0;  // profile 0 (DTLN @16 kHz)
     g_profileIndex = 0;
     g_preprocessEnabled = false;
-    g_wpeEnabled.store(true);    // global prefs: both post stages ON
-    g_notchEnabled.store(true);
+    // Post-stage prefs are engine-scoped: set the engine first, then
+    // sync — otherwise "both on" leaks into a chain that doesn't run
+    // them (DTLN/AEC3 have no WPE or notch).
+    SyncStagePrefsToEngine();
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -715,6 +727,23 @@ void ResetToDefaults() {
 
 // Apply a profile: engine and filter length follow. Sample rate,
 // gains, devices and the post-stage ticks are untouched.
+// Post-stage prefs are engine-scoped (WPE + notch = NKF, DTLN-NR =
+    // DTLN/AEC3). Call this whenever the engine changes so a toggle
+    // left on for another engine cannot leak into a chain that doesn't
+    // run it — the panel hides the irrelevant toggles anyway, but
+    // stale prefs were what made Start look broken after a switch.
+    static void SyncStagePrefsToEngine() {
+        if (g_engineIndex == ENGINE_NKF) {
+            g_wpeEnabled.store(true);
+            g_notchEnabled.store(true);
+            g_nsEnabled.store(true);   // harmless: NKF ignores it
+        } else {
+            g_nsEnabled.store(true);
+            g_wpeEnabled.store(false); // DTLN/AEC3 don't run WPE
+            g_notchEnabled.store(false);
+        }
+    }
+
 void ApplyProfile(int idx) {
     if (idx < 0 || idx >= PROFILE_COUNT) return;
     const Profile& p = PROFILES[idx];
@@ -733,6 +762,11 @@ void ApplyProfile(int idx) {
         g_sampleRateIndex = 0;
         g_sampleRate.store(16000);
     }
+    // Post stages are engine-scoped: WPE + notch belong to NKF, the
+    // DTLN-NR stage to DTLN/AEC3. Switching engines resets each to its
+    // default so a toggle left on for another engine can never leak
+    // into a chain that doesn't run it (and confuse Start).
+    SyncStagePrefsToEngine();
 }
 
 // ============================================================
