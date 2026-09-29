@@ -1462,77 +1462,80 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
             "NKF-AEC - weak CPUs, still full cleanup.\n"
             "The ticks below append '-> WPE' / '-> Notch' to the chain shown here.");
 
-    // Post stages: stacked after the engine (always visible, never
-    // dead controls). Live restart — same path as switching profiles
-    // mid-call. Global prefs: a profile switch does not reset them.
+    // Post stages: engine-aware — each toggle only appears for the engine
+    // that actually runs it. Live restart on toggle (same path as
+    // switching profiles mid-call). Global prefs: a profile switch
+    // does not reset them.
     {
-        bool wpe = g_wpeEnabled.load();
-        if (ImGui::Checkbox("Dereverb (WPE)", &wpe)) {
-            g_wpeEnabled.store(wpe);
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Weighted prediction error dereverberation: eats late room\n"
-                "echo and tail (~32 ms extra delay). Runs after the engine;\n"
-                "adaptation tightens while you talk so voice level survives.");
-
-        bool nch = g_notchEnabled.load();
-        if (ImGui::Checkbox("Feedback suppression (notch)", &nch)) {
-            g_notchEnabled.store(nch);
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered()) {
-            std::string tip =
-                "Two adaptive notch filters that track narrowband howling /\n"
-                "ringing tones (speaker-mic loops). Exact bypass until a tone\n"
-                "is actually captured; voice harmonics never latch it.";
-            if (g_engine.notch) {
-                const double f0 = NotchFreq(g_engine.notch, 0);
-                const double f1 = NotchFreq(g_engine.notch, 1);
-                const int e0 = NotchEngaged(g_engine.notch, 0);
-                const int e1 = NotchEngaged(g_engine.notch, 1);
-                char live[192];
-                if (e0 && e1)
-                    snprintf(live, sizeof live, "\nLive: engaged %.0f Hz + %.0f Hz",
-                             f0, f1);
-                else if (e0)
-                    snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (2nd idle)", f0);
-                else if (e1)
-                    snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (1st idle)", f1);
-                else
-                    snprintf(live, sizeof live, "\nLive: bypassed (no tone latched)");
-                tip += live;
-                const bool frozen = SpeechGateForNotch(&g_speechGate) != 0;
-                snprintf(live, sizeof live, "\nAdaptation: %s%s",
-                         frozen ? "frozen (voice)" : "running",
-                         g_speechGate.stuck ? " [sustained tone]" : "");
-                tip += live;
-            } else {
-                tip += "\nLive: not running";
+        const bool isNkf = (g_engineIndex == ENGINE_NKF);
+        const bool isDtlnOrAec3 = (g_engineIndex == ENGINE_DTLN ||
+                                   g_engineIndex == ENGINE_AEC3);
+        if (isNkf) {
+            bool wpe = g_wpeEnabled.load();
+            if ( ImGui::Checkbox("Dereverb (WPE)", &wpe)) {
+                g_wpeEnabled.store(wpe);
+                SaveSettings();
+                if (g_isRunning) { StopAEC(); StartAEC(); }
             }
-            ImGui::SetTooltip("%s", tip.c_str());
-}
-    }
-
-    // DTLN noise reduction: background-noise suppression on the DTLN and
-    // AEC3 paths (WebRTC NS is retired). NKF keeps its own WPE + notch.
-    {
-        bool ns = g_nsEnabled.load();
-        if ( ImGui::Checkbox("Noise suppression (DTLN-NS)", &ns)) {
-            g_nsEnabled.store(ns);
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
+            if ( ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Weighted prediction error dereverberation: eats late room\n"
+                    "echo and tail (~32 ms extra delay). Runs after the engine;\n"
+                    "adaptation tightens while you talk so voice level survives.");
         }
-        if ( ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "DTLN noise reduction: a second DTLN pair that removes\n"
-                "background noise from the mic (same DSP as the echo\n"
-                "canceller, minus the loud-playback feed). Runs after the\n"
-                "engine on the DTLN and WebRTC AEC3 paths. NKF uses its own\n"
-                "WPE dereverb + notch instead.");
+        if (isNkf) {
+            bool nch = g_notchEnabled.load();
+            if ( ImGui::Checkbox("Feedback suppression (notch)", &nch)) {
+                g_notchEnabled.store(nch);
+                SaveSettings();
+                if (g_isRunning) { StopAEC(); StartAEC(); }
+            }
+            if ( ImGui::IsItemHovered()) {
+                std::string tip =
+                    "Two adaptive notch filters that track narrowband howling /\n"
+                    "ringing tones (speaker-mic loops). Exact bypass until a tone\n"
+                    "is actually captured; voice harmonics never latch it.";
+                if (g_engine.notch) {
+                    const double f0 = NotchFreq(g_engine.notch, 0);
+                    const double f1 = NotchFreq(g_engine.notch, 1);
+                    const int e0 = NotchEngaged(g_engine.notch, 0);
+                    const int e1 = NotchEngaged(g_engine.notch, 1);
+                    char live[192];
+                    if (e0 && e1)
+                        snprintf(live, sizeof live, "\nLive: engaged %.0f Hz + %.0f Hz", f0, f1);
+                    else if (e0)
+                        snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (2nd idle)", f0);
+                    else if (e1)
+                        snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (1st idle)", f1);
+                    else
+                        snprintf(live, sizeof live, "\nLive: bypassed (no tone latched)");
+                    tip += live;
+                    const bool frozen = SpeechGateForNotch(&g_speechGate) != 0;
+                    snprintf(live, sizeof live, "\nAdaptation: %s%s",
+                             frozen ? "frozen (voice)" : "running",
+                             g_speechGate.stuck ? " [sustained tone]" : "");
+                    tip += live;
+                } else {
+                    tip += "\nLive: not running";
+                }
+                ImGui::SetTooltip("%s", tip.c_str());
+            }
+        }
+        if (isDtlnOrAec3) {
+            bool ns = g_nsEnabled.load();
+            if ( ImGui::Checkbox("Noise suppression (DTLN-NS)", &ns)) {
+                g_nsEnabled.store(ns);
+                SaveSettings();
+                if (g_isRunning) { StopAEC(); StartAEC(); }
+            }
+            if ( ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "DTLN noise reduction: a second DTLN pair that removes\n"
+                    "background noise from the mic (same DSP as the echo\n"
+                    "canceller, minus the loud-playback feed). Runs after the\n"
+                    "engine on the DTLN and WebRTC AEC3 paths. NKF uses its own\n"
+                    "WPE dereverb + notch instead.");
+        }
     }
 
     ImGui::Spacing();
