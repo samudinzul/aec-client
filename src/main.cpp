@@ -207,6 +207,7 @@ std::atomic<bool>  g_enablePreprocess(false);
 std::atomic<bool>  g_wpeEnabled{ true };      // WPE dereverb post stage (NKF only)
 std::atomic<bool>  g_notchEnabled{ true };    // adaptive notch feedback suppression (NKF only)
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (DTLN/AEC3 only)
+std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC in the list
 // Near-end speech gate (audio thread): RMS hysteresis on the engine
 // output + sustained-loudness watchdog feeding WpeSetSpeech /
 // NotchSetSpeech each frame (see speech_gate.h).
@@ -525,9 +526,10 @@ void SaveSettings() {
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
 << (g_notchEnabled.load() ? 1 : 0) << "\n"  // notch flag (was custom-profile)
         << (g_nsEnabled.load() ? 1 : 0) << "\n"    // DTLN noise reduction flag
-        << 0 << "\n"  // retired: calibrated gate open threshold
-       << 0 << "\n"  // retired: calibrated gate close threshold
-       << 0 << "\n"  // retired: show-legacy-engines toggle
+<< 0 << "\n"  // retired: calibrated gate open threshold
+        << 0 << "\n"  // retired: calibrated gate close threshold
+        << 0 << "\n"  // retired: show-legacy-engines toggle
+        << (g_experimentalEngines.load() ? 1 : 0) << "\n"  // experimental engines flag
        << 0 << "\n"  // retired: nuked DEC-toggle slot
        << 6 << "\n"  // config gen (6 = v2.0: WPE + notch post stages)
        << 0 << "\n"; // retired: NKF WPE dereverb (kept for file alignment)
@@ -607,6 +609,11 @@ void LoadSettings() {
         // (Retired field: show-legacy-engines toggle, always 0. Kept aligned.)
         int le_skip = 0;
         if (f >> le_skip) { (void)le_skip; }
+        // Slot 19: experimental engines flag (gen8+); older files don't
+        // carry it — default OFF (DTLN only), per the release notes.
+        int expRaw = 0;
+        if (f >> expRaw) { (void)expRaw; }
+        if (f >> le_skip) { (void)le_skip; }
         // (Retired field: nuked DEC-toggle slot, always 0. Read to keep
         // old and new config files positionally aligned.)
         int dc_skip = 0;
@@ -678,6 +685,20 @@ void LoadSettings() {
         }
         if (pgen >= 7) g_nsEnabled.store(nsRaw != 0);
         else           g_nsEnabled.store(true);
+        // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden by
+        // default — only shown when the user ticks the Appearance
+        // checkbox. Older files default OFF (DTLN only).
+        if (pgen >= 8) g_experimentalEngines.store(expRaw != 0);
+        else           g_experimentalEngines.store(false);
+        // If the persisted engine is hidden, fall back to DTLN so the
+        // selection can't be left on an engine that isn't in the list.
+        if (!g_experimentalEngines.load() &&
+            (g_engineIndex == ENGINE_AEC3 || g_engineIndex == ENGINE_NKF)) {
+            g_engineIndex = ENGINE_DTLN;
+            g_selectedEngine.store(ENGINE_DTLN);
+            g_profileIndex = 0;
+            SyncStagePrefsToEngine();  // prefs follow the new (visible) engine
+        }
         g_filterLengthMs.store(filters[g_filterIndex]);
         g_selectedEngine.store(g_engineIndex);
     }
@@ -1478,6 +1499,11 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
             if (g_nsEnabled.load() &&
                 (le == ENGINE_DTLN || le == ENGINE_AEC3)) label += " -> NS";
             bool sel = (g_profileIndex == i);
+            // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden
+            // unless the user ticked the Appearance checkbox — the
+            // default is DTLN only.
+            if (!g_experimentalEngines.load() &&
+                (le == ENGINE_AEC3 || le == ENGINE_NKF)) continue;
             if (ImGui::Selectable(label.c_str(), sel)) {
                 if (!sel) {
                     ApplyProfile(i);
@@ -1636,6 +1662,31 @@ void DrawAppearanceTab() {
         ImGui::Spacing();
         ImGui::TextDisabled("Right-click the tray icon to Exit the app.");
     }
+
+    // Experimental engines: WebRTC AEC3 and NKF-AEC are hidden from the
+    // profile list by default (DTLN is the only thing most users need).
+    // Tick this to show them — switching back to DTLN afterwards hides
+    // them again and leaves the selection on DTLN.
+    bool exp = g_experimentalEngines.load();
+    if ( ImGui::Checkbox("Show experimental engines (WebRTC AEC3, NKF-AEC)", &exp)) {
+        g_experimentalEngines.store(exp);
+        if (!exp) {
+            // Hiding them: fall back to DTLN so the selection can't be
+            // left on an engine that is no longer in the list.
+            g_engineIndex = ENGINE_DTLN;
+            g_selectedEngine.store(ENGINE_DTLN);
+            SyncStagePrefsToEngine();
+            g_profileIndex = 0;
+        }
+        SaveSettings();
+        if (g_isRunning) { StopAEC(); StartAEC(); }
+    }
+    if ( ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Off (default): the profile list shows DTLN-AEC 128 only.\n"
+            "On: also shows WebRTC AEC3 and NKF-AEC. These are real\n"
+            "engines but less tested than the default — switch back to\n"
+            "DTLN-AEC 128 to hide them again.");
 }
 
 void DrawAboutTab() {
