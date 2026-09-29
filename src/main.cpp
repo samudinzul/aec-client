@@ -1326,7 +1326,7 @@ void DrawDevicesSection() {
 void DrawEngineSection() {
     // The engine only changes through the Profile menu; this section
     // carries the remaining profile-agnostic knob (sample rate) where
-    // it has always lived, under Advanced.
+    // it has always lived, under More.
     ImGui::SeparatorText("Processing");
     const float labelCol = 190.0f;
 
@@ -1541,14 +1541,14 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
     ImGui::Spacing();
     DrawDevicesSection();
     ImGui::Spacing();
-    // Advanced: sample rate + levels. No close-X — the header always
+    // More: sample rate + levels. No close-X — the header always
     // stays visible and toggles. First frame applies the persisted
     // default (closed for newcomers, as left for regulars).
     if (!g_advInitDone) {
         ImGui::SetNextItemOpen(g_advancedOpen);
         g_advInitDone = true;
     }
-    bool advOpen = ImGui::CollapsingHeader("Advanced");
+    bool advOpen = ImGui::CollapsingHeader("More");
     if (advOpen != g_advancedOpen) {
         g_advancedOpen = advOpen;
         SaveSettings();
