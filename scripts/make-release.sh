@@ -46,7 +46,9 @@ cp libs/tensorflowlite_c.dll "$STAGE/" 2>/dev/null || true
 # leftovers — stale files like the nuked ECAPA/Silero pair must not ship).
 for m in models/nkf.onnx \
          models/dtln_aec_128_1.tflite \
-         models/dtln_aec_128_2.tflite; do
+         models/dtln_aec_128_2.tflite \
+         models/dtln_ns_128_1.tflite \
+         models/dtln_ns_128_2.tflite; do
     test -f "$m" || { echo "missing model: $m" >&2; exit 1; }
     cp "$m" "$STAGE/models/"
 done

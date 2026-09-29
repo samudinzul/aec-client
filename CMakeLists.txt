@@ -39,6 +39,7 @@ add_executable(aec_gui
     src/aec3_wrapper.cpp
     src/nkf_wrapper.cpp
     src/dtln_wrapper.cpp
+    src/gtcrn_wrapper.cpp   // GTCRN noise suppression (DTLN/AEC3 only)
     src/wpe.cpp
     src/notch.cpp
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
@@ -136,6 +137,12 @@ add_custom_command(TARGET aec_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/models/nkf.onnx
         $<TARGET_FILE_DIR:aec_gui>/models/nkf.onnx
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/models/dtln_ns_128_1.tflite
+        $<TARGET_FILE_DIR:aec_gui>/models/dtln_ns_128_1.tflite
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/models/dtln_ns_128_2.tflite
+        $<TARGET_FILE_DIR:aec_gui>/models/dtln_ns_128_2.tflite
 
     COMMENT "Copying runtime DLLs and models"
 )

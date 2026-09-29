@@ -14,11 +14,19 @@ Sizes and SHA-256 hashes below were verified for the files currently in the tree
 | `nkf.onnx` | ~45 KB | NKF-AEC | Bundled with this repo (simplified with onnxsim; upstream: [fjiang9/NKF-AEC](https://github.com/fjiang9/NKF-AEC), via [REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC)) |
 | `dtln_aec_128_1.tflite` | ~1.9 MB | DTLN-AEC 128 (stage 1) | [breizhn/DTLN-aec pretrained_models](https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models) |
 | `dtln_aec_128_2.tflite` | ~5.0 MB | DTLN-AEC 128 (stage 2) | [breizhn/DTLN-aec pretrained_models](https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models) |
-Retired in v2.0: `silero_vad.onnx` (voice gate) is gone;
-`gtcrn_stream.onnx` had already been retired in v1.9; the
-`dfn/` graphs (DeepFilterNet, evaluated pre-release) were cut before
-2.0.0. The WPE / notch post stages are model-free in-tree DSP —
-no files to download.
+| `dtln_ns_128_1.tflite` | ~1.5 MB | DTLN noise reduction (stage 1) | [networkedaudio/Realtime_AudioDenoise_EchoCancellation](https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation) |
+| `dtln_ns_128_2.tflite` | ~2.5 MB | DTLN noise reduction (stage 2) | same |
+
+The DTLN-NR pair is the same 512-block / 128-shift / 257-bin DSP as the
+AEC pair, minus the loud-playback feed: `model_1 [mag(257), states] ->
+[mask(257), states]`, `model_2 [est(512), states] -> [block(512), states]`.
+It runs after the engine on the DTLN and WebRTC AEC3 paths (WebRTC NS is
+retired); NKF keeps its own WPE dereverb + adaptive notch instead.
+
+Retired: `silero_vad.onnx` (voice gate) is gone; `gtcrn_stream.onnx`
+(the old NKF "dry voice" stage) and the `dfn/` graphs (DeepFilterNet,
+evaluated pre-release) were cut before 2.0.0. The WPE / notch post stages
+are model-free in-tree DSP — no files to download.
 
 ## Runtime library (in `libs/`)
 
@@ -36,6 +44,13 @@ curl -L -o models/dtln_aec_128_1.tflite \
   "https://raw.githubusercontent.com/breizhn/DTLN-aec/main/pretrained_models/dtln_aec_128_1.tflite"
 curl -L -o models/dtln_aec_128_2.tflite \
   "https://raw.githubusercontent.com/breizhn/DTLN-aec/main/pretrained_models/dtln_aec_128_2.tflite"
+
+# DTLN noise reduction pair (~1.5 MB + ~2.5 MB) — runs after the engine
+# on the DTLN and WebRTC AEC3 paths (WebRTC NS is retired).
+curl -L -o models/dtln_ns_128_1.tflite \
+  "https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation/raw/master/model/model_1.tflite"
+curl -L -o models/dtln_ns_128_2.tflite \
+  "https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation/raw/master/model/model_2.tflite"
 
 # NKF-AEC model ships with the repo backup (models/nkf.onnx).
 # tensorflowlite_c.dll ships with the official release ZIPs (extract to libs/).

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.0] — 2026-09-28
 
+### Added
+
+- **DTLN noise reduction post stage.** The DTLN-AEC pair cancels echo
+  but leaves background noise; a second DTLN-NR pair (same 512-block /
+  128-shift / 257-bin DSP, single mic feed) now runs after the engine
+  on the DTLN and WebRTC AEC3 paths — `src/dtln_ns_wrapper.{h,cpp}`,
+  `models/dtln_ns_128_{1,2}.tflite` (networkedaudio port of
+  breizhn/DTLN denoise). WebRTC NS is retired; NKF keeps its own WPE
+  dereverb + adaptive notch instead. A `Noise suppression (DTLN-NS)`
+  checkbox and a `g_nsEnabled` pref gate it; fail-open pass-through on
+  any inference error.
+
 ### Fixed
 
 - **Howl backstop deepened too slowly and muted the near-end voice.**
