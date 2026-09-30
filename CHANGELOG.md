@@ -69,7 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attacks to −36 dB, releases at t=14.34 (cancel proven), and the
   near-end voice passes at full level.
 
-## [2.0.1] — 2026-09-28
+## [2.0.1] — 2026-09-28 (unreleased smoke-test work)
+
+> **Never shipped.** This numbering was used for experimental work that
+> was merged into the release line instead. Its changes are part of the
+> shipped **1.10.0** and **1.10.1** releases — see those sections for
+> what actually reached users. Kept here as a historical record of the
+> development that produced them.
 
 ### Fixed
 
@@ -192,7 +198,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the freeze switch are all gone. The detector now feeds
   telemetry only; guard trips remain the backstop.
 
-## [2.0.0] — 2026-09-27
+## [2.0.0] — 2026-09-27 (unreleased smoke-test work)
+
+> **Never shipped.** This numbering was used for experimental work that
+> was merged into the release line instead. Its changes are part of the
+> shipped **1.10.0** and **1.10.1** releases — see those sections for
+> what actually reached users. Kept here as a historical record of the
+> development that produced them.
 
 ### Added
 
