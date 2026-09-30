@@ -508,12 +508,15 @@ DtlnNsHandle* DtlnNsNew(const char* onnxPath) {
     }
     if (TryTflite(h, onnxPath)) {
         h->backend = DTNS_TFLITE;
-        h->rCount = 4096;  // 1:1 output from sample one
+        h->rCount = 256;  // 16 ms priming — covers the first shift's OLA
+                          // warmup (frame 0's pad half is discarded)
+                          // while keeping latency low. A full 4096 ring
+                          // made the stage feel sluggish (256 ms).
         return h;
     }
     if (TryOnnx(h, onnxPath)) {
         h->backend = DTNS_ONNX;
-        h->rCount = 4096;  // 1:1 output from sample one
+        h->rCount = 256;
         return h;
     }
     DtnsSetError(h, "dtln_ns: neither TFLite nor ONNX pair loaded");
