@@ -5,7 +5,7 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.10.0] — 2026-09-28
+## [1.10.1] — 2026-09-29
 
 ### Added
 
@@ -18,6 +18,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dereverb + adaptive notch instead. A `Noise suppression (DTLN-NS)`
   checkbox and a `g_nsEnabled` pref gate it; fail-open pass-through on
   any inference error.
+
+### Changed
+
+- **Post-stage panel is engine-aware.** WPE + notch only render for the
+  NKF engine; the DTLN-NS checkbox only renders for DTLN/AEC3. Each
+  toggle restarts the chain live.
+- **Post-stage prefs are engine-scoped.** Switching engines (profile
+  switch, load, reset-to-defaults) resets each stage to its engine's
+  defaults, so a toggle left on for another engine cannot leak into a
+  chain that doesn't run it and make Start look broken after a switch.
+- **Experimental engines hidden behind an Appearance checkbox.**
+  WebRTC AEC3 and NKF-AEC are no longer in the profile list by
+  default — DTLN-AEC 128 is the only visible engine. Ticking the
+  checkbox reveals them; unticking falls back to DTLN so the
+  selection can never be left on a hidden engine.
+- **The Advanced collapsible is renamed to "More".**
+
+### Fixed
+
+- **Ort::Session takes a wchar_t path on Windows.** The ONNX backend
+  passed a `const char*` to the Session constructor, which only accepts
+  `ORTCHAR_T*` (wchar_t on Windows) — same fix the DTLN wrapper
+  applies.
+- **CMake parses a trailing `//` comment as a source filename.**
+  `src/dtln_ns_wrapper.cpp   // DTLN noise reduction (DTLN/AEC3 only)`
+  was treated as a source path; the comment is now a bare filename.
+- **API names + Gui:: namespace in the DTLN-NS wiring.** `main.cpp`
+  called the stage with the old `Dtns*` names; the public API is
+  `DtlnNs*` (`DtnsLastError`). Also dropped a phantom `Gui::` namespace
+  (the codebase uses ` ImGui::` directly).
+
+## [1.10.0] — 2026-09-28
 
 ### Fixed
 
