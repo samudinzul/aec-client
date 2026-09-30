@@ -123,6 +123,11 @@ struct DtlnNsHandle {
     int onnxM2Est = 0, onnxM2State = 1;
     int64_t feat257[3] = { 1, 1, DTNS_BINS };
     int64_t feat512[3] = { 1, 1, DTNS_BLOCK_LEN };
+
+    // Live diagnostics
+    int dropped = 0;
+    float lastInRms = 0, lastOutRms = 0;
+    int lastInN = 0;
 };
 
 static void DtnsSetError(DtlnNsHandle* h, const char* msg) {
@@ -481,7 +486,9 @@ static void DtlnNsProcessShift(DtlnNsHandle* h, const float micNew[DTNS_BLOCK_SH
         if (h->rCount < 4096) {
             h->oring[(h->rHead + h->rCount) % 4096] = h->outBuf[i];
             h->rCount++;
-        } else { h->lastError[0] = 0; }
+        } else {
+            h->dropped++;  // ring full — processed audio lost
+        }
     }
     memmove(h->outBuf, h->outBuf + DTNS_BLOCK_SHIFT,
             (DTNS_BLOCK_LEN - DTNS_BLOCK_SHIFT) * sizeof(float));
@@ -519,6 +526,8 @@ int DtlnNsReady(const DtlnNsHandle* h) {
 
 int DtlnNsProcess(DtlnNsHandle* h, const float* in, float* out, int n) {
     if (!h || !in || !out || n <= 0) return 0;
+    double si = 0, so = 0;
+    for (int i = 0; i < n; i++) si += (double)in[i] * in[i];
     if (h->backend == DTNS_NONE) { memcpy(out, in, (size_t)n * sizeof(float)); return 1; }
     if (h->qn + n > 2048) { memcpy(out, in, (size_t)n * sizeof(float)); return 1; }
     memcpy(h->q + h->qn, in, (size_t)n * sizeof(float));
@@ -533,7 +542,11 @@ int DtlnNsProcess(DtlnNsHandle* h, const float* in, float* out, int n) {
         } else {
             out[i] = in[i];  // priming: pass through until the OLA warms up
         }
+        so += (double)out[i] * out[i];
     }
+    h->lastInRms  = (float)sqrt(si / n);
+    h->lastOutRms = (float)sqrt(so / n);
+    h->lastInN    = n;
     return 1;
 }
 
@@ -544,6 +557,9 @@ void DtlnNsReset(DtlnNsHandle* h) {
     h->qn = 0;
     memset(h->oring, 0, sizeof(h->oring));
     h->rHead = h->rCount = 0;
+    h->dropped = 0;
+    h->lastInRms = h->lastOutRms = 0;
+    h->lastInN = 0;
     memset(h->states1.data(), 0, h->states1.size() * sizeof(float));
     memset(h->states2.data(), 0, h->states2.size() * sizeof(float));
     h->lastError[0] = 0;
@@ -568,6 +584,23 @@ void DtlnNsDestroy(DtlnNsHandle* h) {
 const char* DtnsLastError(const DtlnNsHandle* h) {
     if (!h) return "null handle";
     return h->lastError[0] ? h->lastError : "ok";
+}
+
+void DtlnNsStatsGet(const DtlnNsHandle* h, DtlnNsStats* s) {
+    if (!s) return;
+    if (!h) { memset(s, 0, sizeof(*s)); return; }
+    s->backend  = h->backend;
+    s->rCount   = h->rCount;
+    s->inRms    = h->lastInRms;
+    s->outRms   = h->lastOutRms;
+    s->dropped  = h->dropped;
+}
+
+void DtlnNsDump(const DtlnNsHandle* h) {
+    if (!h) { printf("DTLN-NS: off (null)\n"); return; }
+    printf("DTLN-NS: backend=%d rCount=%d dropped=%d last inRms=%.4f outRms=%.4f n=%d err=%s\n",
+           h->backend, h->rCount, h->dropped, h->lastInRms, h->lastOutRms,
+           h->lastInN, h->lastError[0] ? h->lastError : "ok");
 }
 
 }  // extern "C"

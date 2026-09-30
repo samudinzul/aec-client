@@ -33,6 +33,19 @@ void DtlnNsDestroy(DtlnNsHandle* h);
 
 const char* DtnsLastError(const DtlnNsHandle* h);
 
+// Live diagnostics for the NS stage: backend kind, ring fill, and the
+// in/out RMS over the last Process call. Null-safe (zeroes on null).
+struct DtlnNsStats {
+    int backend;          // 0=none, 1=TFLite, 2=ONNX
+    int rCount;           // output ring fill
+    float inRms, outRms;  // last Process call
+    int dropped;          // ring overflow samples dropped
+};
+void DtlnNsStatsGet(const DtlnNsHandle* h, DtlnNsStats* s);
+
+// Debug: print the last stats to stdout. No-op when NS is off.
+void DtlnNsDump(const DtlnNsHandle* h);
+
 #ifdef __cplusplus
 }
 #endif

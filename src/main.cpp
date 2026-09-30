@@ -1595,6 +1595,23 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                     "canceller, minus the loud-playback feed). Runs after the\n"
                     "engine on the DTLN and WebRTC AEC3 paths. NKF uses its own\n"
                     "WPE dereverb + notch instead.");
+            // Live diagnostics — shows whether the stage is actually
+            // running and suppressing (ring fill, dropped samples,
+            // in/out RMS over the last frame).
+            if (g_engine.ns) {
+                DtlnNsStats st;
+                DtlnNsStatsGet(g_engine.ns, &st);
+                const char* be[] = { "off", "TFLite", "ONNX" };
+                char line[256];
+                snprintf(line, sizeof line,
+                         "DTLN-NS: %s  ring=%d  dropped=%d  in=%.4f out=%.4f  %s",
+                         be[st.backend], st.rCount, st.dropped,
+                         st.inRms, st.outRms, DtnsLastError(g_engine.ns));
+                if (st.dropped > 0)
+                    snprintf(line + strlen(line), sizeof line - strlen(line),
+                             "  [ring overflow!]");
+                ImGui::TextDisabled("%s", line);
+            }
         }
     }
 
