@@ -946,7 +946,9 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         // mismatch) leaves the frame untouched instead of taking the
         // app down mid-call.
         if (DtlnNsProcess(g_engine.ns, wpeBuf, wpeBuf, fs) != 1) {
-            DtnsSetError(g_engine.ns, "NS: process failed, pass-through");
+            // NS failed this frame — leave it untouched and keep going.
+            // (The diagnostics line under the checkbox will show the
+            // last error string from DtnsLastError.)
             for (int i = 0; i < fs; i++)
                 wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
         }
@@ -1912,34 +1914,33 @@ int main(int, char**) {
     // Crash handler: an uncaught exception in the audio callback can
     // otherwise silently take the app down with no trace. Write the
     // failing expression to aec_crash.txt next to the exe so the user
-    // has something to report.
-    {
-        auto crash = [](const char* what) {
-            FILE* f = fopen("aec_crash.txt", "a");
-            if (f) {
-                SYSTEMTIME st;
-                GetSystemTime(&st);
-                fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d %s\n",
-                        st.wYear, st.wMonth, st.wDay,
-                        st.wHour, st.wMinute, st.wSecond, what);
-                fclose(f);
-            }
-        };
-        std::set_terminate([crash]() {
-            crash("std::terminate: uncaught exception in the audio thread");
-            std::abort();
-        });
-        SetUnhandledExceptionFilter([](LPEXCEPTION_POINTERS ep) -> LONG {
-            char buf[160];
-            snprintf(buf, sizeof buf,
-                     "Unhandled exception 0x%08X at 0x%p",
-                     ep->ExceptionRecord->ExceptionCode,
-                     ep->ExceptionRecord->ExceptionAddress);
-            FILE* f = fopen("aec_crash.txt", "a");
-            if (f) { fprintf(f, "%s\n", buf); fclose(f); }
-            return EXCEPTION_EXECUTE_HANDLER;
-        });
+    // has something to report. (set_terminate takes a non-capturing
+    // function pointer, so the handler is a plain function.)
+    static void CrashLog(const char* what) {
+        FILE* f = fopen("aec_crash.txt", "a");
+        if (f) {
+            SYSTEMTIME st;
+            GetSystemTime(&st);
+            fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d %s\n",
+                    st.wYear, st.wMonth, st.wDay,
+                    st.wHour, st.wMinute, st.wSecond, what);
+            fclose(f);
+        }
     }
+    static void OnTerminate() {
+        CrashLog("std::terminate: uncaught exception in the audio thread");
+        std::abort();
+    }
+    std::set_terminate(OnTerminate);
+    SetUnhandledExceptionFilter([](LPEXCEPTION_POINTERS ep) -> LONG {
+        char buf[160];
+        snprintf(buf, sizeof buf,
+                 "Unhandled exception 0x%08X at 0x%p",
+                 ep->ExceptionRecord->ExceptionCode,
+                 ep->ExceptionRecord->ExceptionAddress);
+        CrashLog(buf);
+        return EXCEPTION_EXECUTE_HANDLER;
+    });
 
     if (!glfwInit()) return 1;
     const char* glslVersion = "#version 130";
