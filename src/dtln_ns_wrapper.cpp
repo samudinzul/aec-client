@@ -561,8 +561,18 @@ int DtlnNsProcess(DtlnNsHandle* h, const float* in, float* out, int n) {
     if (h->qn + n > 2048) { memcpy(out, in, (size_t)n * sizeof(float)); return 1; }
     memcpy(h->q + h->qn, in, (size_t)n * sizeof(float));
     h->qn += n;
-    while (h->qn >= DTNS_BLOCK_SHIFT)
-        DtlnNsProcessShift(h, h->q + h->qn - DTNS_BLOCK_SHIFT);
+    // Consume 128 from the FRONT each shift (oldest = next in time
+    // order, so the micBuf sliding window stays contiguous). The shift
+    // itself never touched h->qn, so without this the while loop was
+    // infinite: the audio thread spun pushing into a full ring,
+    // dropped climbed ~128/shift, no frames were emitted (silent
+    // meters), and Stop could not join the stuck thread -> hang.
+    while (h->qn >= DTNS_BLOCK_SHIFT) {
+        DtlnNsProcessShift(h, h->q);
+        memmove(h->q, h->q + DTNS_BLOCK_SHIFT,
+                (size_t)(h->qn - DTNS_BLOCK_SHIFT) * sizeof(float));
+        h->qn -= DTNS_BLOCK_SHIFT;
+    }
     for (int i = 0; i < n; i++) {
         if (h->rCount > 0) {
             out[i] = h->oring[h->rHead];
