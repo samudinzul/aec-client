@@ -63,3 +63,5 @@ third_party/imgui/imgui_demo.cpp
 
 # Runtime UI state (never ship)
 imgui.ini
+.opencodeignore
+opencode.json
