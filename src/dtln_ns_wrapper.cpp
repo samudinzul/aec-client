@@ -267,17 +267,24 @@ static bool TryTflite(DtlnNsHandle* h, const std::string& prefix) {
 }
 
 static bool RunTfliteFirst(DtlnNsHandle* h, const float micMag[DTNS_BINS],
-                           float mask[DTNS_BINS]) {
-    if (h->tf.copyFrom(h->tf.getInput(h->tfInterp1, h->tfM1Mask),
-                       micMag, DTNS_BINS * sizeof(float)) != kTfLiteOk)
+                            float mask[DTNS_BINS]) {
+    TfLiteTensor* inMask = h->tf.getInput(h->tfInterp1, h->tfM1Mask);
+    TfLiteTensor* inSt   = h->tf.getInput(h->tfInterp1, h->tfM1StateIn);
+    if (!inMask || !inSt) return false;
+    if (h->tf.copyFrom(inMask, micMag, DTNS_BINS * sizeof(float)) != kTfLiteOk)
         return false;
-    if (h->tf.copyFrom(h->tf.getInput(h->tfInterp1, h->tfM1StateIn),
-                       h->states1.data(), h->states1.size() * sizeof(float))
-        != kTfLiteOk)
+    if (!h->states1.empty() &&
+        h->tf.copyFrom(inSt, h->states1.data(),
+                        h->states1.size() * sizeof(float)) != kTfLiteOk)
         return false;
-    if (h->tf.invoke(h->tfInterp1) != kTfLiteOk) return false;
+    try {
+        if (h->tf.invoke(h->tfInterp1) != kTfLiteOk) return false;
+    } catch (...) {
+        DtnsSetError(h, "TFLite: invoke raised an exception"); return false;
+    }
     TfLiteTensor* mo = h->tf.getOutput(h->tfInterp1, h->tfM1MaskOut);
     TfLiteTensor* so = h->tf.getOutput(h->tfInterp1, h->tfM1StateOut);
+    if (!mo || !so) return false;
     size_t mc = h->tf.byteSize(mo) / sizeof(float);
     if (mc >= DTNS_BINS)
         h->tf.copyTo(mo, mask, DTNS_BINS * sizeof(float));
@@ -289,16 +296,23 @@ static bool RunTfliteFirst(DtlnNsHandle* h, const float micMag[DTNS_BINS],
 
 static bool RunTfliteSecond(DtlnNsHandle* h, const float est[DTNS_BLOCK_LEN],
                             float out[DTNS_BLOCK_LEN]) {
-    if (h->tf.copyFrom(h->tf.getInput(h->tfInterp2, h->tfM2Est),
-                       est, DTNS_BLOCK_LEN * sizeof(float)) != kTfLiteOk)
+    TfLiteTensor* inEst = h->tf.getInput(h->tfInterp2, h->tfM2Est);
+    TfLiteTensor* inSt  = h->tf.getInput(h->tfInterp2, h->tfM2StateIn);
+    if (!inEst || !inSt) return false;
+    if (h->tf.copyFrom(inEst, est, DTNS_BLOCK_LEN * sizeof(float)) != kTfLiteOk)
         return false;
-    if (h->tf.copyFrom(h->tf.getInput(h->tfInterp2, h->tfM2StateIn),
-                       h->states2.data(), h->states2.size() * sizeof(float))
-        != kTfLiteOk)
+    if (!h->states2.empty() &&
+        h->tf.copyFrom(inSt, h->states2.data(),
+                        h->states2.size() * sizeof(float)) != kTfLiteOk)
         return false;
-    if (h->tf.invoke(h->tfInterp2) != kTfLiteOk) return false;
+    try {
+        if (h->tf.invoke(h->tfInterp2) != kTfLiteOk) return false;
+    } catch (...) {
+        DtnsSetError(h, "TFLite: invoke raised an exception"); return false;
+    }
     TfLiteTensor* bo = h->tf.getOutput(h->tfInterp2, h->tfM2Out);
     TfLiteTensor* so = h->tf.getOutput(h->tfInterp2, h->tfM2StateOut);
+    if (!bo || !so) return false;
     size_t bc = h->tf.byteSize(bo) / sizeof(float);
     if (bc >= DTNS_BLOCK_LEN)
         h->tf.copyTo(bo, out, DTNS_BLOCK_LEN * sizeof(float));

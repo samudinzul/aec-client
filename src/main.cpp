@@ -8,6 +8,7 @@
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
 #include <windows.h>
+#include <exception>
 #include <shellapi.h>
 #endif
 
@@ -941,7 +942,14 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     if (g_engine.ns && g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
             wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        DtlnNsProcess(g_engine.ns, wpeBuf, wpeBuf, fs);
+        // Fail-open: any NS failure (exception, bad tensor, model
+        // mismatch) leaves the frame untouched instead of taking the
+        // app down mid-call.
+        if (DtlnNsProcess(g_engine.ns, wpeBuf, wpeBuf, fs) != 1) {
+            DtnsSetError(g_engine.ns, "NS: process failed, pass-through");
+            for (int i = 0; i < fs; i++)
+                wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+        }
         for (int i = 0; i < fs; i++)
             cleanedFrame[i] = clamp_s16((int)lrintf(wpeBuf[i] * 32768.0f));
     }
@@ -1900,6 +1908,38 @@ int main(int, char**) {
         return 0;   // Another instance is already running
     }
 #endif
+
+    // Crash handler: an uncaught exception in the audio callback can
+    // otherwise silently take the app down with no trace. Write the
+    // failing expression to aec_crash.txt next to the exe so the user
+    // has something to report.
+    {
+        auto crash = [](const char* what) {
+            FILE* f = fopen("aec_crash.txt", "a");
+            if (f) {
+                SYSTEMTIME st;
+                GetSystemTime(&st);
+                fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d %s\n",
+                        st.wYear, st.wMonth, st.wDay,
+                        st.wHour, st.wMinute, st.wSecond, what);
+                fclose(f);
+            }
+        };
+        std::set_terminate([crash]() {
+            crash("std::terminate: uncaught exception in the audio thread");
+            std::abort();
+        });
+        SetUnhandledExceptionFilter([](LPEXCEPTION_POINTERS ep) -> LONG {
+            char buf[160];
+            snprintf(buf, sizeof buf,
+                     "Unhandled exception 0x%08X at 0x%p",
+                     ep->ExceptionRecord->ExceptionCode,
+                     ep->ExceptionRecord->ExceptionAddress);
+            FILE* f = fopen("aec_crash.txt", "a");
+            if (f) { fprintf(f, "%s\n", buf); fclose(f); }
+            return EXCEPTION_EXECUTE_HANDLER;
+        });
+    }
 
     if (!glfwInit()) return 1;
     const char* glslVersion = "#version 130";
