@@ -1890,6 +1890,36 @@ void DrawUI() {
 // ============================================================
 //  MAIN
 // ============================================================
+// Crash handlers — plain functions (set_terminate takes a function
+// pointer, so no capturing lambdas). Any uncaught exception in the
+// audio thread writes the failing expression to aec_crash.txt next
+// to the exe, so the user has something to report instead of a silent
+// exit.
+static void CrashLog(const char* what) {
+    FILE* f = fopen("aec_crash.txt", "a");
+    if (f) {
+        SYSTEMTIME st;
+        GetSystemTime(&st);
+        fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d %s\n",
+                st.wYear, st.wMonth, st.wDay,
+                st.wHour, st.wMinute, st.wSecond, what);
+        fclose(f);
+    }
+}
+static void CrashOnTerminate() {
+    CrashLog("std::terminate: uncaught exception in the audio thread");
+    std::abort();
+}
+static LONG CrashOnUnhandledException(LPEXCEPTION_POINTERS ep) {
+    char buf[160];
+    snprintf(buf, sizeof buf,
+             "Unhandled exception 0x%08X at 0x%p",
+             ep->ExceptionRecord->ExceptionCode,
+             ep->ExceptionRecord->ExceptionAddress);
+    CrashLog(buf);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 int main(int, char**) {
 #ifdef _WIN32
     // Anchor all relative asset paths (models/, aec_config.txt, imgui.ini,
@@ -1915,32 +1945,10 @@ int main(int, char**) {
     // otherwise silently take the app down with no trace. Write the
     // failing expression to aec_crash.txt next to the exe so the user
     // has something to report. (set_terminate takes a non-capturing
-    // function pointer, so the handler is a plain function.)
-    static void CrashLog(const char* what) {
-        FILE* f = fopen("aec_crash.txt", "a");
-        if (f) {
-            SYSTEMTIME st;
-            GetSystemTime(&st);
-            fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d %s\n",
-                    st.wYear, st.wMonth, st.wDay,
-                    st.wHour, st.wMinute, st.wSecond, what);
-            fclose(f);
-        }
-    }
-    static void OnTerminate() {
-        CrashLog("std::terminate: uncaught exception in the audio thread");
-        std::abort();
-    }
-    std::set_terminate(OnTerminate);
-    SetUnhandledExceptionFilter([](LPEXCEPTION_POINTERS ep) -> LONG {
-        char buf[160];
-        snprintf(buf, sizeof buf,
-                 "Unhandled exception 0x%08X at 0x%p",
-                 ep->ExceptionRecord->ExceptionCode,
-                 ep->ExceptionRecord->ExceptionAddress);
-        CrashLog(buf);
-        return EXCEPTION_EXECUTE_HANDLER;
-    });
+    // function pointer, so the handlers are plain functions — defined
+    // at file scope above main().)
+    std::set_terminate(CrashOnTerminate);
+    SetUnhandledExceptionFilter(CrashOnUnhandledException);
 
     if (!glfwInit()) return 1;
     const char* glslVersion = "#version 130";
