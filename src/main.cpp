@@ -1144,11 +1144,11 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load DTLN model");
         return;
     }
-    if (g_wpeEnabled.load() && !g_engine.wpe) {
+    if (g_engine.type == ENGINE_NKF && g_wpeEnabled.load() && !g_engine.wpe) {
         snprintf(g_statusText, 128, "Failed to init WPE (unsupported rate)");
         return;
     }
-    if (g_notchEnabled.load() && !g_engine.notch) {
+    if (g_engine.type == ENGINE_NKF && g_notchEnabled.load() && !g_engine.notch) {
         snprintf(g_statusText, 128, "Failed to init notch (unsupported rate)");
         return;
     }

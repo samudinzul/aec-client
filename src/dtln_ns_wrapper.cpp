@@ -502,7 +502,16 @@ extern "C" {
 DtlnNsHandle* DtlnNsNew(const char* onnxPath) {
     DtlnNsHandle* h = new (std::nothrow) DtlnNsHandle();
     if (!h) return nullptr;
-    if (!onnxPath || !FileExists(onnxPath)) {
+    if (!onnxPath) return h;
+    // Check the actual pair files, not the bare prefix — "models/dtln_ns_128"
+    // is a directory prefix, not a file, so FileExists() on it is always
+    // false and the stage silently stayed off.
+    std::string p1 = std::string(onnxPath) + "_1.tflite";
+    std::string p2 = std::string(onnxPath) + "_2.tflite";
+    std::string q1 = std::string(onnxPath) + "_1.onnx";
+    std::string q2 = std::string(onnxPath) + "_2.onnx";
+    if (!((FileExists(p1) && FileExists(p2)) ||
+          (FileExists(q1) && FileExists(q2)))) {
         DtnsSetError(h, "dtln_ns model pair not found in models/ (NS stays off)");
         return h;
     }
