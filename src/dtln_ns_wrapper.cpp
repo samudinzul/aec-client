@@ -531,15 +531,18 @@ DtlnNsHandle* DtlnNsNew(const char* onnxPath) {
     }
     if (TryTflite(h, onnxPath)) {
         h->backend = DTNS_TFLITE;
-        h->rCount = 256;  // 16 ms priming — covers the first shift's OLA
-                          // warmup (frame 0's pad half is discarded)
-                          // while keeping latency low. A full 4096 ring
-                          // made the stage feel sluggish (256 ms).
+        // Prefill sets the ring's operating level: push == drain in
+        // steady state, so the ring settles at the prefill. 4096 kept
+        // it perpetually full (every push overflowed, the stage
+        // output zeros and hammered the dropped counter -> hang);
+        // 512 covers frame 0's discarded pad half and stays well
+        // under capacity even during a 2048-sample transient.
+        h->rCount = 512;
         return h;
     }
     if (TryOnnx(h, onnxPath)) {
         h->backend = DTNS_ONNX;
-        h->rCount = 256;
+        h->rCount = 512;
         return h;
     }
     DtnsSetError(h, "dtln_ns: neither TFLite nor ONNX pair loaded");
