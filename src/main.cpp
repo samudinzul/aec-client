@@ -1743,6 +1743,7 @@ void DrawAboutTab() {
     ImGui::BulletText("WebRTC AP     - Google (BSD-3)");
     ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
     ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
+    ImGui::BulletText("DTLN-NS       - networkedaudio port of breizhn/DTLN denoise (MIT)");
     ImGui::BulletText("WPE dereverb - in-tree (weighted prediction error)");
     ImGui::BulletText("Adaptive notch - Widrow & Hoff LMS (1960)");
     ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
@@ -1750,6 +1751,7 @@ void DrawAboutTab() {
     ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
     ImGui::BulletText("GLFW          - Marcus Geelnard / Camilla Berglund (zlib)");
     ImGui::BulletText("stb_image     - Sean Barrett (public domain)");
+    ImGui::BulletText("pocketfft     - Max-Planck-Society (BSD-3)");
 
     ImGui::Spacing();
     ImGui::TextDisabled("Made with C++ and MinGW-w64");
