@@ -47,7 +47,7 @@ No more headphones. No more echo. No dead-air noise.
 ## Features
 
 - **3 engine profiles** — one menu shows the engine and its chain (the engine is not configurable on its own):
-  - **DTLN-AEC 128** *(default)* — dual-LSTM echo + noise canceller (ICASSP 2021; 128 LSTM units for lower CPU). DTLN removes noise itself.
+  - **DTLN-AEC 128** *(default)* — dual-LSTM echo canceller (ICASSP 2021; 128 LSTM units for lower CPU). DTLN-NS removes background noise on top.
   - **WebRTC AEC3** — the same canceller Chrome and Google Meet use: strongest canceller.
   - **NKF-AEC** — tiny neural Kalman core (ICASSP 2023, 45 KB model), for weak CPUs.
   - AEC3 and NKF-AEC are **experimental** — hidden from the menu by default; tick **Show experimental engines** on the Appearance tab to reveal them.
@@ -275,7 +275,7 @@ The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and compiled dire
 Each post stage runs only for the engine that uses it — the ticks under the More panel render only for the active engine, and switching engines resets each stage to its default:
 
 - **NKF-AEC** → **Dereverb (WPE)** + **Feedback suppression (notch)**. Both default ON, both model-free DSP.
-- **DTLN-AEC 128** and **WebRTC AEC3** → **Noise suppression (DTLN-NS)**. The WebRTC NS post-stage was retired in 2.0; DTLN-NS replaces it on these paths.
+- **DTLN-AEC 128** and **WebRTC AEC3** → **Noise suppression (DTLN-NS)**. The WebRTC NS post-stage was retired; DTLN-NS replaces it on these paths.
 - **Fail-open**: both stages bound their own state (clamped frequencies, capped predictor output, pass-through latch on internal errors) — a stage can never mute or blow up the stream.
 
 - **Dereverb (WPE)** — streaming single-channel Weighted Prediction Error dereverberation: 32 ms STFT frames (512 / 1536 samples), regressors from the observed history (delay 2, 5 taps), per-bin recursive weighted least squares with a forget factor, ~32 ms algorithmic latency. While you talk the predictor bound tightens (speech flag) so voice level survives; between speech it opens up to eat reverb tails. Model-free: pure pocketfft, no ONNX file. `src/wpe.cpp`.
@@ -300,8 +300,8 @@ The wrapper at `src/dtln_wrapper.cpp` handles frame accumulation (128-sample shi
 A second DTLN pair that removes background noise from the mic — same
 512-block / 128-shift / 257-bin DSP as the echo canceller, minus the
 loud-playback feed. Runs after the engine on the **DTLN-AEC 128** and
-**WebRTC AEC3** paths (the v1.9 WebRTC NS post-stage was retired in
-2.0); NKF keeps its own WPE + notch instead.
+**WebRTC AEC3** paths (the WebRTC NS post-stage was retired); NKF keeps
+its own WPE + notch instead.
 
 - **Runtime (in probe order)**:
   1. **TFLite** — `dtln_ns_128_1.tflite` + `dtln_ns_128_2.tflite` from
