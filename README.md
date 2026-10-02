@@ -476,6 +476,7 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **pocketfft** — Max-Planck-Society (BSD-3)
 - **AudioFile** — Adam Stark (MIT)
 - **VB-CABLE** — VB-Audio (free for personal use)
+- **DTLN noise reduction (DTLN-NS)** — networkedaudio, port of breizhn/DTLN denoise (MIT)
 
 ---
 
