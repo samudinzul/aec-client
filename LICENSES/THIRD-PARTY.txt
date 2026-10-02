@@ -16,6 +16,11 @@ AEC Client bundles the following open-source libraries:
     Westhausen & Meyer, ICASSP 2021 (breizhn/DTLN-aec)
     License: MIT (model weights + reference pipeline)
 
+3b. DTLN noise reduction (DTLN-NS)
+    Streaming speech enhancement, port of breizhn/DTLN denoise
+    (networkedaudio/Realtime_AudioDenoise_EchoCancellation)
+    License: MIT (upstream DTLN denoise)
+
 4.  ONNX Runtime
     Copyright (C) Microsoft Corporation
     License: MIT

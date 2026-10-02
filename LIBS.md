@@ -17,7 +17,7 @@ the CMake post-build step; install them with `pacman` per `README.md`.)
   `aec_gui.exe` if present (post-build step); the DTLN wrapper loads it at runtime,
   no link-time dependency.
 
-## Verification (SHA-256, v1.3.2)
+## Verification (SHA-256, v1.10.1)
 
 ```
 882e6d8f9866ff84f23d4b964c145b7f0f0a8907fa830dcd8c499e7c46bf3365  tensorflowlite_c.dll
@@ -29,13 +29,14 @@ Check with: `sha256sum libs/*`
 
 ```bash
 # From an official release ZIP:
-unzip -o -j AEC-Client-v1.3.2-win64.zip \
-  "AEC-Client-v1.3.2-win64/tensorflowlite_c.dll" -d libs/
+unzip -o -j AEC-Client-v1.10.1-win64.zip \
+  "AEC-Client-v1.10.1-win64/tensorflowlite_c.dll" -d libs/
 ```
 
 ## Notes
 
 - Without `libs/tensorflowlite_c.dll`, everything still builds; only the
-  DTLN-AEC engine is affected at runtime (it falls back to the ONNX model pair
-  if present, else reports `Failed to load DTLN model`).
+  DTLN engines are affected at runtime (DTLN-AEC and DTLN-NS both fall
+  back to their ONNX model pairs if present, else report
+  `Failed to load DTLN model` / `dtln_ns model pair not found`).
 - See `MODELS.md` for the neural-model files in `models/`.

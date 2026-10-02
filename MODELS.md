@@ -25,8 +25,8 @@ retired); NKF keeps its own WPE dereverb + adaptive notch instead.
 
 Retired: `silero_vad.onnx` (voice gate) is gone; `gtcrn_stream.onnx`
 (the old NKF "dry voice" stage) and the `dfn/` graphs (DeepFilterNet,
-evaluated pre-release) were cut before 2.0.0. The WPE / notch post stages
-are model-free in-tree DSP — no files to download.
+evaluated pre-release) were cut before that line shipped. The WPE / notch
+post stages are model-free in-tree DSP — no files to download.
 
 ## Runtime library (in `libs/`)
 
@@ -61,6 +61,8 @@ curl -L -o models/dtln_ns_128_2.tflite \
 ```
 8d241b3a732af8ca140b2e30043e56a6c3c7800c46e22c26f4eea2f70974ad1e  dtln_aec_128_1.tflite
 350bb01a1152ae3cabe09fe5e868ef2f7d8b988a9f22aae44f140195f6493126  dtln_aec_128_2.tflite
+91281a38e80fe9fd330e28eda7e16fe4e483ee5199a3e687a099939013c25de0  dtln_ns_128_1.tflite
+7ae37ec802862d8a65b5cdabfbcbbe22caaf7cd39e79adf574d15837d1520830  dtln_ns_128_2.tflite
 1d46987c5d3b4b7a555b054947fa4ae19e38999d3500cbb2cb10d8b9005f81d0  nkf.onnx
 ```
 

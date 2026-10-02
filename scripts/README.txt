@@ -1,14 +1,14 @@
 AEC Client v%%VERSION%%
-================
+======================
 
 Real-time acoustic echo cancellation for Windows.
 
 WHAT IT DOES
 ------------
 Routes your microphone through a processing profile (echo canceller +
-noise filter), cancels the sound coming from your speakers, and
-outputs a clean mic signal to a virtual audio cable that Discord /
-Zoom / Teams can use.
+post stage), cancels the sound coming from your speakers, and outputs a
+clean mic signal to a virtual audio cable that Discord / Zoom / Teams
+can use.
 
 REQUIREMENTS
 ------------
@@ -27,27 +27,33 @@ QUICK START
    - Speaker Reference: your physical speakers (the sound to cancel)
    - Output:            CABLE Input (VB-Audio Virtual Cable)
 
-4. Pick an engine at the top of the Audio tab — the label shows
-   the engine and its chain (the engine is not configurable on
-   its own):
-   - DTLN-AEC 128        dual-LSTM core — the default: best echo
-     + reverb handling, its own noise removal (16 kHz).
-   - WebRTC AEC3         the Chrome canceller — reliable,
-     well-tested baseline (16 kHz, 48 kHz optional).
-   - NKF-AEC             tiny Kalman core — for weak CPUs
+4. Pick an engine at the top of the Audio tab — the label shows the
+   engine and its chain (the engine is not configurable on its own):
+   - DTLN-AEC 128        dual-LSTM echo canceller — the default:
+     best echo + noise handling, with DTLN-NS noise suppression
      (16 kHz).
+   - WebRTC AEC3         the Chrome canceller — reliable, well-tested
+     baseline, strongest canceller + DTLN-NS (16 kHz, 48 kHz optional).
+   - NKF-AEC             tiny neural Kalman core — for weak CPUs,
+     with WPE dereverb + adaptive notch (16 kHz).
+   WebRTC AEC3 and NKF-AEC are experimental: hidden by default.
+   Tick "Show experimental engines" on the Appearance tab to reveal
+   them; unticking falls back to DTLN-AEC 128.
 
-5. Optional: two ticks under the profile control the post chain —
-   "Dereverb (WPE)" (eats reverb tails, ~32 ms delay) and
-   "Feedback suppression (notch)" (kills howling/ringing tones).
-   Both are ON by default for every profile, persist across
-   restarts, and are never reset by picking a profile; while
-   ticked the profile label reads "engine -> WPE -> Notch".
-   The sample rate under Advanced is also independent of the
-   profile.
+5. Post stages are engine-aware — only the stages that actually run
+   for the selected engine show as ticks (under the More panel):
+   - DTLN-AEC 128 / WebRTC AEC3: "Noise suppression (DTLN-NS)"
+     — a second DTLN pair that removes background noise.
+   - NKF-AEC: "Dereverb (WPE)" (eats reverb tails, ~32 ms delay) and
+     "Feedback suppression (notch)" (kills howling/ringing tones).
+   While ticked the profile label reads "engine -> NS" (DTLN/AEC3)
+   or "engine -> WPE -> Notch" (NKF). Switching engines resets each
+   stage to its default, so a tick left on for another engine can
+   never leak into a chain that doesn't run it.
+   The sample rate under More is also independent of the profile.
 
 6. Click Start. The status line shows the active chain, e.g.
-   "Running (16000 Hz, AEC3 + WPE + Notch)".
+   "Running (16000 Hz, DTLN-AEC + NS)".
 
 7. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)
@@ -59,9 +65,9 @@ QUICK START
 
 TIPS
 ----
-- CPU-sensitive? Try "NKF-AEC". DTLN/AEC3/NKF are all usually
-  well under 2% on a typical desktop; the WPE + notch post stages
-  add a fraction of a percent.
+- CPU-sensitive? Try "NKF-AEC". DTLN/AEC3/NKF are all usually well
+  under 2% on a typical desktop; the post stages add a fraction of a
+  percent.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
   loops your voice back into the mic — NKF adapts live and is the most
   sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
@@ -84,7 +90,7 @@ TROUBLESHOOTING
 ---------------
 - "No devices found": click Refresh in the Devices section.
 - App won't start: make sure all DLLs are in the same folder as the .exe.
-- Choppy audio: switch to the 16000 sample rate under Advanced.
+- Choppy audio: switch to the 16000 sample rate under More.
 - DTLN quiet: it runs at 16 kHz only (auto-locked).
 
 LICENSE

@@ -1731,7 +1731,7 @@ void DrawAboutTab() {
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
     ImGui::BulletText("Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC)");
-    ImGui::BulletText("WPE dereverb + adaptive notch feedback suppression on top of echo removal");
+    ImGui::BulletText("Engine-aware post stages: DTLN-NS for DTLN/AEC3, WPE + notch for NKF");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
