@@ -67,6 +67,10 @@ target_link_libraries(aec_gui PRIVATE
 if(WIN32)
     set_target_properties(aec_gui PROPERTIES WIN32_EXECUTABLE TRUE)
     target_link_libraries(aec_gui PRIVATE imm32 ole32 uuid winmm shell32)
+    # Strip debug symbols: smaller exe, no .pdb, less metadata for
+    # scanners to latch onto.
+    set_target_properties(aec_gui PROPERTIES
+        CMAKE_EXE_LINKER_FLAGS "-s")
 endif()
 
 # ============================================================
