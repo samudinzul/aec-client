@@ -42,6 +42,7 @@ add_executable(aec_gui
     src/dtln_ns_wrapper.cpp
     src/wpe.cpp
     src/notch.cpp
+    version.rc
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
     # stale against NKFImpl.h and crashed the app on first ProcessBlock
     # (member offsets shifted). No separate DLL build anymore.
