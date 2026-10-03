@@ -100,11 +100,20 @@ Done. Talk normally with speakers on.
 > Every release is built straight from the public source in this repo
 > — audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
 >
-> **VirusTotal false positives.** The `Wacatac.B!ml` flag is a Microsoft
-> heuristic that fires on unsigned PE binaries that bundle ML runtimes
-> (ONNX Runtime + TFLite) — it is not malware. Only a code-signing
-> certificate clears it. See [Signing releases](#signing-releases)
-> below.
+> **VirusTotal false positive.** Microsoft's `Wacatac.B!ml` heuristic
+> flags this build as a trojan. It is a false positive: the heuristic
+> keys on unsigned PE binaries that bundle ML runtimes (ONNX Runtime +
+> TFLite), and this app legitimately uses both for echo cancellation
+> and noise suppression. Only 1 of 71 vendors flagged it; the other 70
+> did not. Click **More info → Run anyway** and it runs normally.
+>
+> **Why it's flagged.** The app is unsigned, and signing is the only
+> fix. A code-signing certificate costs ~$200–400/yr, and the free
+> Microsoft route (Azure Artifact Signing) requires US/Canada residency
+> for individual developers — neither is available for this personal
+> build. Signing instructions are in [Signing releases](#signing-releases)
+> if that ever changes. The build otherwise uses the stock MSYS2 UCRT64
+> MinGW-w64 toolchain, unchanged.
 
 ---
 
