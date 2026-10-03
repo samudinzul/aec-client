@@ -38,23 +38,6 @@
 #include <mutex>
 #include <vector>
 #include <string>
-
-// Heuristic-bypass padding: AI scanners flag small MinGW executables
-// for packing too much functionality into too little code. Adding
-// harmless text at global scope dilutes the suspicious density and
-// shifts the data segment balance, which sometimes drops the
-// Wacatac / susgen pattern match. It is junk data — not a substitute
-// for code signing, which is still the only reliable fix.
-const char* DEFENDER_BYPASS_BUFFER[] = {
-    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. "
-    "Sed do eiusmod tempor incididunt ut labore et dolore magna.",
-    "The quick brown fox jumps over the lazy dog. Programming an "
-    "open-source audio client with CMake, Ninja, and MinGW-w64.",
-    "Standard system string allocation buffer sequence to verify "
-    "binary structure integrity inside the Windows environment.",
-    "Adding more lines of pure text content so the file size scales "
-    "naturally and breaks the static ML layout signatures.",
-};
 #include <atomic>
 #include <fstream>
 #include <filesystem>
