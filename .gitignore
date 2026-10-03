@@ -66,3 +66,4 @@ imgui.ini
 .opencodeignore
 opencode.json
 __pycache__/
+.venv/
