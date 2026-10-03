@@ -99,6 +99,42 @@ Done. Talk normally with speakers on.
 > your PC"**. This is expected: click **More info → Run anyway**.
 > Every release is built straight from the public source in this repo
 > — audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
+>
+> **VirusTotal false positives.** The `Wacatac.B!ml` flag is a Microsoft
+> heuristic that fires on unsigned PE binaries that bundle ML runtimes
+> (ONNX Runtime + TFLite) — it is not malware. Only a code-signing
+> certificate clears it. See [Signing releases](#signing-releases)
+> below.
+
+---
+
+## Signing releases
+
+The release ZIP is **unsigned by default**. Unsigned binaries with
+bundled ML runtimes trip Microsoft's `Wacatac.B!ml` heuristic, which
+shows up as a false positive on VirusTotal and in Windows Defender.
+
+**A code-signing certificate is the only fix.** Two routes:
+
+- **Paid** — DigiCert or Sectigo EV code-signing cert (~$200–400/yr).
+- **Free** — Microsoft **Trusted Signing** (Azure account, no cost).
+  Sign with the `az signtool` flow or `signtool sign /f <cert.pfx>`.
+
+To sign a release, rebuild and re-zip with signing enabled:
+
+```bash
+# 1. Install the cert in your cert store (or keep the .pfx)
+# 2. Rebuild:  rm -rf build && cmake -B build -G Ninja && cmake --build build
+# 3. Sign + zip:
+AEC_SIGN=1 \
+AEC_CERT_SHA1="<your cert thumbprint>" \
+AEC_TIMESTAMP_URL="http://timestamp.digicert.com" \
+scripts/make-release.sh 1.10.1
+```
+
+The `AEC_SIGN` flag is off by default — releases stay unsigned until you
+have a cert. The signing step runs after the zip asserts, so a failed
+sign does not ship an unsigned build.
 
 ---
 

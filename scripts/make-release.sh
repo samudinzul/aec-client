@@ -99,6 +99,31 @@ assert not bad, f'forbidden files in zip: {bad}'
 print(f'zip entries: {len(names)}, single root OK, no strays')
 "
 
+# ============================================================
+#  Code signing (optional, off by default).
+#
+#  The unsigned build trips Microsoft's Wacatac.B!ml heuristic
+#  (unsigned PE + bundled ML runtimes). A code-signing certificate
+#  is the only fix. Set AEC_SIGN=1 to enable; you must also have
+#  the cert installed in your cert store and signtool on PATH.
+#
+#  Two routes:
+#    Paid — DigiCert / Sectigo EV code-signing cert (~$200-400/yr).
+#    Free — Microsoft Trusted Signing (Azure account, no cost):
+#          signtool sign /f <cert.pfx> /p <password> ...
+#          or the az signtool flow. See README.md.
+# ============================================================
+if [ "${AEC_SIGN:-0}" = "1" ]; then
+    if ! command -v signtool >/dev/null; then
+        echo "AEC_SIGN=1 but signotool not found; skipping signing" >&2
+    else
+        signtool sign /v /sha1 "${AEC_CERT_SHA1:-}" \
+            /t "${AEC_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
+            "$STAGE/aec_gui.exe"
+        echo "signed aec_gui.exe"
+    fi
+fi
+
 echo "----"
 du -h "release/AEC-Client-v${VER}-win64.zip"
 sha256sum "release/AEC-Client-v${VER}-win64.zip"
