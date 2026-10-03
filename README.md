@@ -114,6 +114,19 @@ Done. Talk normally with speakers on.
 > build. Signing instructions are in [Signing releases](#signing-releases)
 > if that ever changes. The build otherwise uses the stock MSYS2 UCRT64
 > MinGW-w64 toolchain, unchanged.
+>
+> **If Windows Defender deletes the file.** On some machines Defender
+> quarantines or deletes the exe outright instead of showing the
+> warning screen. Run PowerShell **as Administrator** and add an
+> exclusion for the folder you extracted the ZIP into:
+>
+> ```powershell
+> Add-MpPreference -ExclusionPath "C:\path\to\AEC-Client-v1.10.1-win64"
+> ```
+>
+> Then extract the ZIP into that folder and run `aec_gui.exe` normally.
+> The exclusion persists until removed (Windows Security → Virus &
+> threat protection → Manage settings → Exclusions → Add/remove).
 
 ---
 
