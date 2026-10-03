@@ -77,7 +77,7 @@ Open http://localhost:8000 — that page IS the GUI.
 | `dtln.py` | DTLN-AEC engine + LiteRT backend | `DtlnNew/Process/Reset` |
 | `dtln_ns.py` | DTLN-NS stage + ring + stats | `DtlnNsNew/Process/Stats` |
 | `chain.py` | DTLN → NS stacking, fail-open | `main.cpp` frame pump |
-| `audio.py` | sounddevice mic/CABLE I/O + pyaudiowpatch WASAPI-loopback ref (resampled to 16 kHz) | desktop device model |
+| `audio.py` | pyaudiowpatch mic/loopback/CABLE I/O at native rates, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |
 | `ui/index.html` | The GUI | — |
 | `test_offline.py` | WAV-in → WAV-out fidelity harness | — |

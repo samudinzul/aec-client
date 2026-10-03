@@ -9,7 +9,9 @@
 
 fastapi>=0.110        # REST + WebSocket server
 uvicorn>=0.29         # ASGI server (run: python server.py)
-numpy>=1.26           # DSP: rfft/irfft framing, OLA, meters
+websockets>=13        # WebSocket transport for uvicorn (meters would 404 without it)
+numpy>=1.26           # DSP: rfft/irfft framing, OLA, resampling, meters
 ai-edge-litert>=2.2   # Google LiteRT: runs the .tflite DTLN pairs directly
-sounddevice>=0.5      # PortAudio: mic capture, CABLE out
-pyaudiowpatch>=0.2.12 # WASAPI loopback reference (sounddevice exposes no loopback API)
+pyaudiowpatch>=0.2.12 # PortAudio fork: mic in, WASAPI-loopback ref, CABLE out
+                      # (single audio backend; sounddevice sees no loopback
+                      # and its bundled PortAudio blanked real hardware)

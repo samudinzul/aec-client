@@ -60,19 +60,18 @@ async function loadDevices() {
     if (d.errors && (d.errors.audio || d.errors.loopback))
       $('err').textContent = ['devices:',
         d.errors.audio || '', d.errors.loopback || ''].join(' ').trim();
-    const fill = (sel, list, isOut) => {
+    const fill = (sel, list, defIdx) => {
       const s = $(sel); s.innerHTML = '';
       (list || []).forEach(x => {
         const o = document.createElement('option');
         o.value = x.index; o.textContent = x.name; s.appendChild(o);
       });
-      const pick = (list || []).findIndex(x => isOut
-        ? /cable input/i.test(x.name) : /default/i.test(x.name));
-      if (pick >= 0) s.selectedIndex = pick;
+      const at = (list || []).findIndex(x => x.index === defIdx);
+      if (at >= 0) s.selectedIndex = at;
     };
-    fill('mic', d.capture, false);
-    fill('ref', d.loopback, false);
-    fill('out', d.playback, true);
+    fill('mic', d.capture, d.defaults && d.defaults.mic);
+    fill('ref', d.loopback, d.defaults && d.defaults.ref);
+    fill('out', d.playback, d.defaults && d.defaults.out);
     savePrefs();
   } catch (e) {
     $('err').textContent = 'devices: could not reach server (' + e.message + ')';

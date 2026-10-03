@@ -91,3 +91,24 @@ def resample_to_16k(pcm_i16: np.ndarray, rate: int) -> np.ndarray:
     src = np.linspace(0, 1, x.size)
     dst = np.linspace(0, 1, want)
     return np.interp(dst, src, x).astype(np.float32)
+
+
+def resample_from_16k(frame_f32: np.ndarray, rate: int) -> np.ndarray:
+    """16 kHz float32 -> native-rate float32 (mic input down, cable up)."""
+    x = np.asarray(frame_f32, dtype=np.float32)
+    if rate == SAMPLE_RATE or x.size == 0:
+        return x
+    if rate == 48000:
+        # x3 polyphase: zero-stuff + the same 61-tap lowpass, gain x3.
+        taps = 61
+        n = np.arange(taps) - taps // 2
+        fc = 7000.0 / 48000.0
+        h = np.sinc(2 * fc * n) * (0.54 - 0.46 * np.cos(2 * np.pi * (n + taps // 2) / (taps - 1)))
+        h = (h / h.sum()) * 3.0
+        up = np.zeros(x.size * 3, dtype=np.float64)
+        up[::3] = x.astype(np.float64)
+        return np.convolve(up, h, mode="same").astype(np.float32)
+    want = int(round(x.size * rate / SAMPLE_RATE))
+    if want <= 0:
+        return np.zeros(0, dtype=np.float32)
+    return np.interp(np.linspace(0, 1, want), np.linspace(0, 1, x.size), x).astype(np.float32)
