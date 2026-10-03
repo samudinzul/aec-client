@@ -117,16 +117,16 @@ Done. Talk normally with speakers on.
 >
 > **If Windows Defender deletes the file.** On some machines Defender
 > quarantines or deletes the exe outright instead of showing the
-> warning screen. Run PowerShell **as Administrator** and add an
-> exclusion for the folder you extracted the ZIP into:
+> warning screen. Extract the ZIP to any folder, open PowerShell
+> **as Administrator** in that folder, and add an exclusion:
 >
 > ```powershell
-> Add-MpPreference -ExclusionPath "C:\path\to\AEC-Client-v1.10.1-win64"
+> Add-MpPreference -ExclusionPath "."
 > ```
 >
-> Then extract the ZIP into that folder and run `aec_gui.exe` normally.
-> The exclusion persists until removed (Windows Security → Virus &
-> threat protection → Manage settings → Exclusions → Add/remove).
+> Then run `aec_gui.exe` normally. The exclusion persists until removed
+> (Windows Security → Virus & threat protection → Manage settings →
+> Exclusions → Add/remove).
 
 ---
 
