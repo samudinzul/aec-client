@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aec-web — AEC Client</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #14171c; color: #e8e8e8;
+         margin: 0; padding: 24px; }
+  .card { background: #1d2127; border-radius: 12px; padding: 18px 20px;
+          max-width: 640px; margin: 0 auto 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 small { color: #8b93a1; font-weight: normal; }
+  label { display: block; margin: 10px 0 4px; color: #aab2c0; font-size: 13px; }
+  select, button { font-size: 15px; padding: 8px 10px; border-radius: 8px;
+                   border: 1px solid #3a4048; background: #262b33; color: #eee;
+                   width: 100%; box-sizing: border-box; }
+  button { cursor: pointer; margin-top: 12px; font-weight: bold; }
+  #startBtn { background: #1f6f43; border-color: #2a9d5c; }
+  #startBtn.running { background: #8a2f2f; border-color: #c04545; }
+  canvas { width: 100%; height: 64px; background: #101318; border-radius: 8px; }
+  #status { font-size: 14px; color: #9fd3a8; margin-top: 8px; min-height: 20px; }
+  #err { font-size: 14px; color: #ff9d9d; margin-top: 8px; white-space: pre-wrap; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  .hint { font-size: 12px; color: #8b93a1; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>aec-web <small>v1.10.1 · DTLN-AEC 128 + DTLN-NS · 16 kHz</small></h1>
+  <label>Microphone</label><select id="mic"></select>
+  <label>Speaker Reference (system audio loopback)</label><select id="ref"></select>
+  <label>Output (CABLE Input)</label><select id="out"></select>
+  <button id="startBtn">Start</button>
+  <div id="status">Stopped.</div>
+  <div id="err"></div>
+</div>
+<div class="card">
+  <div class="row">
+    <div><label>Mic in</label><canvas id="mIn" width="280" height="64"></canvas></div>
+    <div><label>Clean out (what Discord hears)</label><canvas id="mOut" width="280" height="64"></canvas></div>
+  </div>
+  <div class="hint">Meters update ~10 Hz over WebSocket. Output routes to the virtual cable;
+  in Discord pick <b>CABLE Output</b> as input. Nothing here is signed or scanned —
+  this page is served by a plain Python script on your own machine.</div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const api = (m, p, b) => fetch(p, {method: m,
+  headers: b ? {'Content-Type': 'application/json'} : undefined,
+  body: b ? JSON.stringify(b) : undefined}).then(r => r.json());
+let running = false, peakIn = 0, peakOut = 0;
+
+async function loadDevices() {
+  const d = await api('GET', '/api/devices');
+  if (d.error) { $('err').textContent = 'devices: ' + d.error; return; }
+  const fill = (sel, list, isOut) => {
+    const s = $(sel); s.innerHTML = '';
+    list.forEach(x => {
+      const o = document.createElement('option');
+      o.value = x.index; o.textContent = x.name; s.appendChild(o);
+    });
+    const pick = list.findIndex(x => isOut
+      ? /cable input/i.test(x.name) : /default/i.test(x.name));
+    if (pick >= 0) s.selectedIndex = pick;
+  };
+  fill('mic', d.capture, false);
+  fill('ref', d.playback, false);
+  fill('out', d.playback, true);
+  savePrefs();
+}
+function savePrefs() {
+  api('POST', '/api/prefs', {mic: +$('mic').value || null,
+    ref: +$('ref').value || null, out: +$('out').value || null});
+}
+['mic','ref','out'].forEach(id => $(id).addEventListener('change', savePrefs));
+
+$('startBtn').onclick = async () => {
+  savePrefs();
+  const r = running ? await api('POST', '/api/stop')
+                    : await api('POST', '/api/start');
+  if (!r.ok) { $('err').textContent = r.error || 'failed'; return; }
+  $('err').textContent = r.state.error || r.state.ns.error || '';
+  setRunning(r.state.running, r.state);
+};
+function setRunning(on, st) {
+  running = on;
+  $('startBtn').textContent = on ? 'Stop' : 'Start';
+  $('startBtn').classList.toggle('running', on);
+  $('status').textContent = on
+    ? `Running (16000 Hz, ${st.chain || 'DTLN-AEC'})`
+    : 'Stopped.';
+}
+function meter(id, v, peak) {
+  const c = $(id), g = c.getContext('2d');
+  const w = c.width, h = c.height;
+  g.clearRect(0, 0, w, h);
+  const lvl = Math.min(1, v * 4), pk = Math.min(1, peak * 4);
+  g.fillStyle = '#2a9d5c'; g.fillRect(0, h - lvl * h, w, lvl * h);
+  g.fillStyle = '#ffd75e'; g.fillRect(0, h - pk * h - 2, w, 2);
+}
+const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.onmessage = ev => {
+  const st = JSON.parse(ev.data);
+  if (st.running !== running) setRunning(st.running, st);
+  if (!st.running) return;
+  peakIn = Math.max(st.inRms || 0, peakIn * 0.995);
+  peakOut = Math.max(st.outRms || 0, peakOut * 0.995);
+  meter('mIn', st.inRms || 0, peakIn);
+  meter('mOut', st.outRms || 0, peakOut);
+  $('status').textContent =
+    `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
+    (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
+  if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
+};
+loadDevices();
+</script>
+</body>
+</html>

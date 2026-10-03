@@ -1,0 +1,14 @@
+# aec-web requirements — pure-Python stack, zero compiled artifacts of our own.
+# Install:  pip install -r requirements.txt   (Python 3.10+ on Windows)
+#
+# AV note: every package here is a mainstream, reputable wheel
+# (Microsoft-scale reputation). Nothing we ship is a PE binary, so
+# the Wacatac.B!ml / susgen unsigned-ML-binary heuristics have no
+# target. Do NOT freeze this into a PyInstaller/Nuitka exe — that
+# reintroduces the exact problem this project exists to dodge.
+
+fastapi>=0.110        # REST + WebSocket server
+uvicorn>=0.29         # ASGI server (run: python server.py)
+numpy>=1.26           # DSP: rfft/irfft framing, OLA, meters
+ai-edge-litert>=2.2   # Google LiteRT: runs the .tflite DTLN pairs directly
+sounddevice>=0.5      # PortAudio: mic capture, WASAPI loopback ref, CABLE out
