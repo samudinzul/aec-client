@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE MinSizeRel)
+    set(CMAKE_BUILD_TYPE Release)
 endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -68,10 +68,11 @@ target_link_libraries(aec_gui PRIVATE
 if(WIN32)
     set_target_properties(aec_gui PROPERTIES WIN32_EXECUTABLE TRUE)
     target_link_libraries(aec_gui PRIVATE imm32 ole32 uuid winmm shell32)
-    # Strip debug symbols: smaller exe, no .pdb, less metadata for
-    # scanners to latch onto.
+    # Strip debug symbols (smaller exe, no .pdb) and target the
+    # Windows GUI subsystem: this app has a window and system tray,
+    # so it should not attach a console window on launch.
     set_target_properties(aec_gui PROPERTIES
-        CMAKE_EXE_LINKER_FLAGS "-s")
+        CMAKE_EXE_LINKER_FLAGS "-s -mwindows")
 endif()
 
 # ============================================================
