@@ -3,6 +3,32 @@ AEC Client v%%VERSION%%
 
 Real-time acoustic echo cancellation for Windows.
 
+> **IMPORTANT — READ THIS BEFORE DOUBLE-CLICKING aec_gui.exe**
+>
+> This app is unsigned, and Microsoft's `Wacatac.B!ml` heuristic flags
+> it as a trojan. It is a false positive — the heuristic keys on
+> unsigned Windows executables that bundle ML runtimes (ONNX Runtime
+> + TFLite), and this app legitimately uses both for echo cancellation
+> and noise suppression. Only 1 of 71 antivirus vendors flagged it.
+>
+> What you'll see depends on your machine:
+>
+> - **A warning screen** ("Windows protected your PC") → click
+>   **More info → Run anyway**.
+> - **Windows Defender deletes the file** → extract the ZIP to any
+>   folder, open PowerShell **as Administrator** in that folder, and
+>   run:
+>
+>   ```
+>   Add-MpPreference -ExclusionPath "."
+>   ```
+>
+>   Then run aec_gui.exe normally.
+>
+> The app works fine once allowed. This warning is not malware — it's
+> the cost of not paying for a code-signing certificate (~$200/yr).
+> Source: https://github.com/samudinzul/aec-client
+
 WHAT IT DOES
 ------------
 Routes your microphone through a processing profile (echo canceller +
