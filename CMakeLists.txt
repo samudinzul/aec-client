@@ -76,14 +76,16 @@ if(WIN32)
 endif()
 
 # ============================================================
-#  ONNX Runtime — official Microsoft build (v1.29.0), vendored and
-#  UPX-compressed (~4.9 MB). Replaces the MSYS2 build (27.5 MB) and
+#  ONNX Runtime — official Microsoft build (v1.29.0), vendored
+#  uncompressed (~16 MB). Replaces the MSYS2 build (27.5 MB) and
 #  its 97-DLL absl/onnx/protobuf/re2 dependency cluster.
+#  Uncompressed on purpose: UPX-packing trips the MaxSecure/susgen
+#  heuristic, so the raw vendor DLL ships instead.
 #  Provenance: LICENSES/THIRD-PARTY.txt
 # ============================================================
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll")
     message(FATAL_ERROR
-        "libs/onnxruntime.dll missing — vendored Microsoft onnxruntime 1.29.0 (UPX-compressed)")
+        "libs/onnxruntime.dll missing — vendored Microsoft onnxruntime 1.29.0 (uncompressed)")
 endif()
 
 # ============================================================

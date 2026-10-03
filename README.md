@@ -205,7 +205,7 @@ The release ZIP bundles all required DLLs:
 |------|------|---------|
 | `aec_gui.exe` | ~2.4 MB | Main application (includes the NKF neural engine) |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 + high-pass filter |
-| `onnxruntime.dll` | ~4.9 MB | Neural inference (NKF, DTLN ONNX fallback; official MS build, UPX-compressed) |
+| `onnxruntime.dll` | ~16 MB | Neural inference (NKF, DTLN ONNX fallback; official MS build, uncompressed) |
 | `msvcp140/vcruntime140*.dll` | ~900 KB | VC++ 14 runtime (required by onnxruntime.dll) |
 | `tensorflowlite_c.dll` | ~4.5 MB | TFLite runtime for DTLN (primary path) |
 | `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |

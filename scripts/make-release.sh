@@ -71,12 +71,12 @@ if ls "$STAGE"/models/dtln_aec_512_* >/dev/null 2>&1; then
 fi
 test -f "$STAGE/README.txt" || { echo "missing README.txt" >&2; fail=1; }
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
-# Slim-runtime contract: vendored MS onnxruntime (UPX-compressed) + its
+# Slim-runtime contract: vendored MS onnxruntime (uncompressed) + its
 # VC++ runtime; the old 27.5 MB MSYS2 build / absl cluster must not return.
 test -f "$STAGE/onnxruntime.dll" || { echo "missing onnxruntime.dll" >&2; fail=1; }
 ort_sz=$(stat -c %s "$STAGE/onnxruntime.dll" 2>/dev/null || echo 0)
-if [ "$ort_sz" -ge 16000000 ]; then
-    echo "onnxruntime.dll is ${ort_sz}B (>16MB) — MSYS2 build leaked in?"; fail=1
+if [ "$ort_sz" -ge 25000000 ]; then
+    echo "onnxruntime.dll is ${ort_sz}B (>25MB) — MSYS2 build leaked in?"; fail=1
 fi
 for d in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
     test -f "$STAGE/$d" || { echo "missing VC++ runtime: $d" >&2; fail=1; }
