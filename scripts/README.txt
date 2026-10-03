@@ -5,11 +5,12 @@ Real-time acoustic echo cancellation for Windows.
 
 > **IMPORTANT — READ THIS BEFORE DOUBLE-CLICKING aec_gui.exe**
 >
-> This app is unsigned, and Microsoft's `Wacatac.B!ml` heuristic flags
-> it as a trojan. It is a false positive — the heuristic keys on
-> unsigned Windows executables that bundle ML runtimes (ONNX Runtime
-> + TFLite), and this app legitimately uses both for echo cancellation
-> and noise suppression. Only 1 of 71 antivirus vendors flagged it.
+> This app is unsigned, and two heuristics flag it: Microsoft
+> `Wacatac.B!ml` and MaxSecure `Trojan.Malware.300983.susgen`. Both are
+> false positives — they key on unsigned Windows executables that bundle
+> ML runtimes (ONNX Runtime + TFLite), and this app legitimately uses both
+> for echo cancellation and noise suppression. Only 2 of 71 antivirus
+> vendors flagged it.
 >
 > What you'll see depends on your machine:
 >
