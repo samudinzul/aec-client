@@ -1,14 +1,19 @@
-"""Audio I/O — sounddevice streams mirroring the desktop device model.
+"""Audio I/O — mic + loopback reference + virtual-cable output.
 
-- Mic: InputStream on the selected capture device (int16, mono, 16 kHz)
-- Reference: InputStream on the selected *output* device with
-  WASAPI loopback (delivers silence when speakers are idle — same as
-  the desktop ref-ring-underflow path)
-- Output: OutputStream to the virtual cable (CABLE Input)
+Device model (mirrors the desktop app):
+- Mic: sounddevice InputStream on the selected capture device
+  (int16, mono, 16 kHz, callback -> queue).
+- Reference: pyaudiowpatch WASAPI-loopback input on the selected
+  loopback endpoint, read in a feeder thread and resampled to 16 kHz.
+  Loopback delivers silence when speakers are idle — same as the
+  desktop ref-ring-underflow path. (python-sounddevice exposes no
+  loopback API at all, hence the second library; both are mainstream
+  reputable PyPI wheels, no PE of our own either way.)
+- Output: sounddevice OutputStream to the virtual cable.
 
-A worker thread assembles 160-sample frames, runs them through the
-chain, and feeds the output callback. Callbacks never block: input
-overflow drops (like a ring overrun), output underflow emits silence.
+The worker thread assembles 160-sample frames, runs the chain, and
+feeds the output callback. Callbacks never block: input overflow
+drops (like a ring overrun), output underflow emits silence.
 """
 
 import queue
@@ -21,7 +26,12 @@ try:
 except ImportError:  # pragma: no cover
     sd = None
 
-from .dsp import FRAME_SIZE, SAMPLE_RATE, rms
+try:
+    import pyaudiowpatch as pa_patch
+except ImportError:  # pragma: no cover
+    pa_patch = None
+
+from .dsp import FRAME_SIZE, SAMPLE_RATE, resample_to_16k, rms
 
 _Q_DEPTH = 64
 
@@ -32,29 +42,57 @@ def _need_sd():
 
 
 def list_devices():
-    """Capture + playback device lists in the desktop app's shape."""
-    _need_sd()
-    devs = sd.query_devices()
-    caps, plays = [], []
-    for i, d in enumerate(devs):
-        entry = {
-            "index": i,
-            "name": d["name"],
-            "hostapi": sd.query_hostapis(d["host_api"])["name"],
-            "maxInputChannels": d["max_input_channels"],
-            "maxOutputChannels": d["max_output_channels"],
-            "defaultSamplerate": d["default_samplerate"],
-        }
-        if d["max_input_channels"] > 0:
-            caps.append(entry)
-        if d["max_output_channels"] > 0:
-            plays.append(entry)
-    return {"capture": caps, "playback": plays}
+    """Capture + loopback + playback lists; per-source errors included.
+
+    Never raises: a dead source yields an empty list plus an error
+    string, so one broken backend can't blank the whole UI.
+    """
+    out = {"capture": [], "loopback": [], "playback": [], "errors": {}}
+    if sd is None:
+        out["errors"]["audio"] = "sounddevice is not installed"
+    else:
+        try:
+            for i, d in enumerate(sd.query_devices()):
+                entry = {
+                    "index": i,
+                    "name": d["name"],
+                    "hostapi": sd.query_hostapis(d["host_api"])["name"],
+                    "maxInputChannels": d["max_input_channels"],
+                    "maxOutputChannels": d["max_output_channels"],
+                }
+                if d["max_input_channels"] > 0:
+                    out["capture"].append(entry)
+                if d["max_output_channels"] > 0:
+                    out["playback"].append(entry)
+        except Exception as e:  # pragma: no cover
+            out["errors"]["audio"] = f"device query failed: {e}"
+    if pa_patch is None:
+        out["errors"]["loopback"] = "pyaudiowpatch is not installed"
+    else:
+        try:
+            pa = pa_patch.PyAudio()
+            try:
+                for info in pa.get_loopback_device_info_generator():
+                    out["loopback"].append({
+                        "index": info["index"],
+                        "name": info["name"],
+                        "defaultSamplerate": info.get("defaultSampleRate"),
+                    })
+            finally:
+                pa.terminate()
+        except Exception as e:  # pragma: no cover
+            out["errors"]["loopback"] = f"loopback query failed: {e}"
+    return out
 
 
 class AudioRunner:
+    """Streams + worker pump. ref_idx is a pyaudiowpatch loopback index."""
+
     def __init__(self, chain, mic_idx=None, ref_idx=None, out_idx=None):
         _need_sd()
+        if pa_patch is None:
+            raise RuntimeError("pyaudiowpatch is not installed "
+                               "(pip install pyaudiowpatch)")
         self.chain = chain
         self.mic_idx = mic_idx
         self.ref_idx = ref_idx
@@ -64,21 +102,19 @@ class AudioRunner:
         self._out_q = queue.Queue(maxsize=_Q_DEPTH)
         self._stop = threading.Event()
         self._worker = None
+        self._ref_thread = None
+        self._pa = None
+        self._pa_stream = None
         self._streams = []
         self.in_rms = 0.0
         self.out_rms = 0.0
 
+    # -- sounddevice callbacks (mic in, cable out) --
     def _mic_cb(self, indata, frames, time, status):
         try:
             self._in_q.put_nowait(np.asarray(indata[:, 0], dtype=np.int16).copy())
         except queue.Full:
             pass  # input overrun: drop, like a ring overrun
-
-    def _ref_cb(self, indata, frames, time, status):
-        try:
-            self._ref_q.put_nowait(np.asarray(indata[:, 0], dtype=np.int16).copy())
-        except queue.Full:
-            pass
 
     def _out_cb(self, outdata, frames, time, status):
         try:
@@ -86,6 +122,31 @@ class AudioRunner:
         except queue.Empty:
             frame = np.zeros(frames, dtype=np.int16)  # underflow: silence
         outdata[:, 0] = frame[:frames]
+
+    # -- loopback feeder (blocking reads, resampled to 16 kHz) --
+    def _ref_feed(self):
+        rate = int(self._pa_rate)
+        chunk = max(FRAME_SIZE, int(rate * 0.02))  # ~20 ms reads
+        carry = np.zeros(0, dtype=np.float32)
+        while not self._stop.is_set():
+            try:
+                raw = self._pa_stream.read(chunk, exception_on_overflow=False)
+            except Exception:
+                if self._stop.is_set():
+                    break
+                continue
+            pcm = np.frombuffer(raw, dtype=np.int16)
+            if pcm.size == 0:
+                continue
+            f = resample_to_16k(pcm, rate)
+            carry = np.concatenate([carry, f])
+            while len(carry) >= FRAME_SIZE:
+                try:
+                    self._ref_q.put_nowait(
+                        (carry[:FRAME_SIZE] * 32767.0).astype(np.int16))
+                except queue.Full:
+                    pass
+                carry = carry[FRAME_SIZE:]
 
     def _pump(self, mic, ref):
         cleaned = self.chain.process_frame(mic, ref)
@@ -114,16 +175,22 @@ class AudioRunner:
                 ref_buf = ref_buf[FRAME_SIZE:]
 
     def start(self):
+        self._pa = pa_patch.PyAudio()
+        info = self._pa.get_device_info_by_index(int(self.ref_idx))
+        self._pa_rate = int(info.get("defaultSampleRate", 48000) or 48000)
+        self._pa_stream = self._pa.open(
+            format=pa_patch.paInt16, channels=1, rate=self._pa_rate,
+            input=True, input_device_index=int(self.ref_idx),
+            frames_per_buffer=0)
         kw = dict(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
                   blocksize=FRAME_SIZE)
         mic = sd.InputStream(device=self.mic_idx, callback=self._mic_cb, **kw)
-        loop = sd.WasapiSettings(loopback=True)
-        ref = sd.InputStream(device=self.ref_idx, callback=self._ref_cb,
-                             extra_settings=loop, **kw)
         out = sd.OutputStream(device=self.out_idx, callback=self._out_cb, **kw)
-        self._streams = [mic, ref, out]
+        self._streams = [mic, out]
         self._stop.clear()
+        self._ref_thread = threading.Thread(target=self._ref_feed, daemon=True)
         self._worker = threading.Thread(target=self._work, daemon=True)
+        self._ref_thread.start()
         self._worker.start()
         for s in self._streams:
             s.start()
@@ -137,6 +204,22 @@ class AudioRunner:
             except Exception:
                 pass
         self._streams = []
+        try:
+            if self._pa_stream is not None:
+                self._pa_stream.stop_stream()
+                self._pa_stream.close()
+        except Exception:
+            pass
+        self._pa_stream = None
+        try:
+            if self._pa is not None:
+                self._pa.terminate()
+        except Exception:
+            pass
+        self._pa = None
+        if self._ref_thread is not None:
+            self._ref_thread.join(timeout=1.0)
+            self._ref_thread = None
         if self._worker is not None:
             self._worker.join(timeout=1.0)
             self._worker = None

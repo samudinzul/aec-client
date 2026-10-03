@@ -54,22 +54,29 @@ const api = (m, p, b) => fetch(p, {method: m,
 let running = false, peakIn = 0, peakOut = 0;
 
 async function loadDevices() {
-  const d = await api('GET', '/api/devices');
-  if (d.error) { $('err').textContent = 'devices: ' + d.error; return; }
-  const fill = (sel, list, isOut) => {
-    const s = $(sel); s.innerHTML = '';
-    list.forEach(x => {
-      const o = document.createElement('option');
-      o.value = x.index; o.textContent = x.name; s.appendChild(o);
-    });
-    const pick = list.findIndex(x => isOut
-      ? /cable input/i.test(x.name) : /default/i.test(x.name));
-    if (pick >= 0) s.selectedIndex = pick;
-  };
-  fill('mic', d.capture, false);
-  fill('ref', d.playback, false);
-  fill('out', d.playback, true);
-  savePrefs();
+  try {
+    const d = await api('GET', '/api/devices');
+    if (!d || !Array.isArray(d.capture)) throw new Error('bad device payload');
+    if (d.errors && (d.errors.audio || d.errors.loopback))
+      $('err').textContent = ['devices:',
+        d.errors.audio || '', d.errors.loopback || ''].join(' ').trim();
+    const fill = (sel, list, isOut) => {
+      const s = $(sel); s.innerHTML = '';
+      (list || []).forEach(x => {
+        const o = document.createElement('option');
+        o.value = x.index; o.textContent = x.name; s.appendChild(o);
+      });
+      const pick = (list || []).findIndex(x => isOut
+        ? /cable input/i.test(x.name) : /default/i.test(x.name));
+      if (pick >= 0) s.selectedIndex = pick;
+    };
+    fill('mic', d.capture, false);
+    fill('ref', d.loopback, false);
+    fill('out', d.playback, true);
+    savePrefs();
+  } catch (e) {
+    $('err').textContent = 'devices: could not reach server (' + e.message + ')';
+  }
 }
 function savePrefs() {
   api('POST', '/api/prefs', {mic: +$('mic').value || null,

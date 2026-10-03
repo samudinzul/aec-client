@@ -59,3 +59,35 @@ def rms(x: np.ndarray) -> float:
     if x.size == 0:
         return 0.0
     return float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
+
+
+def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
+    """48000 -> 16000: symmetric FIR lowpass (fc ~7 kHz) + take every 3rd.
+
+    Coefficients: windowed sinc, 61 taps, ~60 dB stopband. Reference
+    quality only needs aliasing below audibility-vs-AEC tolerance, and
+    this is far beyond that.
+    """
+    taps = 61
+    n = np.arange(taps) - taps // 2
+    fc = 7000.0 / 48000.0
+    h = np.sinc(2 * fc * n) * (0.54 - 0.46 * np.cos(2 * np.pi * (n + taps // 2) / (taps - 1)))
+    h = h / h.sum()
+    y = np.convolve(x.astype(np.float64), h, mode="same")
+    return y[::3].astype(np.float32)
+
+
+def resample_to_16k(pcm_i16: np.ndarray, rate: int) -> np.ndarray:
+    """Loopback capture (native mix rate) -> 16 kHz float32 reference."""
+    x = np.asarray(pcm_i16, dtype=np.float32) / 32768.0
+    if rate == SAMPLE_RATE or x.size == 0:
+        return x
+    if rate == 48000:
+        return _fir_decimate_3(x)
+    # Generic fallback: linear interpolation (reference-grade only).
+    want = int(round(x.size * SAMPLE_RATE / rate))
+    if want <= 0:
+        return np.zeros(0, dtype=np.float32)
+    src = np.linspace(0, 1, x.size)
+    dst = np.linspace(0, 1, want)
+    return np.interp(dst, src, x).astype(np.float32)
