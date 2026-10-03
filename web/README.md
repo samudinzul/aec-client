@@ -7,17 +7,16 @@ nothing for antivirus heuristics to flag.
 ## What you need first
 
 1. **Windows 10 or 11 (64-bit).**
-2. **Python 3.10, 3.11, 3.12, or 3.13** — must be installed *before*
+2. **Python 3.10 or newer** — must be installed *before*
    the first run (the starter script uses it to create a local
    environment). Install it with winget:
    ```powershell
    winget install -e --id Python.Python.3.12
    ```
    Close and reopen your terminal afterwards so `python` is on PATH.
-   Check with `python --version` (must print 3.10+; 3.12 recommended).
-   Python 3.14 is NOT supported yet — the audio packages have no
-   wheels for it. Python from the Microsoft Store also works but
-   winget is more reliable.
+   Check with `python --version` (3.12 recommended; 3.14 works too —
+   every package below ships wheels for it). Python from the
+   Microsoft Store also works but winget is more reliable.
 3. **VB-CABLE** (https://vb-audio.com/Cable/, free) — install and reboot.
 4. About 500 MB free disk (Python environment + packages + models).
 

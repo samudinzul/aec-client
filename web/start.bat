@@ -21,9 +21,9 @@ if not defined PY (
   echo %DATE% %TIME% no-python >> web\start.log
   pause & exit /b 1
 )
-%PY% -c "import sys; raise SystemExit(0 if (3,10) <= sys.version_info < (3,14) else 1)" >nul 2>&1
+%PY% -c "import sys; raise SystemExit(0 if (3,10) <= sys.version_info < (3,15) else 1)" >nul 2>&1
 if errorlevel 1 (
-  echo [aec-web] ERROR: Python 3.10-3.13 required. Found:
+  echo [aec-web] ERROR: Python 3.10-3.14 required. Found:
   %PY% --version
   echo [aec-web] Install 3.12: winget install -e --id Python.Python.3.12
   pause & exit /b 1
