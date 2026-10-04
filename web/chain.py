@@ -19,6 +19,11 @@ import numpy as np
 from . import dsp
 from .dtln import DtlnAec
 from .dtln_ns import DtlnNs
+from .notch import Notch
+from .speech_gate import SpeechGate
+
+# One frame is FRAME_SIZE samples at SAMPLE_RATE.
+FRAME_DUR_MS = 1000.0 * dsp.FRAME_SIZE / dsp.SAMPLE_RATE
 
 
 class Chain:
@@ -29,6 +34,13 @@ class Chain:
         self.running = False
         self.last_error = ""
         self.frames = 0
+        # Near-end speech gate + feedback-suppression
+        # notch (ports of the desktop app's post stages;
+        # the desktop runs the notch on the NKF path only,
+        # the web chain adds it to the DTLN path — it is
+        # engine-agnostic, fail-open DSP).
+        self.gate = SpeechGate()
+        self.notch = None
 
     def start(self):
         self.dtln = DtlnAec(f"{self.model_dir}/dtln_aec_128")
@@ -41,6 +53,8 @@ class Chain:
         self.ns = DtlnNs(f"{self.model_dir}/dtln_ns_128")
         # NS missing/broken is fail-open, not fatal — same as desktop:
         # the stage stays off and the engine output passes through.
+        self.notch = Notch(dsp.SAMPLE_RATE)
+        self.gate = SpeechGate()
         self.running = True
         self.frames = 0
         self.last_error = "" if self.ns.ready else self.ns.last_error
@@ -49,6 +63,8 @@ class Chain:
     def stop(self):
         self.dtln = None
         self.ns = None
+        self.notch = None
+        self.gate = SpeechGate()
         self.running = False
 
     def process_frame(self, mic_i16, ref_i16):
@@ -59,6 +75,12 @@ class Chain:
             return mic.copy()
         try:
             cleaned = self.dtln.process(mic, ref)
+            # Speech gate on the ENGINE output — never
+            # on the stages' own output, so a notch cut
+            # can't flip the gate that froze it.
+            self.gate.update(
+                dsp.rms(cleaned.astype(np.float32)),
+                FRAME_DUR_MS)
             if self.ns is not None and self.ns.ready:
                 f = cleaned.astype(np.float32) / 32768.0
                 try:
@@ -66,6 +88,18 @@ class Chain:
                 except Exception:
                     pass  # fail-open: keep engine output
                 cleaned = dsp.f32_to_i16_round(f)
+            # Feedback-suppression notch: adapts only
+            # while the gate says quiet-and-not-speaking;
+            # a sustained howl trips the gate's stuck
+            # detector, which releases the notch so it
+            # can latch the tone. Fail-open: any failure
+            # leaves the frame untouched.
+            if self.notch is not None:
+                try:
+                    self.notch.set_speech(self.gate.for_notch())
+                    self.notch.process(cleaned)
+                except Exception:
+                    pass
             self.frames += 1
             return cleaned
         except Exception as e:  # fail-open: ship mic, never silence
@@ -90,6 +124,14 @@ class Chain:
             "sampleRate": 16000,
             "dtlnBackend": dtln_obj.backend if dtln_obj else 0,
             "ns": ns,
+            "notch": {
+                "engaged": ([self.notch.engaged(0),
+                             self.notch.engaged(1)]
+                            if self.notch else [0, 0]),
+                "hz": ([round(self.notch.freq(0)),
+                        round(self.notch.freq(1))]
+                       if self.notch else [0, 0]),
+            },
             "frames": self.frames,
             "error": self.last_error,
             "dtlnError": dtln_obj.last_error if dtln_obj else "",

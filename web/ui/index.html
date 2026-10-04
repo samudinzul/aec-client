@@ -173,7 +173,10 @@ function connect() {
     meter('mOut', st.outRms || 0, peakOut);
     $('status').textContent =
       `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
-      (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
+      (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '') +
+      (st.notch && (st.notch.engaged[0] || st.notch.engaged[1])
+        ? ` · feedback notch @ ${st.notch.hz[0] || st.notch.hz[1]} Hz`
+        : '');
     if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
   };
 }
