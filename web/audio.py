@@ -43,11 +43,88 @@ def _need_pa():
                            "(pip install pyaudiowpatch)")
 
 
+# ============================================================
+#  Device enumeration — display filter mirrors src/main.cpp
+#  (BuildDisplayIndices / FindCableInputIndex /
+#  FindSystemDefaultIndex):
+#    mic  = capture devices, minus virtual cable, minus the
+#           loopback wrapper endpoints pyaudiowpatch injects
+#           into the capture list
+#    ref  = WASAPI loopback endpoints, minus virtual cable
+#           (loopback is the only way to capture what the
+#           speakers play — same list main.cpp builds from
+#           playback devices, minus cable)
+#    out  = every playback endpoint; CABLE Input preferred
+#  Same-named devices appear once per host API (MME,
+#  DirectSound, WASAPI, WDM-KS); the best API wins.
+# ============================================================
+
+def _is_virtual_cable(name: str) -> bool:
+    low = name.lower()
+    return "cable" in low or "vb-audio" in low
+
+
+def _is_cable_input(name: str) -> bool:
+    return _is_virtual_cable(name) and "input" in name.lower()
+
+
+_HOSTAPI_RANK = {"wasapi": 3, "directsound": 2, "mme": 1,
+                 "windows wdm-ks": 0}
+
+
+def _hostapi_rank(pa, host_api) -> int:
+    try:
+        name = pa.get_host_api_info_by_index(host_api)["name"].lower()
+    except Exception:
+        return 1
+    return _HOSTAPI_RANK.get(name, 1)
+
+
+def _dedupe(entries, pa):
+    """One entry per device name; on collisions keep the entry
+    with the best host API (WASAPI > DirectSound > MME > WDM-KS)."""
+    best, order = {}, []
+    for e in entries:
+        if e["name"] not in best:
+            order.append(e["name"])
+            best[e["name"]] = e
+        elif (_hostapi_rank(pa, e["hostApi"])
+              > _hostapi_rank(pa, best[e["name"]]["hostApi"])):
+            best[e["name"]] = e
+    return [best[n] for n in order]
+
+
+def _snap(index, entries, by_name=None):
+    """Default index snapped onto `entries`: exact index, else
+    name match, else first entry, else None."""
+    if index is not None and any(e["index"] == index for e in entries):
+        return index
+    if by_name:
+        for e in entries:
+            if e["name"] == by_name:
+                return e["index"]
+    return entries[0]["index"] if entries else None
+
+
+def _find_cable_input(entries):
+    """First CABLE Input in the playback list, else first cable
+    device, else None (main.cpp FindCableInputIndex)."""
+    fallback = None
+    for e in entries:
+        if not _is_virtual_cable(e["name"]):
+            continue
+        if fallback is None:
+            fallback = e["index"]
+        if _is_cable_input(e["name"]):
+            return e["index"]
+    return fallback
+
+
 def list_devices():
     """Capture + loopback + playback lists with defaults.
 
-    Never raises: a dead backend yields empty lists plus an error
-    string, so enumeration failure can't blank the UI.
+    Never raises: a dead backend yields empty lists plus an
+    error string, so enumeration failure can't blank the UI.
     """
     out = {"capture": [], "loopback": [], "playback": [],
            "defaults": {}, "errors": {}}
@@ -57,48 +134,88 @@ def list_devices():
     try:
         pa = pa_patch.PyAudio()
         try:
-            loop_idx = set()
+            # WASAPI loopback endpoints — the only valid Speaker
+            # Reference sources. pyaudiowpatch also injects them
+            # into the plain capture enumeration; they are
+            # wrappers, so the mic list drops them by index.
+            loop_entries = []
             try:
                 for info in pa.get_loopback_device_info_generator():
-                    loop_idx.add(info["index"])
-                    out["loopback"].append({
+                    loop_entries.append({
                         "index": info["index"],
-                        "name": info["name"],
-                        "defaultSamplerate": info.get("defaultSampleRate"),
+                        "name": info.get("name",
+                                       f"loopback {info['index']}"),
+                        "maxInputChannels": info.get(
+                            "maxInputChannels", 1),
+                        "maxOutputChannels": 0,
+                        "defaultSamplerate": info.get(
+                            "defaultSampleRate"),
+                        "hostApi": info.get("hostApi"),
                     })
             except Exception as e:
                 out["errors"]["loopback"] = f"loopback query failed: {e}"
+
+            raw = []
             for i in range(pa.get_device_count()):
                 try:
                     d = pa.get_device_info_by_index(i)
                 except Exception:
                     continue
-                entry = {
+                raw.append({
                     "index": i,
                     "name": d.get("name", f"device {i}"),
                     "maxInputChannels": d.get("maxInputChannels", 0),
                     "maxOutputChannels": d.get("maxOutputChannels", 0),
                     "defaultSamplerate": d.get("defaultSampleRate"),
-                }
-                if i in loop_idx:
-                    continue
-                if entry["maxInputChannels"] > 0:
-                    out["capture"].append(entry)
-                if entry["maxOutputChannels"] > 0:
-                    out["playback"].append(entry)
+                    "hostApi": d.get("hostApi"),
+                })
+
+            cap = [e for e in raw
+                   if e["maxInputChannels"] > 0
+                   and e["index"] not in {l["index"]
+                                          for l in loop_entries}
+                   and not _is_virtual_cable(e["name"])]
+            play = [e for e in raw if e["maxOutputChannels"] > 0]
+            ref = [e for e in loop_entries
+                   if not _is_virtual_cable(e["name"])]
+
+            out["capture"] = _dedupe(cap, pa)
+            out["loopback"] = _dedupe(ref, pa)
+            out["playback"] = _dedupe(play, pa)
+
+            # Windows system default input, snapped onto the
+            # filtered mic list (main.cpp FindSystemDefaultIndex).
+            def_in_idx, def_in_name = None, ""
             try:
-                out["defaults"]["mic"] = pa.get_default_input_device_info()["index"]
+                di = pa.get_default_input_device_info()
+                def_in_idx, def_in_name = di["index"], di.get("name", "")
             except Exception:
                 pass
+            out["defaults"]["mic"] = _snap(
+                def_in_idx, out["capture"], by_name=def_in_name)
+
+            # Reference default: the loopback endpoint of the
+            # Windows default OUTPUT device (name match, since
+            # the loopback index differs from the playback one).
+            def_out_idx, def_out_name = None, ""
             try:
-                out["defaults"]["ref"] = pa.get_default_wasapi_loopback()["index"]
-            except Exception:
-                if out["loopback"]:
-                    out["defaults"]["ref"] = out["loopback"][0]["index"]
-            try:
-                out["defaults"]["out"] = pa.get_default_output_device_info()["index"]
+                do = pa.get_default_output_device_info()
+                def_out_idx = do["index"]
+                def_out_name = do.get("name", "")
             except Exception:
                 pass
+            out["defaults"]["ref"] = _snap(
+                None, out["loopback"], by_name=def_out_name)
+
+            # Output default: CABLE Input when installed (the
+            # routing target), else the system default output.
+            cable = _find_cable_input(out["playback"])
+            if cable is not None:
+                out["defaults"]["out"] = cable
+            else:
+                out["defaults"]["out"] = _snap(
+                    def_out_idx, out["playback"],
+                    by_name=def_out_name)
         finally:
             pa.terminate()
     except Exception as e:  # pragma: no cover

@@ -25,14 +25,27 @@
   .row { display: flex; gap: 12px; }
   .row > div { flex: 1; }
   .hint { font-size: 12px; color: #8b93a1; margin-top: 10px; }
+  .devhead { display: flex; justify-content: space-between;
+             align-items: center; margin: 12px 0 2px;
+             color: #aab2c0; font-size: 13px; }
+  button.mini { width: auto; margin: 0; padding: 4px 12px;
+                font-size: 12px; font-weight: normal; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>aec-web <small>v1.10.1 · DTLN-AEC 128 + DTLN-NS · 16 kHz</small></h1>
-  <label>Microphone</label><select id="mic"></select>
-  <label>Speaker Reference (system audio loopback)</label><select id="ref"></select>
-  <label>Output (CABLE Input)</label><select id="out"></select>
+  <div class="devhead"><span>Devices</span>
+    <button id="rescan" class="mini">Rescan</button></div>
+  <label>Microphone</label>
+  <select id="mic" title="The mic you speak into"></select>
+  <label>Speaker Reference (system audio loopback)</label>
+  <select id="ref" title="The speakers whose sound gets removed from your mic"></select>
+  <label>Output</label>
+  <select id="out" title="Where your cleaned voice goes. CABLE Input is picked automatically"></select>
+  <div class="hint">Output routes to a virtual cable — in Discord pick
+  <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
+  from the list (Windows lists only enabled devices).</div>
   <button id="startBtn">Start</button>
   <div id="status">Stopped.</div>
   <div id="err"></div>
@@ -60,28 +73,37 @@ async function loadDevices() {
     if (d.errors && (d.errors.audio || d.errors.loopback))
       $('err').textContent = ['devices:',
         d.errors.audio || '', d.errors.loopback || ''].join(' ').trim();
-    const fill = (sel, list, defIdx) => {
+    // Reselect by name across a rescan (desktop app behavior);
+    // a miss (unplugged device) falls back to the default.
+    const prevText = id => { const s = $(id);
+      return s.selectedIndex >= 0 ? s.options[s.selectedIndex].text : ''; };
+    const pm = prevText('mic'), pr = prevText('ref'), po = prevText('out');
+    const fill = (sel, list, defIdx, prev) => {
       const s = $(sel); s.innerHTML = '';
       (list || []).forEach(x => {
         const o = document.createElement('option');
         o.value = x.index; o.textContent = x.name; s.appendChild(o);
       });
-      const at = (list || []).findIndex(x => x.index === defIdx);
-      if (at >= 0) s.selectedIndex = at;
+      let at = (list || []).findIndex(x => x.name === prev);
+      if (at < 0) at = (list || []).findIndex(x => x.index === defIdx);
+      if (at < 0) at = 0;
+      if ((list || []).length) s.selectedIndex = at;
     };
-    fill('mic', d.capture, d.defaults && d.defaults.mic);
-    fill('ref', d.loopback, d.defaults && d.defaults.ref);
-    fill('out', d.playback, d.defaults && d.defaults.out);
+    fill('mic', d.capture, d.defaults && d.defaults.mic, pm);
+    fill('ref', d.loopback, d.defaults && d.defaults.ref, pr);
+    fill('out', d.playback, d.defaults && d.defaults.out, po);
     savePrefs();
   } catch (e) {
     $('err').textContent = 'devices: could not reach server (' + e.message + ')';
   }
 }
+const prefVal = id => { const v = $(id).value; return v === '' ? null : +v; };
 function savePrefs() {
-  api('POST', '/api/prefs', {mic: +$('mic').value || null,
-    ref: +$('ref').value || null, out: +$('out').value || null});
+  api('POST', '/api/prefs', {mic: prefVal('mic'),
+    ref: prefVal('ref'), out: prefVal('out')});
 }
 ['mic','ref','out'].forEach(id => $(id).addEventListener('change', savePrefs));
+$('rescan').onclick = loadDevices;
 
 $('startBtn').onclick = async () => {
   savePrefs();

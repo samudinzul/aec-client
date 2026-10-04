@@ -44,7 +44,8 @@ def devices():
     try:
         return list_devices()
     except Exception as e:
-        return {"error": str(e), "capture": [], "playback": []}
+        return {"capture": [], "loopback": [], "playback": [],
+                "defaults": {}, "errors": {"audio": str(e)}}
 
 
 @app.get("/api/state")
@@ -73,6 +74,11 @@ def start():
         if not chain.start():
             return {"ok": False, "error": chain.last_error or
                     "Failed to load DTLN model"}
+        if any(prefs[k] is None for k in ("mic", "ref", "out")):
+            chain.stop()
+            return {"ok": False,
+                    "error": "pick a microphone, speaker reference "
+                             "and output device first"}
         try:
             runner = AudioRunner(chain, prefs["mic"], prefs["ref"], prefs["out"])
             runner.start()
