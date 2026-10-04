@@ -23,7 +23,9 @@ The chain stays 16 kHz. One worker thread assembles 160-sample
 frames from the two input queues (resampling native -> 16 kHz at
 the edge) and feeds the chain; its output lands in the queue the
 output callback drains. Queues never block: input overflow drops
-(ring-overrun semantics), output starvation emits silence.
+(ring-overrun semantics), a starved loopback reads as silence
+(speakers idle — the desktop's underflow path), output starvation
+emits silence.
 """
 
 import queue
@@ -396,9 +398,27 @@ class AudioRunner:
         while not self._stop.is_set():
             try:
                 raw_mic = self._in_q.get(timeout=0.05)
-                raw_ref = self._ref_q.get(timeout=0.05)
             except queue.Empty:
                 continue
+            # Loopback starves while the speakers are idle
+            # (WASAPI delivers no frames until something
+            # plays), so never stall the mic path on it:
+            # a missing ref reads as digital silence,
+            # which is exactly what "nothing playing"
+            # means to the AEC. Same as the desktop's
+            # ref-ring underflow path (main.cpp
+            # output_callback) — without this, a fresh
+            # start with no audio playing looked dead:
+            # mic chunks were dropped waiting for a ref
+            # that never came, until Discord opened and
+            # woke the loopback.
+            try:
+                raw_ref = self._ref_q.get_nowait()
+            except queue.Empty:
+                n_ref = max(1, int(round(
+                    len(raw_mic) * self._ref_rate
+                    / self._mic_rate)))
+                raw_ref = np.zeros(n_ref, dtype=np.int16)
             mic_buf = np.concatenate(
                 [mic_buf, resample_to_16k(raw_mic, self._mic_rate)])
             ref_buf = np.concatenate(

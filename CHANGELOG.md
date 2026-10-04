@@ -51,6 +51,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Web app looked dead until something played on the
+  speakers.** The pump required the WASAPI loopback to
+  deliver a chunk before processing any mic chunk, but
+  the loopback starves while the speakers are idle
+  (WASAPI delivers no frames until something plays) —
+  so with no audio playing, mic chunks were dropped
+  waiting for a reference that never came: both meters
+  dead, CABLE Input silent, until Discord opened and
+  woke the loopback. A missing ref now reads as digital
+  silence, the desktop's ref-ring underflow path
+  (`main.cpp` `output_callback`: "missing ref reads as
+  digital silence, which is exactly what 'nothing
+  playing' means to the AEC").
 - **Web feedback notch cut speech for the whole
   session.** A howl (Discord mic-test playback)
   latched a 60 Hz notch that never un-latched —
