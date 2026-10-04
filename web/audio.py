@@ -1,25 +1,29 @@
-"""Audio I/O — one PortAudio (pyaudiowpatch) for all three streams.
+"""Audio I/O — pyaudiowpatch, callback model (like main.cpp).
 
 Why a single backend: sounddevice's bundled PortAudio reported zero
-devices on real hardware where pyaudiowpatch's fork enumerates fine.
-Two PortAudios, two answers — so everything runs on the one proven to
-see hardware here. (Both are mainstream reputable PyPI wheels; no PE
-of our own either way. python-sounddevice exposes no WASAPI-loopback
-API at all, which is why it can't cover the reference path anyway.)
+devices on real hardware where pyaudiowpatch's fork enumerates fine,
+and sounddevice exposes no WASAPI-loopback API at all. Everything
+(mic, loopback ref, CABLE out) runs on pyaudiowpatch.
 
-Device model (mirrors the desktop app):
-- Mic: pyaudiowpatch input stream at the device's native rate,
-  resampled to 16 kHz in a feeder thread.
-- Reference: pyaudiowpatch WASAPI-loopback stream at the mix rate,
-  resampled to 16 kHz. Loopback delivers silence when speakers are
-  idle — same as the desktop ref-ring-underflow path.
-- Output: pyaudiowpatch output stream to the virtual cable, fed from
-  16 kHz chain output resampled to the cable's native rate.
+Why callbacks: the first cut used blocking read()/write() threads.
+A CABLE Input with no consumer (Discord/Zoom closed) fills the
+cable's buffer and wedges stream.write() forever; teardown around a
+wedged blocking call then kills the whole process (the "server
+disconnected" report). main.cpp's mic_callback / loopback_callback /
+output_callback never block — an unconsumed cable just underruns
+with silence — so the same model is ported here:
 
-The chain itself stays 16 kHz always. The worker thread assembles
-160-sample frames; feeder/writer threads bridge the native-rate
-streams. Queues never block: input overflow drops (ring-overrun
-semantics), output starvation emits silence.
+- Mic: callback copies int16 input into a queue.
+- Reference: WASAPI loopback callback, same queue pattern.
+- Output: callback pulls 16 kHz chain output, upsamples to the
+  cable's native rate, delivers exactly frame_count frames;
+  starved -> silence. Never blocks.
+
+The chain stays 16 kHz. One worker thread assembles 160-sample
+frames from the two input queues (resampling native -> 16 kHz at
+the edge) and feeds the chain; its output lands in the queue the
+output callback drains. Queues never block: input overflow drops
+(ring-overrun semantics), output starvation emits silence.
 """
 
 import queue
@@ -32,7 +36,8 @@ try:
 except ImportError:  # pragma: no cover
     pa_patch = None
 
-from .dsp import FRAME_SIZE, SAMPLE_RATE, resample_from_16k, resample_to_16k, rms
+from .dsp import (FRAME_SIZE, SAMPLE_RATE, resample_from_16k,
+                  resample_to_16k, rms)
 
 _Q_DEPTH = 64
 
@@ -56,7 +61,8 @@ def _need_pa():
 #           playback devices, minus cable)
 #    out  = every playback endpoint; CABLE Input preferred
 #  Same-named devices appear once per host API (MME,
-#  DirectSound, WASAPI, WDM-KS); the best API wins.
+#  DirectSound, WASAPI, WDM-KS); the best API wins (MME
+#  truncates names to 31 chars, so matching is by prefix).
 # ============================================================
 
 def _is_virtual_cable(name: str) -> bool:
@@ -252,10 +258,10 @@ def list_devices():
 
 
 class AudioRunner:
-    """Native-rate streams + 16 kHz worker pump.
+    """Callback-mode streams + a 16 kHz worker pump.
 
-    mic_idx / out_idx are pyaudiowpatch device indices; ref_idx is a
-    pyaudiowpatch loopback index.
+    mic_idx / out_idx are pyaudiowpatch device indices;
+    ref_idx is a pyaudiowpatch loopback index.
     """
 
     def __init__(self, chain, mic_idx=None, ref_idx=None, out_idx=None):
@@ -273,63 +279,77 @@ class AudioRunner:
         self._streams = []
         self.in_rms = 0.0
         self.out_rms = 0.0
+        # Output resampler state — touched ONLY by the
+        # PortAudio callback thread, so no lock is needed.
+        self._mic_rate = 48000
+        self._ref_rate = 48000
+        self._out_rate = 48000
+        self._out_carry = np.zeros(0, dtype=np.float32)
 
-    def _feed_in(self, stream, rate, target):
-        """Blocking input -> 16 kHz int16 frames into target queue."""
-        chunk = max(FRAME_SIZE, int(rate * 0.02))
-        carry = np.zeros(0, dtype=np.float32)
-        while not self._stop.is_set():
-            try:
-                raw = stream.read(chunk, exception_on_overflow=False)
-            except Exception:
-                if self._stop.is_set():
-                    break
-                continue
-            pcm = np.frombuffer(raw, dtype=np.int16)
-            if pcm.size == 0:
-                continue
-            carry = np.concatenate([carry, resample_to_16k(pcm, rate)])
-            while len(carry) >= FRAME_SIZE:
+    # -------------------------------------------------------
+    #  PortAudio callbacks (run on PortAudio's thread;
+    #  they must never block or raise)
+    # -------------------------------------------------------
+
+    def _on_mic(self, in_data, frame_count, time_info, status):
+        try:
+            pcm = np.frombuffer(in_data, dtype=np.int16).copy()
+            if pcm.size:
                 try:
-                    target.put_nowait(
-                        (carry[:FRAME_SIZE] * 32767.0).astype(np.int16))
+                    self._in_q.put_nowait(pcm)
                 except queue.Full:
-                    pass  # input overrun: drop
-                carry = carry[FRAME_SIZE:]
+                    pass  # ring overrun: drop, like the desktop app
+        except Exception:
+            pass
+        return (None, pa_patch.paContinue)
 
-    def _feed_out(self, stream, rate):
-        """16 kHz chain output -> native-rate cable stream."""
-        carry = np.zeros(0, dtype=np.float32)
-        chunk = max(FRAME_SIZE, int(rate * 0.02))
-        while not self._stop.is_set():
-            try:
-                frame = self._out_q.get(timeout=0.05)
-                carry = np.concatenate(
-                    [carry, resample_from_16k(
-                        frame.astype(np.float32) / 32768.0, rate)])
-            except queue.Empty:
-                pass
-            while len(carry) >= chunk:
+    def _on_ref(self, in_data, frame_count, time_info, status):
+        try:
+            pcm = np.frombuffer(in_data, dtype=np.int16).copy()
+            if pcm.size:
                 try:
-                    stream.write((np.clip(carry[:chunk], -1.0, 1.0)
-                                  * 32767.0).astype(np.int16).tobytes())
-                except Exception:
-                    if self._stop.is_set():
-                        break
-                carry = carry[chunk:]
-            if len(carry) < chunk and self._stop.is_set():
-                break
-            if self._out_q.empty() and len(carry) < chunk:
-                # Starved: pad with silence so the cable never underruns.
-                try:
-                    stream.write(np.zeros(chunk, dtype=np.int16).tobytes())
-                except Exception:
-                    if self._stop.is_set():
-                        break
+                    self._ref_q.put_nowait(pcm)
+                except queue.Full:
+                    pass
+        except Exception:
+            pass
+        return (None, pa_patch.paContinue)
 
-    def _pump(self, mic, ref):
-        cleaned = self.chain.process_frame(mic, ref)
-        self.in_rms = rms(mic.astype(np.float32) / 32768.0)
+    def _on_out(self, in_data, frame_count, time_info, status):
+        try:
+            carry = self._out_carry
+            rate = self._out_rate
+            while len(carry) < frame_count:
+                try:
+                    frame = self._out_q.get_nowait()
+                except queue.Empty:
+                    break
+                carry = np.concatenate([carry, resample_from_16k(
+                    frame.astype(np.float32) / 32768.0, rate)])
+            if len(carry) >= frame_count:
+                out = carry[:frame_count]
+                self._out_carry = carry[frame_count:]
+            else:
+                # Starved: pad with silence so the cable never
+                # underruns audibly (main.cpp output_callback).
+                out = np.zeros(frame_count, dtype=np.float32)
+                if len(carry):
+                    out[:len(carry)] = carry
+                self._out_carry = np.zeros(0, dtype=np.float32)
+            pcm = (np.clip(out, -1.0, 1.0)
+                   * 32767.0).astype(np.int16).tobytes()
+        except Exception:
+            pcm = np.zeros(frame_count, dtype=np.int16).tobytes()
+        return (pcm, pa_patch.paContinue)
+
+    # -------------------------------------------------------
+    #  Worker: input queues (native rate) -> 16 kHz frames
+    #  -> chain -> output queue
+    # -------------------------------------------------------
+
+    def _pump(self, mic_i16, ref_i16):
+        cleaned = self.chain.process_frame(mic_i16, ref_i16)
+        self.in_rms = rms(mic_i16.astype(np.float32) / 32768.0)
         self.out_rms = rms(cleaned.astype(np.float32) / 32768.0)
         try:
             self._out_q.put_nowait(cleaned)
@@ -337,70 +357,62 @@ class AudioRunner:
             pass
 
     def _work(self):
-        mic_buf = np.zeros(0, dtype=np.int16)
-        ref_buf = np.zeros(0, dtype=np.int16)
+        mic_buf = np.zeros(0, dtype=np.float32)   # 16 kHz domain
+        ref_buf = np.zeros(0, dtype=np.float32)
         while not self._stop.is_set():
             try:
-                mic_buf = np.concatenate(
-                    [mic_buf, self._in_q.get(timeout=0.05)])
-                ref_buf = np.concatenate(
-                    [ref_buf, self._ref_q.get(timeout=0.05)])
+                raw_mic = self._in_q.get(timeout=0.05)
+                raw_ref = self._ref_q.get(timeout=0.05)
             except queue.Empty:
                 continue
+            mic_buf = np.concatenate(
+                [mic_buf, resample_to_16k(raw_mic, self._mic_rate)])
+            ref_buf = np.concatenate(
+                [ref_buf, resample_to_16k(raw_ref, self._ref_rate)])
             while len(mic_buf) >= FRAME_SIZE and len(ref_buf) >= FRAME_SIZE:
-                self._pump(mic_buf[:FRAME_SIZE].copy(),
-                           ref_buf[:FRAME_SIZE].copy())
+                mic_i16 = (mic_buf[:FRAME_SIZE]
+                           * 32767.0).astype(np.int16)
+                ref_i16 = (ref_buf[:FRAME_SIZE]
+                           * 32767.0).astype(np.int16)
+                self._pump(mic_i16, ref_i16)
                 mic_buf = mic_buf[FRAME_SIZE:]
                 ref_buf = ref_buf[FRAME_SIZE:]
 
     def start(self):
         self._pa = pa_patch.PyAudio()
-        mic_rate = int(self._pa.get_device_info_by_index(
+        self._mic_rate = int(self._pa.get_device_info_by_index(
             self.mic_idx).get("defaultSampleRate", 48000) or 48000)
-        ref_rate = int(self._pa.get_device_info_by_index(
+        self._ref_rate = int(self._pa.get_device_info_by_index(
             self.ref_idx).get("defaultSampleRate", 48000) or 48000)
-        out_rate = int(self._pa.get_device_info_by_index(
+        self._out_rate = int(self._pa.get_device_info_by_index(
             self.out_idx).get("defaultSampleRate", 48000) or 48000)
+        self._out_carry = np.zeros(0, dtype=np.float32)
         mic_s = self._pa.open(format=pa_patch.paInt16, channels=1,
-                              rate=mic_rate, input=True,
-                              input_device_index=self.mic_idx)
+                              rate=self._mic_rate, input=True,
+                              input_device_index=self.mic_idx,
+                              stream_callback=self._on_mic)
         ref_s = self._pa.open(format=pa_patch.paInt16, channels=1,
-                              rate=ref_rate, input=True,
-                              input_device_index=self.ref_idx)
+                              rate=self._ref_rate, input=True,
+                              input_device_index=self.ref_idx,
+                              stream_callback=self._on_ref)
         out_s = self._pa.open(format=pa_patch.paInt16, channels=1,
-                              rate=out_rate, output=True,
-                              output_device_index=self.out_idx)
+                              rate=self._out_rate, output=True,
+                              output_device_index=self.out_idx,
+                              stream_callback=self._on_out)
         self._streams = [mic_s, ref_s, out_s]
         self._stop.clear()
-        self._threads = [
-            threading.Thread(target=self._feed_in,
-                             args=(mic_s, mic_rate, self._in_q), daemon=True),
-            threading.Thread(target=self._feed_in,
-                             args=(ref_s, ref_rate, self._ref_q), daemon=True),
-            threading.Thread(target=self._feed_out,
-                             args=(out_s, out_rate), daemon=True),
-            threading.Thread(target=self._work, daemon=True),
-        ]
+        self._threads = [threading.Thread(target=self._work, daemon=True)]
         for t in self._threads:
             t.start()
 
     def stop(self):
         self._stop.set()
-        # Abort BEFORE joining: Pa_AbortStream returns
-        # immediately (unlike stop_stream it never waits
-        # for the buffer to drain) and unblocks pending
-        # blocking reads/writes. A CABLE Input with no
-        # consumer fills its buffer and can wedge
-        # stream.write() indefinitely; abort is what
-        # breaks the wedge without hanging teardown.
-        for s in self._streams:
-            try:
-                s.abort_stream()
-            except Exception:
-                pass
         for t in self._threads:
             t.join(timeout=1.5)
         self._threads = []
+        # Callbacks are short and never block, so stop_stream()
+        # only waits for any in-flight callback (microseconds) —
+        # no wedge is possible, even on an unconsumed cable.
         for s in self._streams:
             try:
                 s.stop_stream()
