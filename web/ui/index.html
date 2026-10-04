@@ -74,9 +74,19 @@ const $ = id => document.getElementById(id);
 const api = (m, p, b) => fetch(p, {method: m,
   headers: b ? {'Content-Type': 'application/json'} : undefined,
   body: b ? JSON.stringify(b) : undefined}).then(r => r.json());
-let running = false, peakIn = 0, peakOut = 0;
+let running = false;
 
 async function loadDevices() {
+  // Placeholder so the page never looks frozen while
+  // the device scan runs (PyAudio enumerates the
+  // Windows host APIs — takes a second or two).
+  ['mic', 'ref', 'out'].forEach(id => {
+    const s = $(id);
+    s.innerHTML = '';
+    const o = document.createElement('option');
+    o.textContent = 'Scanning…';
+    s.appendChild(o);
+  });
   try {
     const d = await api('GET', '/api/devices');
     if (!d || !Array.isArray(d.capture)) throw new Error('bad device payload');
@@ -161,13 +171,12 @@ function setRunning(on, st) {
     ? `Running (16000 Hz, ${st.chain || 'DTLN-AEC'})`
     : 'Stopped.';
 }
-function meter(id, v, peak) {
+function meter(id, v) {
   const c = $(id), g = c.getContext('2d');
   const w = c.width, h = c.height;
   g.clearRect(0, 0, w, h);
-  const lvl = Math.min(1, v * 4), pk = Math.min(1, peak * 4);
+  const lvl = Math.min(1, v * 4);
   g.fillStyle = '#2a9d5c'; g.fillRect(0, h - lvl * h, w, lvl * h);
-  g.fillStyle = '#ffd75e'; g.fillRect(0, h - pk * h - 2, w, 2);
 }
 // WebSocket with auto-reconnect: the page survives a
 // server restart without a manual refresh.
@@ -186,10 +195,8 @@ function connect() {
     if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
       $('nsOn').checked = !!st.nsEnabled;
     if (!st.running) return;
-    peakIn = Math.max(st.inRms || 0, peakIn * 0.995);
-    peakOut = Math.max(st.outRms || 0, peakOut * 0.995);
-    meter('mIn', st.inRms || 0, peakIn);
-    meter('mOut', st.outRms || 0, peakOut);
+    meter('mIn', st.inRms || 0);
+    meter('mOut', st.outRms || 0);
     $('status').textContent =
       `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
       (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '') +
