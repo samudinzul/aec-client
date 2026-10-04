@@ -542,8 +542,8 @@ aec-client/
 │   └── dtln_ns_128_{1,2}.tflite    DTLN noise reduction pair
 │
 ├── web/                        Pure-Python web UI (no .exe — see above)
-│   ├── start.bat               One-click launcher (venv + packages + server + GUI)
-│   ├── open_when_ready.py      Opens the browser once the server answers
+│   ├── start.bat               One-click launcher (venv + packages + native window)
+│   ├── gui.py                  Native window (pywebview/WebView2) + in-process server; browser fallback
 │   ├── server.py               FastAPI REST + WebSocket, serves ui/
 │   ├── chain.py                DTLN → NS → notch (port of the C++ frame pump)
 │   ├── audio.py                pyaudiowpatch callback-mode mic/loopback/CABLE I/O

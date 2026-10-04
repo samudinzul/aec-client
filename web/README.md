@@ -21,7 +21,8 @@ nothing for antivirus heuristics to flag.
 4. About 500 MB free disk (Python environment + packages + models).
 
 You do NOT need: admin rights, a C++ compiler, CMake, Node, or Docker.
-Everything else (FastAPI, numpy, LiteRT, sounddevice) installs itself
+Everything else (FastAPI, numpy, LiteRT,
+pyaudiowpatch, pywebview) installs itself
 on first run.
 
 ## Why this exists
@@ -38,12 +39,14 @@ reintroduces the exact problem.
 
 **One click:** double-click `web\start.bat`. It creates
 the local environment, installs packages (first run
-only, ~1 min, needs internet), starts the server in
-that same window, and opens the GUI automatically
-once the server answers — never a dead tab. Click it
-again any time to reopen the GUI while the server
-keeps running. Stop: close the window or press
-Ctrl+C in it.
+only, ~1 min, needs internet), then opens the GUI in
+a native app window (Edge WebView2 — built into
+Windows 10/11, so no browser is needed) once the
+models are loaded. Click it again any time to open
+another window against the running server. Stop:
+close the window — the server stops with it — or
+press Ctrl+C in the console. If WebView2 is ever
+missing, the default browser opens instead.
 
 **Manual path** (same thing, step by step):
 
@@ -93,6 +96,7 @@ Open http://localhost:8000 — that page IS the GUI.
 | `notch.py` | LMS adaptive feedback-suppression notch (2 sections, 60 Hz) | `notch.cpp` |
 | `audio.py` | pyaudiowpatch callback-mode mic/loopback/CABLE I/O, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |
+| `gui.py` | Native window (pywebview/WebView2): in-process server, preloads models before opening, attaches to a running server, browser fallback | — |
 | `ui/index.html` | The GUI | — |
 | `test_offline.py` | WAV-in → WAV-out fidelity harness | — |
 

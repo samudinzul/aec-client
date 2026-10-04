@@ -35,6 +35,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (measured −80 dB) while broadband speech never
   latches a section (engage-gated; adaptation is
   frozen while the gate says "talking").
+- **Native app window for the web UI** (`web/gui.py`,
+  pywebview on Edge WebView2 — preinstalled on
+  Windows 10/11): `start.bat` opens the GUI in a
+  window instead of a browser tab; no browser is
+  needed. The server runs in-process behind the
+  window and the models are preloaded before it
+  opens, so Start is instant even on the very
+  first process; closing the window stops the
+  server. Clicking `start.bat` again attaches
+  another window to the running server. If WebView2
+  or pywebview is unavailable, the default browser
+  opens instead — the GUI never depends on one
+  engine.
 
 ### Changed
 
@@ -99,6 +112,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries, or 31-char-truncated names; full names
   are recovered from the loopback generator when
   only MME enumerates.
+- **Web Start took ~5 s on the first process.**
+  The DTLN model pairs loaded lazily on the first
+  Start; they are now preloaded before the port
+  opens (the console prints "Loading models…"),
+  so the GUI appears only once everything is
+  resident and Start is instant. Stop→Start stays
+  instant too — the models remain resident across
+  stops.
 
 ## [1.10.1] — 2026-09-29
 

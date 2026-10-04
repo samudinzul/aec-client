@@ -65,21 +65,12 @@ if not exist "models\dtln_aec_128_*.tflite" (
   echo [-] WARNING - echo-cancellation models missing from models.
   echo [-] The page will run, but audio passes through uncancelled.
 )
-
-REM --- already running - just open the GUI, nothing to start ---
-set RUNNING=0
-python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=1)" >nul 2>&1 && set RUNNING=1
-if "%RUNNING%"=="1" (
-  echo [-] server already running - opening the GUI.
-  start "" "http://localhost:8000"
-  pause
-  exit /b 0
-)
-
-REM --- start the server in THIS window - a minimized helper
-REM --- opens the GUI only once the server answers ---
-echo [-] starting server - GUI opens automatically when ready.
-start "" /min cmd /c "python web\open_when_ready.py"
-python -m web.server
-echo [-] server stopped - exit code %ERRORLEVEL%.
+REM --- one entry point: a native app window (Edge
+REM --- WebView2 - no browser needed). Attaches to a
+REM --- running server, or starts one in-process and
+REM --- stops it when the window closes. Falls back to
+REM --- the default browser if WebView2 is missing ---
+echo [-] starting aec-web - window opens when ready.
+python -m web.gui
+echo [-] aec-web stopped - exit code %ERRORLEVEL%.
 pause
