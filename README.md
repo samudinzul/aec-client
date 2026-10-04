@@ -12,7 +12,7 @@
 
 - [What It Does](#what-it-does)
 - [Features](#features)
-- [Web UI (no installer)](#web-ui-no-installer)
+- [Web UI (Python, no installer)](#web-ui-python-no-installer)
 - [Quick Start](#quick-start)
 - [Profiles](#profiles)
 - [Profile Comparison](#profile-comparison)
@@ -71,7 +71,7 @@ No more headphones. No more echo. No dead-air noise.
 
 ---
 
-## Web UI (no installer)
+## Web UI (Python, no installer)
 
 ![AEC Web UI](screenshots/web-ui.png)
 
@@ -104,7 +104,7 @@ voice out to CABLE. Full docs: [web/README.md](web/README.md).
 ## Quick Start
 
 > **Prefer no installer, zero false positives?** The
-> [web UI](#web-ui-no-installer) is the same DTLN chain
+> [web UI](#web-ui-python-no-installer) is the same DTLN chain
 > as a pure-Python local server — double-click
 > `web\start.bat` and you're done. The steps below
 > are for the desktop app.
@@ -166,7 +166,7 @@ Done. Talk normally with speakers on.
 > (Windows Security → Virus & threat protection → Manage settings →
 > Exclusions → Add/remove).
 >
-> **Zero-false-positive alternative.** The [web UI](#web-ui-no-installer)
+> **Zero-false-positive alternative.** The [web UI](#web-ui-python-no-installer)
 > is pure Python — no PE binary, so `Wacatac.B!ml` and `susgen`
 > never apply. Same engines, same models, one click.
 
