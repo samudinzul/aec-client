@@ -39,11 +39,11 @@ reintroduces the exact problem.
 **One click:** double-click `web\start.bat`. It creates
 the local environment, installs packages (first run
 only, ~1 min, needs internet), starts the server in
-its own "aec-web server" window, waits until it
-answers, and opens the GUI — never a dead tab.
-Click it again any time to reopen the GUI while the
-server keeps running. Stop: close the server window
-or press Ctrl+C in it.
+that same window, and opens the GUI automatically
+once the server answers — never a dead tab. Click it
+again any time to reopen the GUI while the server
+keeps running. Stop: close the window or press
+Ctrl+C in it.
 
 **Manual path** (same thing, step by step):
 

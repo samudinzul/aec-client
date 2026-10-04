@@ -1,13 +1,13 @@
 @echo off
-REM aec-web starter — ONE CLICK: local environment,
+REM aec-web starter - ONE CLICK: local environment,
 REM packages, server, GUI. Double-click this file.
 REM No install, no admin rights. First run downloads
 REM packages (~1 min, needs internet); later runs
 REM start in seconds.
-REM The server runs in its own "aec-web server"
-REM window — close it (or Ctrl+C in it) to stop.
-REM Click start.bat again any time to reopen the GUI.
-REM Startup errors are also logged to web\start.log.
+REM The server runs in THIS window: close it or
+REM press Ctrl+C to stop. Click start.bat again any
+REM time to reopen the GUI. Startup errors are also
+REM logged to web\start.log.
 setlocal
 cd /d "%~dp0.." 2>nul || (echo [aec-web] ERROR: cannot find repo root. & pause & exit /b 1)
 
@@ -57,30 +57,18 @@ if not exist "models\dtln_aec_128_*.tflite" (
   echo [aec-web] The page will run, but audio passes through uncancelled.
 )
 
-REM --- already running? just open the GUI ---
+REM --- already running? just open the GUI, nothing to start ---
 python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=1)" >nul 2>&1
 if not errorlevel 1 (
-  echo [aec-web] server already running — opening http://localhost:8000
+  echo [aec-web] server already running - opening http://localhost:8000
   start "" "http://localhost:8000"
-  exit /b 0
+  pause & exit /b 0
 )
 
-REM --- start the server in its own window, wait until it
-REM --- answers, then open the GUI (never a dead tab) ---
-echo [aec-web] starting server (log shows in the "aec-web server" window)...
-start "aec-web server" cmd /c "python -m web.server & pause"
-
-for /l %%i in (1,1,20) do (
-  python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=1)" >nul 2>&1 && goto :open
-  timeout /t 1 /nobreak >nul
-)
-echo [aec-web] WARNING: server did not answer within 20 s.
-echo [aec-web] Check the "aec-web server" window for the error.
-pause & exit /b 1
-
-:open
-echo [aec-web] ready — opening http://localhost:8000 ...
-start "" "http://localhost:8000"
-echo [aec-web] running. Stop: close the "aec-web server" window or press Ctrl+C in it.
-echo [aec-web] Click start.bat again any time to reopen the GUI.
-exit /b 0
+REM --- start the server in THIS window; a minimized helper
+REM --- opens the GUI only once the server answers ---
+echo [aec-web] starting server - GUI opens automatically when ready...
+start "" /min cmd /c "python web\open_when_ready.py"
+python -m web.server
+echo [aec-web] server stopped (exit code %ERRORLEVEL%).
+pause
