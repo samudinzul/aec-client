@@ -36,9 +36,14 @@ reintroduces the exact problem.
 
 ## Setup
 
-**Easy path:** double-click `web\start.bat`. It creates the local
-environment, installs packages, starts the server, and opens the GUI.
-Skip to Use below.
+**One click:** double-click `web\start.bat`. It creates
+the local environment, installs packages (first run
+only, ~1 min, needs internet), starts the server in
+its own "aec-web server" window, waits until it
+answers, and opens the GUI — never a dead tab.
+Click it again any time to reopen the GUI while the
+server keeps running. Stop: close the server window
+or press Ctrl+C in it.
 
 **Manual path** (same thing, step by step):
 
@@ -66,6 +71,11 @@ Open http://localhost:8000 — that page IS the GUI.
   128-shift / 257-bin, Hann-free rFFT like the C++ pocketfft path.
 - **DTLN-NS** (`models/dtln_ns_128_*.tflite`) after the engine,
   fail-open — missing/broken models pass audio through, never mute.
+- **Feedback suppression** (`notch.py` + `speech_gate.py`, ports of
+  the desktop `notch.cpp` + `speech_gate.h`): a sustained howl
+  (speaker too close to the mic, mic-test playback) is tracked and
+  cut after ~5 s — two 60 Hz adaptive notches that only latch on
+  narrowband tones, so voice is never touched.
 
 16 kHz only (same auto-lock as the desktop DTLN path).
 
@@ -76,8 +86,10 @@ Open http://localhost:8000 — that page IS the GUI.
 | `dsp.py` | rFFT/OLA framing, int16/float, RMS | `dtln_wrapper.cpp` DSP |
 | `dtln.py` | DTLN-AEC engine + LiteRT backend | `DtlnNew/Process/Reset` |
 | `dtln_ns.py` | DTLN-NS stage + ring + stats | `DtlnNsNew/Process/Stats` |
-| `chain.py` | DTLN → NS stacking, fail-open | `main.cpp` frame pump |
-| `audio.py` | pyaudiowpatch mic/loopback/CABLE I/O at native rates, resampled to 16 kHz at the edges | desktop device model |
+| `chain.py` | DTLN → NS → notch stacking, fail-open | `main.cpp` frame pump |
+| `speech_gate.py` | RMS-hysteresis voice gate + stuck-tone watchdog | `speech_gate.h` |
+| `notch.py` | LMS adaptive feedback-suppression notch (2 sections, 60 Hz) | `notch.cpp` |
+| `audio.py` | pyaudiowpatch callback-mode mic/loopback/CABLE I/O, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |
 | `ui/index.html` | The GUI | — |
 | `test_offline.py` | WAV-in → WAV-out fidelity harness | — |
