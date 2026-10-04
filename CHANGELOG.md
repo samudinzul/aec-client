@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] — 2026-09-29 (web UI: 2026-10-04)
+
 ### Added
+
+- **DTLN noise reduction post stage.** The DTLN-AEC pair cancels echo
+  but leaves background noise; a second DTLN-NR pair (same 512-block /
+  128-shift / 257-bin DSP, single mic feed) now runs after the engine
+  on the DTLN and WebRTC AEC3 paths — `src/dtln_ns_wrapper.{h,cpp}`,
+  `models/dtln_ns_128_{1,2}.tflite` (networkedaudio port of
+  breizhn/DTLN denoise). WebRTC NS is retired; NKF keeps its own WPE
+  dereverb + adaptive notch instead. A `Noise suppression (DTLN-NS)`
+  checkbox and a `g_nsEnabled` pref gate it; fail-open pass-through on
+  any inference error.
 
 - **Web UI** (`web/`): the default DTLN-AEC 128 +
   DTLN-NS chain as a pure-Python local server with
-  a browser GUI — a second distribution alongside
+  a GUI — a second distribution alongside
   the desktop exe, shipped as a separate zip
   (`AEC-Web-vX-win64.zip`, first attached to the
   v1.10.1 release page) with no PE binary and
@@ -51,6 +63,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Post-stage panel is engine-aware.** WPE + notch only render for the
+  NKF engine; the DTLN-NS checkbox only renders for DTLN/AEC3. Each
+  toggle restarts the chain live.
+- **Post-stage prefs are engine-scoped.** Switching engines (profile
+  switch, load, reset-to-defaults) resets each stage to its engine's
+  defaults, so a toggle left on for another engine cannot leak into a
+  chain that doesn't run it and make Start look broken after a switch.
+- **Experimental engines hidden behind an Appearance checkbox.**
+  WebRTC AEC3 and NKF-AEC are no longer in the profile list by
+  default — DTLN-AEC 128 is the only visible engine. Ticking the
+  checkbox reveals them; unticking falls back to DTLN so the
+  selection can never be left on a hidden engine.
+- **The Advanced collapsible is renamed to "More".**
+
 - **Web audio I/O is callback-mode** (pyaudiowpatch),
   like the desktop's miniaudio callbacks — blocking
   read/write threads could wedge on an unconsumed
@@ -63,6 +89,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without a manual refresh.
 
 ### Fixed
+
+- **Ort::Session takes a wchar_t path on Windows.** The ONNX backend
+  passed a `const char*` to the Session constructor, which only accepts
+  `ORTCHAR_T*` (wchar_t on Windows) — same fix the DTLN wrapper
+  applies.
+- **CMake parses a trailing `//` comment as a source filename.**
+  `src/dtln_ns_wrapper.cpp   // DTLN noise reduction (DTLN/AEC3 only)`
+  was treated as a source path; the comment is now a bare filename.
+- **API names + Gui:: namespace in the DTLN-NS wiring.** `main.cpp`
+  called the stage with the old `Dtns*` names; the public API is
+  `DtlnNs*` (`DtnsLastError`). Also dropped a phantom `Gui::` namespace
+  (the codebase uses ` ImGui::` directly).
 
 - **Web app looked dead until something played on the
   speakers.** The pump required the WASAPI loopback to
@@ -121,51 +159,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instant too — the models remain resident across
   stops.
 
-## [1.10.1] — 2026-09-29
+## [1.10.0] — 2026-09-28
 
 ### Added
 
-- **DTLN noise reduction post stage.** The DTLN-AEC pair cancels echo
-  but leaves background noise; a second DTLN-NR pair (same 512-block /
-  128-shift / 257-bin DSP, single mic feed) now runs after the engine
-  on the DTLN and WebRTC AEC3 paths — `src/dtln_ns_wrapper.{h,cpp}`,
-  `models/dtln_ns_128_{1,2}.tflite` (networkedaudio port of
-  breizhn/DTLN denoise). WebRTC NS is retired; NKF keeps its own WPE
-  dereverb + adaptive notch instead. A `Noise suppression (DTLN-NS)`
-  checkbox and a `g_nsEnabled` pref gate it; fail-open pass-through on
-  any inference error.
+- **Three engine profiles replace engines + presets.** One combo
+  at the top of the Audio tab selects the engine; the label shows the
+  engine name directly, plus `→ WPE` / `→ Notch` while the post
+  stages are ticked (no hidden state):
+  - *DTLN-AEC 128* — dual-LSTM echo + noise canceller (16 kHz).
+    Default: best echo + reverb handling.
+  - *WebRTC AEC3* — the canceller Chrome and Google Meet use.
+    Reliable, well-tested baseline, strongest canceller.
+  - *NKF-AEC* — tiny neural Kalman core. Cheap canceller for weak
+    CPUs.
+  Sample rate, gains and devices are independent knobs (only the
+  16-kHz-only engines force the rate down). Old configs migrate: the
+  five v1.9 presets map onto the three profiles, old *Manual* lands
+  on the profile for its engine.
+- **Dereverb (WPE) as a global post stage.** The in-tree streaming
+  single-channel Weighted Prediction Error dereverberator returns
+  (removed from inside NKF in this round, now a standalone stage stacked after
+  every engine) and is extended to 48 kHz (frame geometry scales
+  512/1536 with the same 32 ms frames). Speech-gated predictor bound
+  protects voice level; model-free (pocketfft only), ~32 ms delay.
+- **Feedback suppression (adaptive notch).** Two cascaded
+  second-order notches (~60 Hz) whose centers track narrowband
+  howling/ringing via LMS on the quadrature component, slew-limited
+  (8000 Hz/s), frozen while you talk (voice can never latch it) and
+  exact-bypass until a tone is actually captured (>45% energy removed
+  for ~200 ms, engage-gating) — idle voice passes bit-exact. Runs at
+  16/48 kHz.
+- Both post stages are always-visible ticks, **ON by default for
+  every profile**, persist across restarts and are never reset by a
+  profile switch (config gen 6).
+
+- **NKF time-delay compensation searches 800 ms, coarse-to-fine
+  over partial ranges** (was one full-rate sweep of 300 ms): a 4×
+  box-decimated pass over as much history as exists, then ±8
+  raw-sample refinement. The partial range means a typical round
+  trip locks in the first half second instead of waiting for the
+  whole buffer to fill — echo harness locks 40/120/250 ms at
+  0.14/0.21/0.35 s with correlation 1.000 at the exact sample,
+  mic-test at 0.49 s (previously the 3 s grace lock). The search
+  runs eagerly every 256 ms until the first confident peak, then
+  every 512 ms; delay jumps still need a 0.55 peak, and an
+  on-screen dwell (grace) lock does not claim confidence. A
+  no-peak grace now logs the best score it saw
+  (`grace lock (no peak; last d=… sc=…)`) so out-of-range vs
+  sub-threshold is diagnosable from `nkf-phase.log`.
+
+- **Live NKF status telemetry on the Audio tab** via the new
+  `NkfGetState()` (`src/nkf_wrapper.h`): `failed open (guard)`
+  / `shadow (warm-up)` / `shadow (settling)` / `live`,
+  with `delay ~XX ms (locked|estimated)` and a
+  `(loop, adapting)` flag while a self-monitor loop is active,
+  plus a hover tooltip.
+
+- The Notch checkbox tooltip now shows live telemetry: the two
+  section frequencies, engaged/bypassed state, and whether
+  adaptation is frozen (voice), running (sustained tone), or idle.
 
 ### Changed
 
-- **Post-stage panel is engine-aware.** WPE + notch only render for the
-  NKF engine; the DTLN-NS checkbox only renders for DTLN/AEC3. Each
-  toggle restarts the chain live.
-- **Post-stage prefs are engine-scoped.** Switching engines (profile
-  switch, load, reset-to-defaults) resets each stage to its engine's
-  defaults, so a toggle left on for another engine cannot leak into a
-  chain that doesn't run it and make Start look broken after a switch.
-- **Experimental engines hidden behind an Appearance checkbox.**
-  WebRTC AEC3 and NKF-AEC are no longer in the profile list by
-  default — DTLN-AEC 128 is the only visible engine. Ticking the
-  checkbox reveals them; unticking falls back to DTLN so the
-  selection can never be left on a hidden engine.
-- **The Advanced collapsible is renamed to "More".**
-
-### Fixed
-
-- **Ort::Session takes a wchar_t path on Windows.** The ONNX backend
-  passed a `const char*` to the Session constructor, which only accepts
-  `ORTCHAR_T*` (wchar_t on Windows) — same fix the DTLN wrapper
-  applies.
-- **CMake parses a trailing `//` comment as a source filename.**
-  `src/dtln_ns_wrapper.cpp   // DTLN noise reduction (DTLN/AEC3 only)`
-  was treated as a source path; the comment is now a bare filename.
-- **API names + Gui:: namespace in the DTLN-NS wiring.** `main.cpp`
-  called the stage with the old `Dtns*` names; the public API is
-  `DtlnNs*` (`DtnsLastError`). Also dropped a phantom `Gui::` namespace
-  (the codebase uses ` ImGui::` directly).
-
-## [1.10.0] — 2026-09-28
+- **Pipeline is now engine → WPE → Notch → meters → limiter →
+  gain.** Meters show what Discord hears (post-stage). Output status
+  line reports the stacked chain ("16000 Hz, AEC3 + WPE + Notch").
+  The speech flag driving both stages comes from a cheap RMS
+  hysteresis detector on the engine output (attack ~20 ms, release
+  ~300 ms) — no voice model needed.
+- **Config generation 6.** Slot 7 = WPE tick, slot 17 = notch tick.
+  Gen ≤ 5 files still load: presets migrate to profiles, old Manual
+  setups land on the profile for their engine, and both post stages
+  are forced ON (the slots held the retired preprocess/DFN and
+  custom-profile flags).
 
 ### Fixed
 
@@ -184,16 +251,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (engine not amplifying). Verified end-to-end: howl builds, guard
   attacks to −36 dB, releases at t=14.34 (cancel proven), and the
   near-end voice passes at full level.
-
-## [2.0.1] — 2026-09-28 (unreleased smoke-test work)
-
-> **Never shipped.** This numbering was used for experimental work that
-> was merged into the release line instead. Its changes are part of the
-> shipped **1.10.0** and **1.10.1** releases — see those sections for
-> what actually reached users. Kept here as a historical record of the
-> development that produced them.
-
-### Fixed
 
 - **NKF crashed the whole app ~3 s after Start.** The engine linked
   against a prebuilt `libnkf_aec.dll` from before this round's header
@@ -271,33 +328,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now 80 Hz: a 110 Hz ring is captured at −50 dB; voice-bypass
   suites remain bit-exact.
 
-### Added
+### Removed
 
-- **NKF time-delay compensation searches 800 ms, coarse-to-fine
-  over partial ranges** (was one full-rate sweep of 300 ms): a 4×
-  box-decimated pass over as much history as exists, then ±8
-  raw-sample refinement. The partial range means a typical round
-  trip locks in the first half second instead of waiting for the
-  whole buffer to fill — echo harness locks 40/120/250 ms at
-  0.14/0.21/0.35 s with correlation 1.000 at the exact sample,
-  mic-test at 0.49 s (previously the 3 s grace lock). The search
-  runs eagerly every 256 ms until the first confident peak, then
-  every 512 ms; delay jumps still need a 0.55 peak, and an
-  on-screen dwell (grace) lock does not claim confidence. A
-  no-peak grace now logs the best score it saw
-  (`grace lock (no peak; last d=… sc=…)`) so out-of-range vs
-  sub-threshold is diagnosable from `nkf-phase.log`.
-
-- **Live NKF status telemetry on the Audio tab** via the new
-  `NkfGetState()` (`src/nkf_wrapper.h`): `failed open (guard)`
-  / `shadow (warm-up)` / `shadow (settling)` / `live`,
-  with `delay ~XX ms (locked|estimated)` and a
-  `(loop, adapting)` flag while a self-monitor loop is active,
-  plus a hover tooltip.
-
-- The Notch checkbox tooltip now shows live telemetry: the two
-  section frequencies, engaged/bypassed state, and whether
-  adaptation is frozen (voice), running (sustained tone), or idle.
+- **Silero voice gate** — detector, calibration, the SPEAKING/SILENT
+  pill, dual-feed resamplers and the "Push down silence" checkbox are
+  all gone (models/silero_vad.onnx no longer ships).
+- **Near-end protector** (dry-mic blend) — no detector exists to
+  gate it.
+- **Noise reduction checkbox** — the WebRTC NS stages in AEC3/NKF
+  are gone (AEC3 keeps its high-pass filter).
+- **DeepFilterNet (cut before release).** The v2.0 pre-release line
+  stacked a full DeepFilterNet3 port after the engine; detail
+  testing showed the LSNR gating modulated voice level audibly
+  (voice pumping up/down mid-sentence), so the stage, its wrapper
+  and its ~8 MB of model files were cut before the release shipped.
+  WPE + the adaptive notch carry the noise/reverb/howl cleanup
+  instead.
+- **Engine combo and Quick presets** — the engine only changes
+  through the profile menu.
+- **GTCRN dead code** (gtcrn_wrapper) and the Silero voice gate.
 
 ### Notes
 
@@ -313,81 +362,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   convergence hold, the confident-lock release condition and
   the freeze switch are all gone. The detector now feeds
   telemetry only; guard trips remain the backstop.
-
-## [2.0.0] — 2026-09-27 (unreleased smoke-test work)
-
-> **Never shipped.** This numbering was used for experimental work that
-> was merged into the release line instead. Its changes are part of the
-> shipped **1.10.0** and **1.10.1** releases — see those sections for
-> what actually reached users. Kept here as a historical record of the
-> development that produced them.
-
-### Added
-
-- **Three engine profiles replace engines + presets.** One combo
-  at the top of the Audio tab selects the engine; the label shows the
-  engine name directly, plus `→ WPE` / `→ Notch` while the post
-  stages are ticked (no hidden state):
-  - *DTLN-AEC 128* — dual-LSTM echo + noise canceller (16 kHz).
-    Default: best echo + reverb handling.
-  - *WebRTC AEC3* — the canceller Chrome and Google Meet use.
-    Reliable, well-tested baseline, strongest canceller.
-  - *NKF-AEC* — tiny neural Kalman core. Cheap canceller for weak
-    CPUs.
-  Sample rate, gains and devices are independent knobs (only the
-  16-kHz-only engines force the rate down). Old configs migrate: the
-  five v1.9 presets map onto the three profiles, old *Manual* lands
-  on the profile for its engine.
-- **Dereverb (WPE) as a global post stage.** The in-tree streaming
-  single-channel Weighted Prediction Error dereverberator returns
-  (removed inside NKF in 2.0, now a standalone stage stacked after
-  every engine) and is extended to 48 kHz (frame geometry scales
-  512/1536 with the same 32 ms frames). Speech-gated predictor bound
-  protects voice level; model-free (pocketfft only), ~32 ms delay.
-- **Feedback suppression (adaptive notch).** Two cascaded
-  second-order notches (~60 Hz) whose centers track narrowband
-  howling/ringing via LMS on the quadrature component, slew-limited
-  (8000 Hz/s), frozen while you talk (voice can never latch it) and
-  exact-bypass until a tone is actually captured (>45% energy removed
-  for ~200 ms, engage-gating) — idle voice passes bit-exact. Runs at
-  16/48 kHz.
-- Both post stages are always-visible ticks, **ON by default for
-  every profile**, persist across restarts and are never reset by a
-  profile switch (config gen 6).
-
-### Changed
-
-- **Pipeline is now engine → WPE → Notch → meters → limiter →
-  gain.** Meters show what Discord hears (post-stage). Output status
-  line reports the stacked chain ("16000 Hz, AEC3 + WPE + Notch").
-  The speech flag driving both stages comes from a cheap RMS
-  hysteresis detector on the engine output (attack ~20 ms, release
-  ~300 ms) — no voice model needed.
-- **Config generation 6.** Slot 7 = WPE tick, slot 17 = notch tick.
-  Gen ≤ 5 files still load: presets migrate to profiles, old Manual
-  setups land on the profile for their engine, and both post stages
-  are forced ON (the slots held the retired preprocess/DFN and
-  custom-profile flags).
-
-### Removed
-
-- **Silero voice gate** — detector, calibration, the SPEAKING/SILENT
-  pill, dual-feed resamplers and the "Push down silence" checkbox are
-  all gone (models/silero_vad.onnx no longer ships).
-- **Near-end protector** (dry-mic blend) — no detector exists to
-  gate it.
-- **Noise reduction checkbox** — the WebRTC NS stages in AEC3/NKF
-  are gone (AEC3 keeps its high-pass filter).
-- **DeepFilterNet (cut before release).** The v2.0 pre-release line
-  stacked a full DeepFilterNet3 port after the engine; detail
-  testing showed the LSNR gating modulated voice level audibly
-  (voice pumping up/down mid-sentence), so the stage, its wrapper
-  and its ~8 MB of model files were cut before 2.0.0 shipped.
-  WPE + the adaptive notch carry the noise/reverb/howl cleanup
-  instead.
-- **Engine combo and Quick presets** — the engine only changes
-  through the profile menu.
-- **GTCRN dead code** (gtcrn_wrapper) and the Silero voice gate.
 
 ## [1.9.2] — 2026-09-26
 
