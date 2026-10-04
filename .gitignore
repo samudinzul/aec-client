@@ -67,3 +67,6 @@ imgui.ini
 opencode.json
 __pycache__/
 .venv/
+
+.gitignore
+.gitattributes
