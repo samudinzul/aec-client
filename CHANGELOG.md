@@ -5,7 +5,7 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.11.0] — 2026-10-04
+## [Unreleased]
 
 ### Added
 
@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DTLN-NS chain as a pure-Python local server with
   a browser GUI — a second distribution alongside
   the desktop exe, shipped as a separate zip
-  (`AEC-Web-vX-win64.zip`) with no PE binary and
+  (`AEC-Web-vX-win64.zip`, first attached to the
+  v1.10.1 release page) with no PE binary and
   therefore none of the antivirus false positives.
   One-click `web/start.bat` (venv + packages +
   server + GUI; a second click reopens the GUI

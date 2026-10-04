@@ -4,7 +4,7 @@
 # desktop AEC-Client-vX-win64.zip (both sit on the
 # same GitHub release page).
 #
-# Usage:  scripts/make-web-release.sh 1.11.0
+# Usage:  scripts/make-web-release.sh 1.10.1
 #
 # Contract:
 #   release/AEC-Web-vX-win64/
