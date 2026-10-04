@@ -24,7 +24,7 @@
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
-    echo "usage: $0 <version>   (e.g. $0 1.11.0)" >&2
+    echo "usage: $0 <version>   (e.g. $0 1.10.1)" >&2
     exit 1
 fi
 VER="$1"
