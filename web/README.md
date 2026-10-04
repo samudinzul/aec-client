@@ -10,14 +10,17 @@ nothing for antivirus heuristics to flag.
 1. **Windows 10 or 11 (64-bit).**
 2. **Python 3.10 or newer** — must be installed *before*
    the first run (the starter script uses it to create a local
-   environment). Install it with winget:
-   ```powershell
-   winget install -e --id Python.Python.3.12
-   ```
+   environment), any one of:
+   - **cmd.exe or PowerShell:**
+     ```powershell
+     winget install -e --id Python.Python.3.12
+     ```
+   - **python.org installer:** https://www.python.org/downloads/ —
+     run it and tick **"Add python.exe to PATH"** on the first screen.
    Close and reopen your terminal afterwards so `python` is on PATH.
    Check with `python --version` (3.12 recommended; 3.14 works too —
    every package below ships wheels for it). Python from the
-   Microsoft Store also works but winget is more reliable.
+   Microsoft Store also works, but the two routes above are more reliable.
 3. **VB-CABLE** (https://vb-audio.com/Cable/, free) — install and reboot.
 4. About 500 MB free disk (Python environment + packages + models).
 

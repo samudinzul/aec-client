@@ -93,11 +93,20 @@ local Python environment, installs packages (first run only,
 time to open another window while the server keeps
 running; close the window (or Ctrl+C) to stop.
 
-Requirements: Windows 10/11 64-bit, Python 3.10+ (one-time
-install via `winget install -e --id Python.Python.3.12`),
-VB-CABLE, ~500 MB free. Same DSP, same models, same device
-model as the desktop app — mic + speaker loopback in, cleaned
-voice out to CABLE. Full docs: [web/README.md](web/README.md).
+Requirements: Windows 10/11 64-bit, Python 3.10+ (one-time,
+free), VB-CABLE, ~500 MB free.
+
+**Installing Python** — any one of:
+- **cmd.exe or PowerShell:** `winget install -e --id Python.Python.3.12`
+- **python.org installer:** https://www.python.org/downloads/ —
+  run it and tick **"Add python.exe to PATH"** on the first screen.
+
+Then close and reopen your terminal (or reboot) so `python` is
+on PATH.
+
+Same DSP, same models, same device model as the desktop app —
+mic + speaker loopback in, cleaned voice out to CABLE.
+Full docs: [web/README.md](web/README.md).
 
 ---
 
