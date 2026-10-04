@@ -386,10 +386,18 @@ class AudioRunner:
 
     def stop(self):
         self._stop.set()
-        # Feeder threads exit on their own (blocking reads
-        # return within one chunk). Join them BEFORE touching
-        # the streams: stop_stream() while a blocking read or
-        # write is pending is what hung the Stop button.
+        # Abort BEFORE joining: Pa_AbortStream returns
+        # immediately (unlike stop_stream it never waits
+        # for the buffer to drain) and unblocks pending
+        # blocking reads/writes. A CABLE Input with no
+        # consumer fills its buffer and can wedge
+        # stream.write() indefinitely; abort is what
+        # breaks the wedge without hanging teardown.
+        for s in self._streams:
+            try:
+                s.abort_stream()
+            except Exception:
+                pass
         for t in self._threads:
             t.join(timeout=1.5)
         self._threads = []
