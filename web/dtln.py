@@ -10,6 +10,30 @@ Backend: the upstream .tflite pair run directly through Google's
 ``ai-edge-litert`` wheel (exact weights, no conversion). There is no
 ONNX path — the repo carries no DTLN .onnx pairs.
 Fail-open everywhere: dead backend ships mic, never silence.
+
+Probed tensor layouts of the shipped models (reshape-to-declared-
+shape in ``_feed`` makes the port robust to any flat input):
+
+  dtln_aec_128_1: IN  [1,1,257] mic_mag, [1,2,128,2] states,
+                           [1,1,257] lpb_mag
+                  OUT [1,1,257] mask,   [1,2,128,2] states
+  dtln_aec_128_2: IN  [1,1,512] est_td, [1,2,128,2] states,
+                           [1,1,512] lpb_td
+                  OUT [1,1,512] block,  [1,2,128,2] states
+
+One concatenated LSTM state tensor per model (512 floats), not
+two separate states. Stage 2's three inputs are all 512 floats —
+the official in[1]=states layout wins the tie (ClassifyDtln3),
+never "largest input".
+
+DSP fidelity vs the C++ wrapper (both verified by
+web/test_offline.py --smoke, deterministic across platforms):
+  - NO window on the STFT (plain rfft of the ring buffer) —
+    neither sqrt-Hann nor Hann, same as breizhn/DTLN-aec
+  - magnitudes are raw abs(), no normalization
+  - irfft carries the 1/N (numpy), matching pocketfft c2r
+    scale=1.0 plus the C++ ``estTd[i] / DTLN_BLOCK_LEN``
+  - int16 emission clips then truncates toward zero
 """
 
 from collections import deque
