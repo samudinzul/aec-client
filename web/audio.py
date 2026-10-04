@@ -64,6 +64,14 @@ def _is_virtual_cable(name: str) -> bool:
     return "cable" in low or "vb-audio" in low
 
 
+def _is_pseudo(name: str) -> bool:
+    """MME/DirectSound pseudo-devices — the OS 'default
+    device' aliases, not real endpoints (miniaudio, used by
+    the desktop app, never lists them)."""
+    low = name.lower()
+    return "sound mapper" in low or "primary sound" in low
+
+
 def _is_cable_input(name: str) -> bool:
     return _is_virtual_cable(name) and "input" in name.lower()
 
@@ -80,28 +88,45 @@ def _hostapi_rank(pa, host_api) -> int:
     return _HOSTAPI_RANK.get(name, 1)
 
 
+def _same_device(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    # MME truncates device names to 31 chars (MAXPNAMELEN),
+    # so the short name is a prefix of the full DirectSound/
+    # WASAPI one. 20-char floor keeps unrelated devices with
+    # short shared prefixes apart.
+    if len(a) >= 20 and b.startswith(a):
+        return True
+    if len(b) >= 20 and a.startswith(b):
+        return True
+    return False
+
+
 def _dedupe(entries, pa):
-    """One entry per device name; on collisions keep the entry
-    with the best host API (WASAPI > DirectSound > MME > WDM-KS)."""
-    best, order = {}, []
+    """One entry per physical device; on a name collision
+    keep the best host API (WASAPI > DirectSound > MME >
+    WDM-KS)."""
+    kept = []
     for e in entries:
-        if e["name"] not in best:
-            order.append(e["name"])
-            best[e["name"]] = e
-        elif (_hostapi_rank(pa, e["hostApi"])
-              > _hostapi_rank(pa, best[e["name"]]["hostApi"])):
-            best[e["name"]] = e
-    return [best[n] for n in order]
+        for i, k in enumerate(kept):
+            if _same_device(e["name"], k["name"]):
+                if (_hostapi_rank(pa, e["hostApi"])
+                        > _hostapi_rank(pa, k["hostApi"])):
+                    kept[i] = e
+                break
+        else:
+            kept.append(e)
+    return kept
 
 
 def _snap(index, entries, by_name=None):
-    """Default index snapped onto `entries`: exact index, else
-    name match, else first entry, else None."""
+    """Default index snapped onto `entries`: exact index,
+    else name match, else first entry, else None."""
     if index is not None and any(e["index"] == index for e in entries):
         return index
     if by_name:
         for e in entries:
-            if e["name"] == by_name:
+            if _same_device(e["name"], by_name):
                 return e["index"]
     return entries[0]["index"] if entries else None
 
@@ -174,8 +199,11 @@ def list_devices():
                    if e["maxInputChannels"] > 0
                    and e["index"] not in {l["index"]
                                           for l in loop_entries}
-                   and not _is_virtual_cable(e["name"])]
-            play = [e for e in raw if e["maxOutputChannels"] > 0]
+                   and not _is_virtual_cable(e["name"])
+                   and not _is_pseudo(e["name"])]
+            play = [e for e in raw
+                    if e["maxOutputChannels"] > 0
+                    and not _is_pseudo(e["name"])]
             ref = [e for e in loop_entries
                    if not _is_virtual_cable(e["name"])]
 
@@ -358,16 +386,23 @@ class AudioRunner:
 
     def stop(self):
         self._stop.set()
+        # Feeder threads exit on their own (blocking reads
+        # return within one chunk). Join them BEFORE touching
+        # the streams: stop_stream() while a blocking read or
+        # write is pending is what hung the Stop button.
+        for t in self._threads:
+            t.join(timeout=1.5)
+        self._threads = []
         for s in self._streams:
             try:
                 s.stop_stream()
+            except Exception:
+                pass
+            try:
                 s.close()
             except Exception:
                 pass
         self._streams = []
-        for t in self._threads:
-            t.join(timeout=1.0)
-        self._threads = []
         try:
             if self._pa is not None:
                 self._pa.terminate()

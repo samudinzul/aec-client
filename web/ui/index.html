@@ -107,11 +107,25 @@ $('rescan').onclick = loadDevices;
 
 $('startBtn').onclick = async () => {
   savePrefs();
-  const r = running ? await api('POST', '/api/stop')
-                    : await api('POST', '/api/start');
-  if (!r.ok) { $('err').textContent = r.error || 'failed'; return; }
-  $('err').textContent = r.state.error || r.state.ns.error || '';
-  setRunning(r.state.running, r.state);
+  const btn = $('startBtn');
+  btn.disabled = true;
+  btn.textContent = running ? 'Stopping…' : 'Starting…';
+  try {
+    const r = running ? await api('POST', '/api/stop')
+                      : await api('POST', '/api/start');
+    if (!r.ok) {
+      $('err').textContent = r.error || 'failed';
+    } else {
+      $('err').textContent = r.state.error || r.state.ns.error || '';
+      setRunning(r.state.running, r.state);
+    }
+  } catch (e) {
+    $('err').textContent = 'server unreachable (' + e.message + ')';
+    setRunning(false, {});
+  } finally {
+    btn.disabled = false;
+    btn.textContent = running ? 'Stop' : 'Start';
+  }
 };
 function setRunning(on, st) {
   running = on;
@@ -130,6 +144,10 @@ function meter(id, v, peak) {
   g.fillStyle = '#ffd75e'; g.fillRect(0, h - pk * h - 2, w, 2);
 }
 const ws = new WebSocket(`ws://${location.host}/ws`);
+ws.onclose = () => {
+  setRunning(false, {});
+  $('status').textContent = 'Server disconnected — restart python -m web.server';
+};
 ws.onmessage = ev => {
   const st = JSON.parse(ev.data);
   if (st.running !== running) setRunning(st.running, st);
