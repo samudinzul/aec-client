@@ -90,8 +90,31 @@ def _hostapi_rank(pa, host_api) -> int:
     try:
         name = pa.get_host_api_info_by_index(host_api)["name"].lower()
     except Exception:
-        return 1
-    return _HOSTAPI_RANK.get(name, 1)
+        # PortAudio registers host APIs worst-first on
+        # Windows (MME=0, DirectSound=1, WASAPI=2,
+        # WDM-KS=3), so the index itself is the rank.
+        return host_api
+    return _HOSTAPI_RANK.get(name, host_api)
+
+
+# MME truncates device names to 31 chars (MAXPNAMELEN).
+# Full names are recovered from two sources: the WASAPI
+# loopback generator (pyaudiowpatch's own WASAPI path —
+# it keeps working even when PortAudio's WASAPI and
+# DirectSound host APIs enumerate nothing) and the fixed
+# VB-CABLE product names.
+_KNOWN_FULL_NAMES = [
+    "CABLE Input (VB-Audio Virtual Cable)",
+    "CABLE Output (VB-Audio Virtual Cable)",
+]
+_LOOPBACK_SUFFIX = " [Loopback]"
+
+
+def _full_name(short: str, full_pool) -> str:
+    for full in full_pool:
+        if full.startswith(short):
+            return full
+    return short
 
 
 def _same_device(a: str, b: str) -> bool:
@@ -212,6 +235,17 @@ def list_devices():
                     and not _is_pseudo(e["name"])]
             ref = [e for e in loop_entries
                    if not _is_virtual_cable(e["name"])]
+
+            # Recover full names for MME-truncated entries
+            # (31-char cap) from the loopback generator's
+            # full names and the known VB-CABLE names.
+            full_pool = _KNOWN_FULL_NAMES + [
+                e["name"][:-len(_LOOPBACK_SUFFIX)]
+                for e in loop_entries
+                if e["name"].endswith(_LOOPBACK_SUFFIX)
+            ]
+            for e in raw:
+                e["name"] = _full_name(e["name"], full_pool)
 
             out["capture"] = _dedupe(cap, pa)
             out["loopback"] = _dedupe(ref, pa)
