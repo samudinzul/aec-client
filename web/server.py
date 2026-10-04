@@ -26,6 +26,21 @@ UI_DIR = os.path.join(HERE, "ui")
 
 app = FastAPI(title="aec-web")
 chain = Chain(model_dir=os.path.join(ROOT, "models"))
+
+
+def _preload_models():
+    """Load the DTLN pairs in the background at
+    server startup (~5 s cold) so clicking Start
+    is instant — Start just waits on the load
+    lock if it's still in flight."""
+    try:
+        chain.preload()
+    except Exception:
+        pass  # Start surfaces the error
+
+
+threading.Thread(target=_preload_models,
+                 daemon=True, name="preload").start()
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,

@@ -14,6 +14,8 @@ Notes on fidelity vs the desktop app:
   silence naturally, same as the desktop ref-ring-underflow path.
 """
 
+import threading
+
 import numpy as np
 
 from . import dsp
@@ -42,32 +44,57 @@ class Chain:
         # engine-agnostic, fail-open DSP).
         self.gate = SpeechGate()
         self.notch = None
+        self._load_lock = threading.Lock()
+
+    def _load_engines(self):
+        """Build the model pairs — the slow part
+        (~5 s cold: 4 tflite files + interpreter
+        setup). Caller holds _load_lock. NS
+        missing/broken is fail-open, not fatal:
+        the stage stays off and the engine output
+        passes through."""
+        self.dtln = DtlnAec(f"{self.model_dir}/dtln_aec_128")
+        self.ns = DtlnNs(f"{self.model_dir}/dtln_ns_128")
+
+    def preload(self):
+        """Load the models at server startup (background
+        thread) so the first Start is instant."""
+        with self._load_lock:
+            if self.running or self.dtln is not None:
+                return
+            self._load_engines()
 
     def start(self):
-        self.dtln = DtlnAec(f"{self.model_dir}/dtln_aec_128")
-        if not self.dtln.ready:
-            self.last_error = self.dtln.last_error or "Failed to load DTLN model"
-            self.dtln = None
-            self.ns = None
-            self.running = False
-            return False
-        self.ns = DtlnNs(f"{self.model_dir}/dtln_ns_128")
-        # NS missing/broken is fail-open, not fatal — same as desktop:
-        # the stage stays off and the engine output passes through.
-        self.ns_enabled = True
-        self.notch = Notch(dsp.SAMPLE_RATE)
-        self.gate = SpeechGate()
-        self.running = True
-        self.frames = 0
-        self.last_error = "" if self.ns.ready else self.ns.last_error
-        return True
+        with self._load_lock:
+            if self.dtln is None:
+                self._load_engines()
+            if not self.dtln.ready:
+                self.last_error = (self.dtln.last_error
+                                   or "Failed to load DTLN model")
+                self.dtln = None
+                self.ns = None
+                self.running = False
+                return False
+            self.notch = Notch(dsp.SAMPLE_RATE)
+            self.gate = SpeechGate()
+            self.running = True
+            self.frames = 0
+            self.last_error = "" if self.ns.ready else self.ns.last_error
+            return True
 
     def stop(self):
-        self.dtln = None
-        self.ns = None
-        self.notch = None
-        self.gate = SpeechGate()
-        self.running = False
+        # Models stay resident (preloaded at server
+        # startup); a new session just resets the
+        # DSP state, so Stop -> Start is instant too.
+        with self._load_lock:
+            if self.dtln is not None:
+                self.dtln.reset()
+            if self.ns is not None:
+                self.ns.reset()
+            self.notch = None
+            self.gate = SpeechGate()
+            self.running = False
+            self.frames = 0
 
     def process_frame(self, mic_i16, ref_i16):
         """One int16 frame in -> int16 frame out. Never mutes."""
