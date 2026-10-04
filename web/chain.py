@@ -132,6 +132,12 @@ class Chain:
                         round(self.notch.freq(1))]
                        if self.notch else [0, 0]),
             },
+            "gate": {
+                "on": 1 if self.gate.on else 0,
+                "stuck": 1 if self.gate.stuck else 0,
+                "runMs": round(self.gate.run_ms),
+                "evMs": round(self.gate.evidence_ms),
+            },
             "frames": self.frames,
             "error": self.last_error,
             "dtlnError": dtln_obj.last_error if dtln_obj else "",

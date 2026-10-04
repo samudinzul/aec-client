@@ -74,8 +74,10 @@ Open http://localhost:8000 — that page IS the GUI.
 - **Feedback suppression** (`notch.py` + `speech_gate.py`, ports of
   the desktop `notch.cpp` + `speech_gate.h`): a sustained howl
   (speaker too close to the mic, mic-test playback) is tracked and
-  cut after ~5 s — two 60 Hz adaptive notches that only latch on
-  narrowband tones, so voice is never touched.
+  cut after ~3.5 s — two 60 Hz adaptive notches that only latch on
+  narrowband tones, so voice is never touched. The cut releases
+  ~2 s after the howl stops (the engine leaves a brief residual
+  at the howl frequency that the notch rides out).
 
 16 kHz only (same auto-lock as the desktop DTLN path).
 

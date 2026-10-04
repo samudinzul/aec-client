@@ -14,8 +14,18 @@ two flags:
               ends):
 
     1. continuous run: ON without a single release for
-       kRunMs (4.5 s) — a howl never pauses. Fast and
-       exact for the classic sustained tone.
+       kRunMs (3 s — web path; the desktop NKF path
+       uses 4.5 s) — a howl never pauses. Fast and
+       exact for the classic sustained tone. Speech
+       can trip it too: the EMA's ~0.8 s release lag
+       means loud phrase pauses don't always drop
+       ema below kOff, so run_ms accumulates across
+       conversation. That trip is harmless — the
+       notch's engage gate (>45% narrowband energy
+       removed) cannot latch broadband voice, and a
+       latched notch releases within ~1 s of
+       broadband input. The burst detector below
+       (6.8 s) stays the conversation-safe backstop.
     2. burst evidence: +1 ms per ON frame, decayed with
        kGapTauMs (700 ms) while quiet, trip at kBurstMs
        (6.8 s). The old continuous counter re-armed from
@@ -56,7 +66,7 @@ class SpeechGate:
         k_rel = 1.0 - math.exp(-frame_dur_ms / 300.0)
         k_on = 500.0      # int16 RMS: -30 dBFS
         k_off = 250.0     # -36 dBFS (hiss floor sits below)
-        k_run_ms = 4500.0
+        k_run_ms = 3000.0
         k_burst_ms = 6800.0
         k_gap_tau_ms = 700.0
 

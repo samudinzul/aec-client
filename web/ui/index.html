@@ -174,6 +174,9 @@ function connect() {
     $('status').textContent =
       `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
       (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '') +
+      (st.gate
+        ? ` · gate ${st.gate.stuck ? 'tone?' : (st.gate.on ? 'speech' : 'quiet')}`
+        : '') +
       (st.notch && (st.notch.engaged[0] || st.notch.engaged[1])
         ? ` · feedback notch @ ${st.notch.hz[0] || st.notch.hz[1]} Hz`
         : '');

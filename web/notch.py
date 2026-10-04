@@ -29,6 +29,16 @@ Voice safety (nothing may sound unnatural):
   - a 60 Hz cut parked on a vowel harmonic removes a
     single narrow band: bounded, static coloration —
     never pumping.
+  - a latched notch RELEASES after ~1 s of removing
+    <15% of its input energy (the tone is gone — e.g.
+    the mic-test howl ended) or of its input falling
+    below the silence floor. The C++ never releases
+    (its notch only ever runs on the NKF path); the
+    web runs it on the DTLN path, where a permanent
+    60 Hz cut in the voice band would muffle every
+    later sentence. Tested per block, so it rides
+    out the engine's ~1 s residual at the howl
+    frequency; a returning howl re-latches in ~200 ms.
 
 Fail-open: state is finite by construction (clamps +
 slew), the stage passes audio unconditionally.
@@ -48,6 +58,8 @@ _EMA_ALPHA = 0.9995
 _BLOCK_ALPHA = 0.967
 _ENG_RATIO = 0.45
 _ENG_BLOCKS = 20
+_REL_RATIO = 0.15
+_REL_BLOCKS = 100  # ~1 s of 10 ms blocks
 _DEAD_FRAC = 0.002
 _EPS = 1e-20
 _FLOOR_RMS = 1e-3
@@ -55,7 +67,8 @@ _FLOOR_RMS = 1e-3
 
 class _Section:
     __slots__ = ("w", "w_init", "engaged", "eng_count",
-                 "pin_e", "pout_e", "r", "b1", "a1", "a2",
+                 "rel_count", "pin_e", "pout_e", "r",
+                 "b1", "a1", "a2",
                  "sw", "x1", "x2", "y1", "y2", "s1", "s2",
                  "ema_g", "ema_p")
 
@@ -64,6 +77,7 @@ class _Section:
         self.w_init = 0.0
         self.engaged = False
         self.eng_count = 0
+        self.rel_count = 0
         self.pin_e = 0.0
         self.pout_e = 0.0
         self.r = 0.0
@@ -96,6 +110,7 @@ class _Section:
         self.ema_g = self.ema_p = 0.0
         self.pin_e = self.pout_e = 0.0
         self.eng_count = 0
+        self.rel_count = 0
         self.engaged = False
         self.w_init = hz
         self.set_freq(2.0 * math.pi * hz / sr)
@@ -225,13 +240,36 @@ class Notch:
         ratio = [0.0, 0.0]
         for k in range(_SECTIONS):
             s = secs[k]
-            # An engaged section is not a candidate: its
-            # ratio stays high (it is removing energy),
-            # which would starve the free section of the
-            # streak it needs to latch a second howl.
-            ratio[k] = (-1.0 if s.engaged
-                        else (s.pin_e - s.pout_e)
-                        / (s.pin_e + _EPS))
+            if s.engaged:
+                # Release: a latched notch whose tone is
+                # gone un-latches after ~1 s, so a 60 Hz
+                # cut can never sit in the voice band for
+                # the whole session. Tested on the CURRENT
+                # BLOCK's removal ratio — the latch EMA
+                # (kBlockAlpha) carries the howl's
+                # signature for seconds after the tone
+                # stops (its pinE started ~20x above
+                # poutE), which would delay release. The
+                # DTLN engine leaves a residual at the
+                # howl frequency that washes out in ~1 s
+                # and sits below the 15% bar, so the
+                # streak simply waits it out. A returning
+                # howl resets the streak instantly (every
+                # block of a howl removes >45%).
+                silent = rms < _FLOOR_RMS
+                own_blk = (acc_pin[k] - acc_pout[k]) / (
+                    acc_pin[k] + _EPS)
+                if silent or own_blk < _REL_RATIO:
+                    s.rel_count += 1
+                    if s.rel_count >= _REL_BLOCKS:
+                        s.engaged = False
+                        s.eng_count = 0
+                        s.rel_count = 0
+                else:
+                    s.rel_count = 0
+                ratio[k] = -1.0
+                continue
+            ratio[k] = (s.pin_e - s.pout_e) / (s.pin_e + _EPS)
             if ratio[k] > best_ratio:
                 best_ratio = ratio[k]
                 best = k

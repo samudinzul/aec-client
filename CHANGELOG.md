@@ -31,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`web/speech_gate.py`, from `src/speech_gate.h`)
   and adaptive LMS notch (`web/notch.py`, from
   `src/notch.cpp`) run after the engine — a
-  sustained howl is cut after ~5 s (measured
-  −80 dB suppression) while broadband speech never
+  sustained howl is suppressed after ~3.5 s
+  (measured −80 dB) while broadband speech never
   latches a section (engage-gated; adaptation is
   frozen while the gate says "talking").
 
@@ -51,13 +51,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Web feedback notch cut speech for the whole
+  session.** A howl (Discord mic-test playback)
+  latched a 60 Hz notch that never un-latched —
+  the C++ design never releases (its notch only
+  runs on the NKF path), but the web runs it on
+  the DTLN path, so the cut sat in the voice
+  band forever and muffled every later sentence
+  (the "speech cutting" report). A latched
+  section now releases after ~1 s of removing
+  <15% of its block energy (or of silence),
+  riding out the engine's ~1 s residual at the
+  howl frequency; a returning howl re-latches
+  in ~200 ms.
+- **Feedback-suppression latency.** The gate's
+  continuous-stuck threshold drops from 4.5 s
+  (the desktop NKF value) to 3 s on the web
+  path, so a sustained howl is suppressed after
+  ~3.5 s instead of ~5 s.
+- **Status line shows the gate state**
+  (`speech` / `quiet` / `tone?` — sustained
+  loudness, possibly a howl) next to the notch
+  frequency, so suppression is visible live.
 - **WebSocket dropped on every Stop** — a TOCTOU
   race between the stop endpoint (nulling
-  runner/chain state from a worker thread) and the
-  meter loop's check-then-read. Chain state and the
-  runner are now snapshotted before use; verified
-  with 4 concurrent readers over 400 stop/start
-  cycles, zero errors.
+  runner/chain state from a worker thread) and
+  the meter loop's check-then-read. Chain state
+  and the runner are now snapshotted before use;
+  verified with 4 concurrent readers over 400
+  stop/start cycles, zero errors.
 - **Device lists** no longer show MME/DirectSound
   pseudo-devices ("Microsoft Sound Mapper",
   "Primary Sound Driver"), duplicate host-API
