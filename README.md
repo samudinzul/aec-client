@@ -12,6 +12,7 @@
 
 - [What It Does](#what-it-does)
 - [Features](#features)
+- [Web UI (no install)](#web-ui-no-install)
 - [Quick Start](#quick-start)
 - [Profiles](#profiles)
 - [Profile Comparison](#profile-comparison)
@@ -54,7 +55,7 @@ No more headphones. No more echo. No dead-air noise.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS` (DTLN/AEC3) / `engine → WPE → Notch` (NKF), matching the ticks that actually show for that engine, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on the DTLN and WebRTC AEC3 paths; NKF uses its own WPE + notch instead.
 - **Dereverb (WPE)** — streaming weighted-prediction-error dereverbberation: eats late room echo and reverb tails after the canceller; ~32 ms delay, model-free (no ONNX), 16/48 kHz. NKF only.
-- **Feedback suppression (notch)** — two adaptive LMS notch filters that track narrowband howling/ringing tones (speaker-mic loops); exact bypass until a tone is actually captured, so voice passes bit-exact while idle. NKF only.
+- **Feedback suppression (notch)** — two adaptive LMS notch filters that track narrowband howling/ringing tones (speaker-mic loops); exact bypass until a tone is actually captured, so voice passes bit-exact while idle. NKF only (desktop); the web UI runs it on the DTLN path too.
 - **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting; NKF keeps its divergence guard, staged exposure and self-monitor loop detector.
 - **Low CPU usage** — engines typically well under 2% per stream on a typical desktop; the post stages add a fraction of a percent.
 - **Low latency** — 30–40 ms round-trip (+32 ms when WPE is stacked)
@@ -70,7 +71,38 @@ No more headphones. No more echo. No dead-air noise.
 
 ---
 
+## Web UI (no install)
+
+The default **DTLN-AEC 128 → DTLN-NS** chain — plus the
+adaptive feedback notch — also runs as a **pure-Python local
+web app**: no `.exe`, no installer, nothing for antivirus
+heuristics to flag. The desktop build's two VirusTotal false
+positives (`Wacatac.B!ml`, `susgen`) cannot occur here: every
+package is a mainstream PyPI wheel, and nothing we ship is a
+PE binary. **Never freeze it with PyInstaller/Nuitka** — that
+reintroduces the exact problem.
+
+**One click:** double-click `web\start.bat` — it creates a
+local Python environment, installs packages (first run only,
+~1 min), starts the server, and opens the GUI in your
+browser. Click it again any time to reopen the GUI while the
+server keeps running; close the window (or Ctrl+C) to stop.
+
+Requirements: Windows 10/11 64-bit, Python 3.10+ (one-time
+install via `winget install -e --id Python.Python.3.12`),
+VB-CABLE, ~500 MB free. Same DSP, same models, same device
+model as the desktop app — mic + speaker loopback in, cleaned
+voice out to CABLE. Full docs: [web/README.md](web/README.md).
+
+---
+
 ## Quick Start
+
+> **Prefer no-install, zero false positives?** The
+> [web UI](#web-ui-no-install) is the same DTLN chain
+> as a pure-Python local server — double-click
+> `web\start.bat` and you're done. The steps below
+> are for the desktop app.
 
 1. **Install [VB-CABLE](https://vb-audio.com/Cable/)** (free virtual audio cable). Reboot.
 2. **Download** the latest release from [Releases](https://github.com/samudinzul/aec-client/releases/latest) and extract it anywhere.
@@ -128,6 +160,10 @@ Done. Talk normally with speakers on.
 > Then run `aec_gui.exe` normally. The exclusion persists until removed
 > (Windows Security → Virus & threat protection → Manage settings →
 > Exclusions → Add/remove).
+>
+> **Zero-false-positive alternative.** The [web UI](#web-ui-no-install)
+> is pure Python — no PE binary, so `Wacatac.B!ml` and `susgen`
+> never apply. Same engines, same models, one click.
 
 ---
 
@@ -249,6 +285,7 @@ Settings are saved automatically. Only one copy of the app runs at a time (openi
 | Language | Role |
 |----------|------|
 | **C++17** | Main application |
+| **Python** | Web UI (server, DSP, engines via LiteRT) |
 | **C** | Third-party libraries (miniaudio, stb_image, GGML via NKF) |
 | **CMake** | Build system |
 | **Bash** | Build scripts |
@@ -287,6 +324,15 @@ Settings are saved automatically. Only one copy of the app runs at a time (openi
 | **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback) |
 | **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC, DTLN-AEC, WPE |
 | **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
+
+Web UI only (`web/`):
+
+| Library | Language | Purpose |
+|---------|----------|---------|
+| **[FastAPI](https://fastapi.tiangolo.com/) + uvicorn** | Python | REST + WebSocket server, serves the GUI |
+| **[ai-edge-litert](https://pypi.org/project/ai-edge-litert/)** (LiteRT) | Python | Runs the DTLN `.tflite` models |
+| **[pyaudiowpatch](https://pypi.org/project/pyaudiowpatch/)** | Python | PortAudio fork: mic in, WASAPI loopback, CABLE out |
+| **[numpy](https://numpy.org/)** | Python | DSP: rFFT/OLA, resampling, metering |
 
 ### Windows APIs
 
@@ -494,6 +540,20 @@ aec-client/
 │   ├── nkf.onnx                    NKF model (45 KB)
 │   ├── dtln_aec_128_{1,2}.tflite   DTLN-AEC 128 pair (default profile)
 │   └── dtln_ns_128_{1,2}.tflite    DTLN noise reduction pair
+│
+├── web/                        Pure-Python web UI (no .exe — see above)
+│   ├── start.bat               One-click launcher (venv + packages + server + GUI)
+│   ├── open_when_ready.py      Opens the browser once the server answers
+│   ├── server.py               FastAPI REST + WebSocket, serves ui/
+│   ├── chain.py                DTLN → NS → notch (port of the C++ frame pump)
+│   ├── audio.py                pyaudiowpatch callback-mode mic/loopback/CABLE I/O
+│   ├── dsp.py                  rFFT/OLA framing, resampling, meters
+│   ├── dtln.py / dtln_ns.py    DTLN-AEC / DTLN-NS engines (LiteRT)
+│   ├── notch.py / speech_gate.py  feedback suppression (ports of notch.cpp / speech_gate.h)
+│   ├── ui/index.html           The GUI
+│   ├── test_offline.py         WAV-in → WAV-out fidelity harness
+│   ├── requirements.txt        PyPI wheels
+│   └── README.md               Web UI docs
 │
 ├── screenshots/
 │   └── main.png                    README image
