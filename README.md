@@ -73,6 +73,8 @@ No more headphones. No more echo. No dead-air noise.
 
 ## Web UI (no install)
 
+![AEC Web UI](screenshots/web-ui.png)
+
 The default **DTLN-AEC 128 → DTLN-NS** chain — plus the
 adaptive feedback notch — also runs as a **pure-Python local
 web app**: no `.exe`, no installer, nothing for antivirus
