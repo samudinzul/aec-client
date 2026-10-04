@@ -12,7 +12,7 @@
 
 - [What It Does](#what-it-does)
 - [Features](#features)
-- [Web UI (no install)](#web-ui-no-install)
+- [Web UI (no installer)](#web-ui-no-installer)
 - [Quick Start](#quick-start)
 - [Profiles](#profiles)
 - [Profile Comparison](#profile-comparison)
@@ -71,18 +71,20 @@ No more headphones. No more echo. No dead-air noise.
 
 ---
 
-## Web UI (no install)
+## Web UI (no installer)
 
 ![AEC Web UI](screenshots/web-ui.png)
 
 The default **DTLN-AEC 128 → DTLN-NS** chain — plus the
 adaptive feedback notch — also runs as a **pure-Python local
 web app**: no `.exe`, no installer, nothing for antivirus
-heuristics to flag. The desktop build's two VirusTotal false
-positives (`Wacatac.B!ml`, `susgen`) cannot occur here: every
-package is a mainstream PyPI wheel, and nothing we ship is a
-PE binary. **Never freeze it with PyInstaller/Nuitka** — that
-reintroduces the exact problem.
+heuristics to flag. Python is the only prerequisite (a
+one-time install — see Requirements below). The desktop
+build's two VirusTotal false positives (`Wacatac.B!ml`,
+`susgen`) cannot occur here: every package is a mainstream
+PyPI wheel, and nothing we ship is a PE binary. **Never
+freeze it with PyInstaller/Nuitka** — that reintroduces the
+exact problem.
 
 **One click:** double-click `web\start.bat` — it creates a
 local Python environment, installs packages (first run only,
@@ -101,8 +103,8 @@ voice out to CABLE. Full docs: [web/README.md](web/README.md).
 
 ## Quick Start
 
-> **Prefer no-install, zero false positives?** The
-> [web UI](#web-ui-no-install) is the same DTLN chain
+> **Prefer no installer, zero false positives?** The
+> [web UI](#web-ui-no-installer) is the same DTLN chain
 > as a pure-Python local server — double-click
 > `web\start.bat` and you're done. The steps below
 > are for the desktop app.
@@ -164,7 +166,7 @@ Done. Talk normally with speakers on.
 > (Windows Security → Virus & threat protection → Manage settings →
 > Exclusions → Add/remove).
 >
-> **Zero-false-positive alternative.** The [web UI](#web-ui-no-install)
+> **Zero-false-positive alternative.** The [web UI](#web-ui-no-installer)
 > is pure Python — no PE binary, so `Wacatac.B!ml` and `susgen`
 > never apply. Same engines, same models, one click.
 
