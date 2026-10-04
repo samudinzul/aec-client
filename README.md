@@ -100,6 +100,8 @@ free), VB-CABLE, ~500 MB free.
 - **cmd.exe or PowerShell:** `winget install -e --id Python.Python.3.12`
 - **python.org installer:** https://www.python.org/downloads/ —
   run it and tick **"Add python.exe to PATH"** on the first screen.
+  Always works — no `winget` needed (some Windows 10 editions,
+  e.g. LTSC, ship without it).
 
 Then close and reopen your terminal (or reboot) so `python` is
 on PATH.

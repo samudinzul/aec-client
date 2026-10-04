@@ -17,6 +17,8 @@ nothing for antivirus heuristics to flag.
      ```
    - **python.org installer:** https://www.python.org/downloads/ —
      run it and tick **"Add python.exe to PATH"** on the first screen.
+     Always works — no `winget` needed (some Windows 10 editions,
+     e.g. LTSC, ship without it).
    Close and reopen your terminal afterwards so `python` is on PATH.
    Check with `python --version` (3.12 recommended; 3.14 works too —
    every package below ships wheels for it). Python from the
