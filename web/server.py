@@ -26,21 +26,6 @@ UI_DIR = os.path.join(HERE, "ui")
 
 app = FastAPI(title="aec-web")
 chain = Chain(model_dir=os.path.join(ROOT, "models"))
-
-
-def _preload_models():
-    """Load the DTLN pairs in the background at
-    server startup (~5 s cold) so clicking Start
-    is instant — Start just waits on the load
-    lock if it's still in flight."""
-    try:
-        chain.preload()
-    except Exception:
-        pass  # Start surfaces the error
-
-
-threading.Thread(target=_preload_models,
-                 daemon=True, name="preload").start()
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
@@ -150,7 +135,18 @@ async def ws_meters(ws: WebSocket):
 
 def main():
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    # Load the DTLN pairs BEFORE the port opens:
+    # the browser (and the Start button) then see
+    # a fully-loaded server, so Start is instant
+    # on the first process too — without this, a
+    # quick Start click waits out the ~5 s model
+    # load (cold disk cache; a second process is
+    # fast only because the cache is warm).
+    print("Loading models… (a few seconds)",
+          flush=True)
+    chain.preload()
+    uvicorn.run(app, host="127.0.0.1", port=8000,
+                log_level="info")
 
 
 if __name__ == "__main__":
