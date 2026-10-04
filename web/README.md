@@ -15,10 +15,13 @@ nothing for antivirus heuristics to flag.
      ```powershell
      winget install -e --id Python.Python.3.12
      ```
-   - **python.org installer:** https://www.python.org/downloads/ —
+   - **PowerShell silent install (no winget needed):**
+     ```powershell
+     Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" -OutFile "$env:TEMP\python-installer.exe"; Start-Process -Wait -FilePath "$env:TEMP\python-installer.exe" -ArgumentList "/quiet", "PrependPath=1"
+     ```
+     Downloads the official installer and runs it silently, adding Python to PATH (no admin needed).
+   - **python.org installer (manual):** https://www.python.org/downloads/ —
      run it and tick **"Add python.exe to PATH"** on the first screen.
-     Always works — no `winget` needed (some Windows 10 editions,
-     e.g. LTSC, ship without it).
    Close and reopen your terminal afterwards so `python` is on PATH.
    Check with `python --version` (3.12 recommended; 3.14 works too —
    every package below ships wheels for it). Python from the
