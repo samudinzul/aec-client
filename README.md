@@ -84,9 +84,10 @@ reintroduces the exact problem.
 
 **One click:** double-click `web\start.bat` — it creates a
 local Python environment, installs packages (first run only,
-~1 min), starts the server, and opens the GUI in your
-browser. Click it again any time to reopen the GUI while the
-server keeps running; close the window (or Ctrl+C) to stop.
+~1 min), then opens the GUI in a native app window
+(Edge WebView2 — no browser needed). Click it again any
+time to open another window while the server keeps
+running; close the window (or Ctrl+C) to stop.
 
 Requirements: Windows 10/11 64-bit, Python 3.10+ (one-time
 install via `winget install -e --id Python.Python.3.12`),

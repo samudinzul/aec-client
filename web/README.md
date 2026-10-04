@@ -1,6 +1,7 @@
 # aec-web — local web UI wrapper for AEC Client (DTLN-only v1)
 
-Real-time echo cancellation + noise suppression in your browser, powered
+Real-time echo cancellation + noise suppression in a
+native app window (or your browser), powered
 by a plain Python script on your own machine. No `.exe`, no installer,
 nothing for antivirus heuristics to flag.
 
