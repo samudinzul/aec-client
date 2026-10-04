@@ -5,6 +5,65 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-10-04
+
+### Added
+
+- **Web UI** (`web/`): the default DTLN-AEC 128 +
+  DTLN-NS chain as a pure-Python local server with
+  a browser GUI — a second distribution alongside
+  the desktop exe, shipped as a separate zip
+  (`AEC-Web-vX-win64.zip`) with no PE binary and
+  therefore none of the antivirus false positives.
+  One-click `web/start.bat` (venv + packages +
+  server + GUI; a second click reopens the GUI
+  against the running server), FastAPI REST +
+  WebSocket meters, live device rescan, and a
+  device list that mirrors the desktop's filtering
+  (`main.cpp` `BuildDisplayIndices`: pseudo-devices
+  dropped, MME 31-char truncation deduped against
+  the DirectSound/WASAPI twins, CABLE Input
+  auto-picked, WASAPI > DirectSound > MME >
+  WDM-KS preference).
+- **Feedback suppression on the DTLN path (web)**:
+  ports of the desktop speech gate
+  (`web/speech_gate.py`, from `src/speech_gate.h`)
+  and adaptive LMS notch (`web/notch.py`, from
+  `src/notch.cpp`) run after the engine — a
+  sustained howl is cut after ~5 s (measured
+  −80 dB suppression) while broadband speech never
+  latches a section (engage-gated; adaptation is
+  frozen while the gate says "talking").
+
+### Changed
+
+- **Web audio I/O is callback-mode** (pyaudiowpatch),
+  like the desktop's miniaudio callbacks — blocking
+  read/write threads could wedge on an unconsumed
+  CABLE Input (Discord/Zoom closed) and take the
+  server process down on Stop. The output callback
+  now delivers exactly `frame_count` frames and
+  returns silence in microseconds when starved.
+- **WebSocket auto-reconnect** with exponential
+  backoff; the page survives a server restart
+  without a manual refresh.
+
+### Fixed
+
+- **WebSocket dropped on every Stop** — a TOCTOU
+  race between the stop endpoint (nulling
+  runner/chain state from a worker thread) and the
+  meter loop's check-then-read. Chain state and the
+  runner are now snapshotted before use; verified
+  with 4 concurrent readers over 400 stop/start
+  cycles, zero errors.
+- **Device lists** no longer show MME/DirectSound
+  pseudo-devices ("Microsoft Sound Mapper",
+  "Primary Sound Driver"), duplicate host-API
+  entries, or 31-char-truncated names; full names
+  are recovered from the loopback generator when
+  only MME enumerates.
+
 ## [1.10.1] — 2026-09-29
 
 ### Added
