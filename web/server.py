@@ -106,16 +106,23 @@ def stop():
 @app.websocket("/ws")
 async def ws_meters(ws: WebSocket):
     await ws.accept()
-    try:
-        while True:
+    while True:
+        try:
             st = chain.state()
-            if runner is not None:
-                st["inRms"] = runner.in_rms
-                st["outRms"] = runner.out_rms
+            # Snapshot: the stop endpoint nulls `runner`
+            # from a worker thread; reading it after the
+            # None-check raised and dropped the socket on
+            # every Stop (the "server disconnected" bug).
+            r = runner
+            if r is not None:
+                st["inRms"] = r.in_rms
+                st["outRms"] = r.out_rms
             await ws.send_text(json.dumps({"type": "state", **st}))
-            await asyncio.sleep(0.1)  # ~10 Hz meters
-    except WebSocketDisconnect:
-        pass
+        except WebSocketDisconnect:
+            break
+        except Exception:
+            pass  # transient: keep the meter stream alive
+        await asyncio.sleep(0.1)  # ~10 Hz meters
 
 
 def main():

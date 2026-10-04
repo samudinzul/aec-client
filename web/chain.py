@@ -73,7 +73,12 @@ class Chain:
             return mic.copy()
 
     def state(self):
-        ns = self.ns.stats() if self.ns is not None else {
+        # Snapshot first: the stop endpoint tears these
+        # down from another thread, and a check-then-use
+        # race here killed the WebSocket on every Stop.
+        ns_obj = self.ns
+        dtln_obj = self.dtln
+        ns = ns_obj.stats() if ns_obj is not None else {
             "backend": 0, "rCount": 0, "inRms": 0.0,
             "outRms": 0.0, "dropped": 0, "error": "",
         }
@@ -83,9 +88,9 @@ class Chain:
             "chain": "DTLN-AEC + NS" if (self.running and ns["backend"]) else (
                 "DTLN-AEC" if self.running else ""),
             "sampleRate": 16000,
-            "dtlnBackend": self.dtln.backend if self.dtln else 0,
+            "dtlnBackend": dtln_obj.backend if dtln_obj else 0,
             "ns": ns,
             "frames": self.frames,
             "error": self.last_error,
-            "dtlnError": self.dtln.last_error if self.dtln else "",
+            "dtlnError": dtln_obj.last_error if dtln_obj else "",
         }
