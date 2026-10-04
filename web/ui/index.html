@@ -46,6 +46,7 @@
   <div class="hint">Output routes to a virtual cable — in Discord pick
   <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
   from the list (Windows lists only enabled devices).</div>
+  <div id="devhint" class="hint" style="color:#ffd75e"></div>
   <button id="startBtn">Start</button>
   <div id="status">Stopped.</div>
   <div id="err"></div>
@@ -102,7 +103,14 @@ function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
     ref: prefVal('ref'), out: prefVal('out')});
 }
-['mic','ref','out'].forEach(id => $(id).addEventListener('change', savePrefs));
+// Live reconfigure is not supported (same as the desktop
+// app): a change while running applies after Stop -> Start.
+['mic','ref','out'].forEach(id => $(id).addEventListener('change', () => {
+  savePrefs();
+  $('devhint').textContent = running
+    ? 'Stop, then Start to apply the new device.'
+    : '';
+}));
 $('rescan').onclick = loadDevices;
 
 $('startBtn').onclick = async () => {
@@ -131,6 +139,7 @@ function setRunning(on, st) {
   running = on;
   $('startBtn').textContent = on ? 'Stop' : 'Start';
   $('startBtn').classList.toggle('running', on);
+  if (!on) $('devhint').textContent = '';
   $('status').textContent = on
     ? `Running (16000 Hz, ${st.chain || 'DTLN-AEC'})`
     : 'Stopped.';
@@ -143,24 +152,32 @@ function meter(id, v, peak) {
   g.fillStyle = '#2a9d5c'; g.fillRect(0, h - lvl * h, w, lvl * h);
   g.fillStyle = '#ffd75e'; g.fillRect(0, h - pk * h - 2, w, 2);
 }
-const ws = new WebSocket(`ws://${location.host}/ws`);
-ws.onclose = () => {
-  setRunning(false, {});
-  $('status').textContent = 'Server disconnected — restart python -m web.server';
-};
-ws.onmessage = ev => {
-  const st = JSON.parse(ev.data);
-  if (st.running !== running) setRunning(st.running, st);
-  if (!st.running) return;
-  peakIn = Math.max(st.inRms || 0, peakIn * 0.995);
-  peakOut = Math.max(st.outRms || 0, peakOut * 0.995);
-  meter('mIn', st.inRms || 0, peakIn);
-  meter('mOut', st.outRms || 0, peakOut);
-  $('status').textContent =
-    `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
-    (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
-  if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
-};
+// WebSocket with auto-reconnect: the page survives a
+// server restart without a manual refresh.
+let ws = null, wsRetry = 0;
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { wsRetry = 0; loadDevices(); };
+  ws.onclose = () => {
+    setRunning(false, {});
+    $('status').textContent = 'Server disconnected — retrying…';
+    setTimeout(connect, Math.min(5000, 500 * 2 ** wsRetry++));
+  };
+  ws.onmessage = ev => {
+    const st = JSON.parse(ev.data);
+    if (st.running !== running) setRunning(st.running, st);
+    if (!st.running) return;
+    peakIn = Math.max(st.inRms || 0, peakIn * 0.995);
+    peakOut = Math.max(st.outRms || 0, peakOut * 0.995);
+    meter('mIn', st.inRms || 0, peakIn);
+    meter('mOut', st.outRms || 0, peakOut);
+    $('status').textContent =
+      `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
+      (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
+    if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
+  };
+}
+connect();
 loadDevices();
 </script>
 </body>
