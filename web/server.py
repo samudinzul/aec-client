@@ -28,7 +28,8 @@ app = FastAPI(title="aec-web")
 chain = Chain(model_dir=os.path.join(ROOT, "models"))
 runner = None
 runner_lock = threading.Lock()
-prefs = {"mic": None, "ref": None, "out": None}
+prefs = {"mic": None, "ref": None, "out": None,
+         "nsEnabled": True}
 
 
 @app.get("/")
@@ -62,6 +63,12 @@ def set_prefs(body: dict):
     for k in ("mic", "ref", "out"):
         if k in body:
             prefs[k] = body[k]
+    if "nsEnabled" in body:
+        # Live toggle (unlike devices): skipping the NS
+        # stage needs no device reconfigure, so it
+        # applies to the running chain immediately.
+        prefs["nsEnabled"] = bool(body["nsEnabled"])
+        chain.ns_enabled = prefs["nsEnabled"]
     return prefs
 
 
@@ -74,6 +81,7 @@ def start():
         if not chain.start():
             return {"ok": False, "error": chain.last_error or
                     "Failed to load DTLN model"}
+        chain.ns_enabled = prefs.get("nsEnabled", True)
         if any(prefs[k] is None for k in ("mic", "ref", "out")):
             chain.stop()
             return {"ok": False,

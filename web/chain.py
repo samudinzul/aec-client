@@ -31,6 +31,7 @@ class Chain:
         self.model_dir = model_dir
         self.dtln = None
         self.ns = None
+        self.ns_enabled = True
         self.running = False
         self.last_error = ""
         self.frames = 0
@@ -53,6 +54,7 @@ class Chain:
         self.ns = DtlnNs(f"{self.model_dir}/dtln_ns_128")
         # NS missing/broken is fail-open, not fatal — same as desktop:
         # the stage stays off and the engine output passes through.
+        self.ns_enabled = True
         self.notch = Notch(dsp.SAMPLE_RATE)
         self.gate = SpeechGate()
         self.running = True
@@ -81,7 +83,7 @@ class Chain:
             self.gate.update(
                 dsp.rms(cleaned.astype(np.float32)),
                 FRAME_DUR_MS)
-            if self.ns is not None and self.ns.ready:
+            if self.ns_enabled and self.ns is not None and self.ns.ready:
                 f = cleaned.astype(np.float32) / 32768.0
                 try:
                     f = self.ns.process(f)
@@ -119,8 +121,10 @@ class Chain:
         return {
             "running": self.running,
             "engine": "DTLN-AEC 128" if self.running else "",
-            "chain": "DTLN-AEC + NS" if (self.running and ns["backend"]) else (
+            "chain": "DTLN-AEC + NS" if (self.running and ns["backend"]
+                                           and self.ns_enabled) else (
                 "DTLN-AEC" if self.running else ""),
+            "nsEnabled": 1 if self.ns_enabled else 0,
             "sampleRate": 16000,
             "dtlnBackend": dtln_obj.backend if dtln_obj else 0,
             "ns": ns,

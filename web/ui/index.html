@@ -25,6 +25,11 @@
   .row { display: flex; gap: 12px; }
   .row > div { flex: 1; }
   .hint { font-size: 12px; color: #8b93a1; margin-top: 10px; }
+  label.chk { display: flex; align-items: center; gap: 8px;
+              margin-top: 14px; color: #c8cfda; font-size: 14px;
+              cursor: pointer; }
+  label.chk input { width: 16px; height: 16px; accent-color: #2a9d5c;
+                    cursor: pointer; }
   .devhead { display: flex; justify-content: space-between;
              align-items: center; margin: 12px 0 2px;
              color: #aab2c0; font-size: 13px; }
@@ -47,6 +52,10 @@
   <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
   from the list (Windows lists only enabled devices).</div>
   <div id="devhint" class="hint" style="color:#ffd75e"></div>
+  <label class="chk"><input type="checkbox" id="nsOn" checked>
+    Noise suppression (DTLN-NS) — removes background hiss</label>
+  <div class="hint">Applies live: untick to hear the raw echo-cancelled
+  voice, tick again to re-apply suppression.</div>
   <button id="startBtn">Start</button>
   <div id="status">Stopped.</div>
   <div id="err"></div>
@@ -101,7 +110,8 @@ async function loadDevices() {
 const prefVal = id => { const v = $(id).value; return v === '' ? null : +v; };
 function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
-    ref: prefVal('ref'), out: prefVal('out')});
+    ref: prefVal('ref'), out: prefVal('out'),
+    nsEnabled: $('nsOn').checked});
 }
 // Live reconfigure is not supported (same as the desktop
 // app): a change while running applies after Stop -> Start.
@@ -112,6 +122,13 @@ function savePrefs() {
     : '';
 }));
 $('rescan').onclick = loadDevices;
+
+// NS toggle applies live (no device reconfigure needed).
+$('nsOn').addEventListener('change', savePrefs);
+// Initialize the checkbox from the server's stored pref.
+api('GET', '/api/state').then(st => {
+  if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
+}).catch(() => {});
 
 $('startBtn').onclick = async () => {
   savePrefs();
@@ -166,6 +183,8 @@ function connect() {
   ws.onmessage = ev => {
     const st = JSON.parse(ev.data);
     if (st.running !== running) setRunning(st.running, st);
+    if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
+      $('nsOn').checked = !!st.nsEnabled;
     if (!st.running) return;
     peakIn = Math.max(st.inRms || 0, peakIn * 0.995);
     peakOut = Math.max(st.outRms || 0, peakOut * 0.995);
