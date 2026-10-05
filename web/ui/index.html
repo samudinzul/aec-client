@@ -35,9 +35,11 @@
              color: #aab2c0; font-size: 13px; }
   button.mini { width: auto; margin: 0; padding: 4px 12px;
                 font-size: 12px; font-weight: normal; }
-  summary { cursor: pointer; }
-  .about p { font-size: 14px; color: #c8cfda; margin: 10px 0 0;
-             line-height: 1.45; }
+  .about .appname { color: #bfd9ff; font-size: 16px; font-weight: bold;
+                    margin: 4px 0 0; }
+  .about .version { color: #8b93a1; font-size: 13px; margin: 2px 0 0; }
+  .about .desc { font-size: 14px; color: #c8cfda; margin: 10px 0 0;
+                 line-height: 1.45; }
   .about ul { margin: 4px 0 0; padding-left: 20px; font-size: 13px;
               color: #c8cfda; }
   .about li { margin: 3px 0; }
@@ -76,41 +78,41 @@
   this page is served by a plain Python script on your own machine.</div>
 </div>
 <div class="card">
-  <details>
-    <summary class="devhead"><span>About &amp; credits</span></summary>
-    <div class="about">
-      <p><b>aec-web</b> v1.10.1 — a lightweight, open-source acoustic echo
-      cancellation (AEC) client for Windows. Route your microphone through it
-      and pick up a cleaned, echo-free signal in any app (Discord, Zoom,
-      Teams, etc.). This copy runs as a pure-Python local server in a native
-      window — no .exe, no installer, nothing for antivirus to flag.</p>
-      <label>Features</label>
-      <ul>
-        <li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>
-        <li>Adaptive feedback notch + speech gate — howl suppression</li>
-        <li>Real-time processing with low CPU usage</li>
-        <li>Works with speakers, earphones, and headsets</li>
-        <li>Live level meters</li>
-        <li>Native app window (Edge WebView2) with browser fallback</li>
-      </ul>
-      <label>Credits</label>
-      <ul>
-        <li>DTLN-AEC — Westhausen &amp; Meyer (ICASSP 2021, MIT)</li>
-        <li>DTLN-NS — networkedaudio port of breizhn/DTLN denoise (MIT)</li>
-        <li>Adaptive notch — Widrow &amp; Hoff LMS (1960)</li>
-        <li>numpy — NumPy developers (BSD-3)</li>
-        <li>ai-edge-litert — Google (Apache-2.0)</li>
-        <li>FastAPI — Sebastián Ramírez (MIT)</li>
-        <li>uvicorn — Tom Christie (BSD-3)</li>
-        <li>websockets — Aymeric Augustin (BSD-3)</li>
-        <li>pywebview — Roman Sirokov (BSD-3)</li>
-        <li>pyaudiowpatch — Hubert Pham, S0D3S edition (Apache-2.0)</li>
-      </ul>
-      <div class="hint">Made with Python · source:
-      <a href="https://github.com/samudinzul/aec-client"
-         style="color:#9fd3a8">github.com/samudinzul/aec-client</a></div>
-    </div>
-  </details>
+  <div class="devhead"><span>About</span></div>
+  <div class="about">
+    <p class="appname">aec-web</p>
+    <p class="version">Version v1.10.1</p>
+    <p class="desc">A lightweight, open-source acoustic echo cancellation
+    (AEC) client for Windows. Route your microphone through it and pick up a
+    cleaned, echo-free signal in any app (Discord, Zoom, Teams, etc.). This
+    copy runs as a pure-Python local server in a native window — no .exe, no
+    installer, nothing for antivirus to flag.</p>
+    <div class="devhead"><span>Features</span></div>
+    <ul>
+      <li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>
+      <li>Adaptive feedback notch + speech gate — howl suppression</li>
+      <li>Real-time processing with low CPU usage</li>
+      <li>Works with speakers, earphones, and headsets</li>
+      <li>Live level meters</li>
+      <li>Native app window (Edge WebView2) with browser fallback</li>
+    </ul>
+    <div class="devhead"><span>Credits</span></div>
+    <ul>
+      <li>DTLN-AEC — Westhausen &amp; Meyer (ICASSP 2021, MIT)</li>
+      <li>DTLN-NS — networkedaudio port of breizhn/DTLN denoise (MIT)</li>
+      <li>Adaptive notch — Widrow &amp; Hoff LMS (1960)</li>
+      <li>numpy — NumPy developers (BSD-3)</li>
+      <li>ai-edge-litert — Google (Apache-2.0)</li>
+      <li>FastAPI — Sebastián Ramírez (MIT)</li>
+      <li>uvicorn — Tom Christie (BSD-3)</li>
+      <li>websockets — Aymeric Augustin (BSD-3)</li>
+      <li>pywebview — Roman Sirokov (BSD-3)</li>
+      <li>pyaudiowpatch — Hubert Pham, S0D3S edition (Apache-2.0)</li>
+    </ul>
+    <div class="hint">Made with Python · source:
+    <a href="https://github.com/samudinzul/aec-client"
+       style="color:#9fd3a8">github.com/samudinzul/aec-client</a></div>
+  </div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
