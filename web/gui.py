@@ -214,6 +214,7 @@ def main():
         print("[-] attached to the running server - "
               "close the window to exit.", flush=True)
 
+    hide_timer = None
     try:
         import webview
         _window = webview.create_window(
@@ -224,14 +225,21 @@ def main():
             # App-like: once the page loads, the
             # console hides (no taskbar button) —
             # only the native window is visible.
-            # (Tray off keeps the console for
-            # logs and Ctrl+C.)
+            # (Tray off keeps the console for logs
+            # and Ctrl+C.) The timer is a fallback
+            # in case the loaded event never fires.
             _window.events.loaded += (
                 lambda *a: _console_minimize())
+            hide_timer = threading.Timer(
+                4.0, _console_minimize)
+            hide_timer.daemon = True
+            hide_timer.start()
         threading.Thread(target=_watch_prefs, daemon=True,
                          name="prefs").start()
         webview.start()
     except Exception as e:
+        if hide_timer is not None:
+            hide_timer.cancel()
         # No pywebview / no WebView2 runtime —
         # fall back to the default browser.
         print(f"[-] native window unavailable ({e}); "
