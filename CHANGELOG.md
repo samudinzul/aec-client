@@ -75,7 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hiding, its loaded event minimizes the console;
   pystray + Pillow (mainstream wheels)
   provide the tray. The tab is hidden in a browser
-  tab, where there is no window to tray.
+  tab, where there is no window to tray. When
+  start.bat runs inside Windows Terminal, the
+  terminal window is left untouched (it holds the
+  user's own tabs) and a note explains that
+  double-clicking start.bat gives the fully
+  hidden, tray-only experience.
 
 ### Changed
 

@@ -27,6 +27,7 @@ Run:  python -m web.gui   (from the repo root)
 """
 
 import json
+import os
 import sys
 import threading
 import time
@@ -98,29 +99,29 @@ def _console_minimize():
     scrollback intact.)"""
     if sys.platform != "win32":
         return
+    if "WT_SESSION" in os.environ:
+        # Inside Windows Terminal the visible
+        # window belongs to wt.exe and holds the
+        # user's own tabs - never touch it. The
+        # console here is headless (nothing to
+        # hide), so say so instead.
+        print("[-] running inside Windows Terminal - "
+              "its window stays (it holds your "
+              "tabs). Double-click start.bat for "
+              "the hidden, tray-only experience, "
+              "or minimize the terminal yourself.",
+              flush=True)
+        return
     try:
         import ctypes
         user32 = ctypes.windll.user32
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        # Visible in the scrollback (tray icon >
-        # Show) - confirms the hide fired and
-        # whether it took effect (hwnd=0 or
-        # visible=True means the host window is
-        # not the classic console - e.g. Windows
-        # Terminal, where the visible window
-        # belongs to wt.exe and cannot be hidden
-        # this way; double-click start.bat).
-        print(f"[-] console hide: hwnd={hwnd}",
-              flush=True)
         user32.ShowWindow(hwnd, 0)  # SW_HIDE
         user32.SetWindowPos(
             hwnd, 0, 0, 0, 0, 0,
             0x0080 | 0x0001 | 0x0002 | 0x0010)
         # SWP_HIDEWINDOW|SWP_NOSIZE|SWP_NOMOVE
         # |SWP_NOACTIVATE
-        print(f"[-] console visible after hide: "
-              f"{bool(user32.IsWindowVisible(hwnd))}",
-              flush=True)
     except Exception:
         pass
 

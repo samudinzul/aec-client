@@ -61,7 +61,11 @@ hides once the UI loads (no taskbar button), so
 only the window is visible, and only the tray
 icon is visible while the window is closed; Show
 restores both, Quit from the tray icon stops
-it). If WebView2 is ever
+it). Running start.bat inside Windows Terminal?
+The terminal window itself stays (it holds your
+own tabs) — double-click start.bat instead for
+the fully hidden experience, or minimize the
+terminal yourself. If WebView2 is ever
 missing, the default browser opens instead.
 
 **Manual path** (same thing, step by step):
