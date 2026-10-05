@@ -100,6 +100,11 @@ def _console_minimize():
         return
     try:
         import ctypes
+        # Visible in the scrollback (tray icon >
+        # Show) - confirms the hide fired.
+        print("[-] console hidden (tray mode) - "
+              "tray icon > Show to bring it back",
+              flush=True)
         ctypes.windll.user32.ShowWindow(
             ctypes.windll.kernel32.GetConsoleWindow(),
             0)  # SW_HIDE
