@@ -100,14 +100,27 @@ def _console_minimize():
         return
     try:
         import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         # Visible in the scrollback (tray icon >
-        # Show) - confirms the hide fired.
-        print("[-] console hidden (tray mode) - "
-              "tray icon > Show to bring it back",
+        # Show) - confirms the hide fired and
+        # whether it took effect (hwnd=0 or
+        # visible=True means the host window is
+        # not the classic console - e.g. Windows
+        # Terminal, where the visible window
+        # belongs to wt.exe and cannot be hidden
+        # this way; double-click start.bat).
+        print(f"[-] console hide: hwnd={hwnd}",
               flush=True)
-        ctypes.windll.user32.ShowWindow(
-            ctypes.windll.kernel32.GetConsoleWindow(),
-            0)  # SW_HIDE
+        user32.ShowWindow(hwnd, 0)  # SW_HIDE
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            0x0080 | 0x0001 | 0x0002 | 0x0010)
+        # SWP_HIDEWINDOW|SWP_NOSIZE|SWP_NOMOVE
+        # |SWP_NOACTIVATE
+        print(f"[-] console visible after hide: "
+              f"{bool(user32.IsWindowVisible(hwnd))}",
+              flush=True)
     except Exception:
         pass
 
