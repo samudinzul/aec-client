@@ -222,9 +222,19 @@ api('GET', '/api/prefs').then(p => {
 $('trayOn').addEventListener('change', savePrefs);
 // The tray is a native-window feature: in a plain browser
 // tab there is no window to minimize, so hide the tab.
+// The pywebview bridge may be injected after this script
+// runs (it announces itself via "pywebviewready"), so
+// confirm browser mode before hiding — the tab stays in
+// the native window either way.
 if (typeof window.pywebview === 'undefined') {
   const t = document.querySelector('[data-tab="appearance"]');
-  if (t) t.style.display = 'none';
+  setTimeout(() => {
+    if (typeof window.pywebview === 'undefined' && t)
+      t.style.display = 'none';
+  }, 1000);
+  window.addEventListener('pywebviewready', () => {
+    if (t) t.style.display = '';
+  }, {once: true});
 }
 
 $('startBtn').onclick = async () => {
