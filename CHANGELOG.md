@@ -64,13 +64,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Appearance tab's "Minimize to system tray" tick
   (on by default) hides the native window to the
   tray instead of quitting: the server keeps
-   running, and the tray icon (drawn at runtime, no
-   image asset) brings the window back or quits —
-   the console minimizes to the taskbar while the
-   window is trayed, so only the tray icon is
-   visible, and both come back on Show.
+  running, and the tray icon (drawn at runtime, no
+  image asset) brings the window back or quits.
+  With the tray on, the console minimizes to the
+  taskbar once the page loads — only the native
+  window is visible — and stays minimized while
+  the window is trayed; Show restores both.
   pywebview's cancellable closing event does the
-  hiding; pystray + Pillow (mainstream wheels)
+  hiding, its loaded event minimizes the console;
+  pystray + Pillow (mainstream wheels)
   provide the tray. The tab is hidden in a browser
   tab, where there is no window to tray.
 

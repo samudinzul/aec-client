@@ -7,11 +7,15 @@ Two modes, picked automatically:
            start.bat): preload the models, run
            uvicorn in a background thread, open
            the window once it answers. Closing the
-           window stops the server — unless the
-           Appearance tab's "minimize to system
-           tray" is ticked, which hides the window
-           to the tray instead (the server keeps
-           running; the tray icon brings it back).
+            window stops the server — unless the
+            Appearance tab's "minimize to system
+            tray" is ticked (default), which hides
+            the window to the tray instead (the
+            server keeps running; the tray icon
+            brings it back). With the tray on, the
+            console minimizes to the taskbar once
+            the page loads — only the window is
+            visible.
   attach — a server is already running (second
            click): just open the window; closing it
            leaves the server up.
@@ -214,6 +218,14 @@ def main():
             TITLE, URL, width=720, height=780,
             min_size=(640, 480), resizable=True)
         _window.events.closing += _on_closing
+        if _prefs().get("trayEnabled"):
+            # App-like: once the page loads, the
+            # console minimizes to the taskbar —
+            # only the native window is visible.
+            # (Tray off keeps the console for
+            # logs and Ctrl+C.)
+            _window.events.loaded += (
+                lambda *a: _console_minimize())
         threading.Thread(target=_watch_prefs, daemon=True,
                          name="prefs").start()
         webview.start()
