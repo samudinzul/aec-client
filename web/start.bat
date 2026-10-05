@@ -53,7 +53,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 call .venv\Scripts\activate
 echo [-] installing packages - skipped if up to date.
-python -m pip install -q -r web\requirements.txt
+python -m pip install -q --disable-pip-version-check -r web\requirements.txt
 if errorlevel 1 (
   echo [-] ERROR - pip install failed - check your internet connection.
   echo %DATE% %TIME% pip-failed >> web\start.log

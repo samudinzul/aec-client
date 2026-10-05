@@ -164,10 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The DTLN model pairs loaded lazily on the first
   Start; they are now preloaded before the port
   opens (the console prints "Loading models…"),
-  so the GUI appears only once everything is
-  resident and Start is instant. Stop→Start stays
-  instant too — the models remain resident across
-  stops.
+   so the GUI appears only once everything is
+   resident and Start is instant. Stop→Start stays
+   instant too — the models remain resident across
+   stops.
+- **Console flood in the native window.** The tray
+   watcher polls `/api/prefs` once a second (so the
+   Appearance tick applies live) and the meters
+   stream over WebSocket; at uvicorn's `info` level
+   every request logged, flooding the console. The
+   in-process server now logs at `warning` — errors
+   still appear — and start.bat passes
+   `--disable-pip-version-check` to silence pip's
+   upgrade notice.
 
 ## [1.10.0] — 2026-09-28
 

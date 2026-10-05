@@ -75,9 +75,14 @@ def _serve():
     # Server.run() skips signal installation when
     # not on the main thread (uvicorn does this
     # itself), so a background thread is safe.
+    # Log at warning: the tray watcher polls
+    # /api/prefs every second and the meters
+    # stream over WebSocket — at info, every
+    # request floods the console. Errors still
+    # appear.
     _server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1",
-                       port=PORT, log_level="info"))
+                       port=PORT, log_level="warning"))
     _server.run()
 
 
