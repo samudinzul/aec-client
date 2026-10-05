@@ -62,14 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    engine.
 - **Minimize to system tray (web UI)** — the new
   Appearance tab's "Minimize to system tray" tick
-  hides the native window to the tray instead of
-  quitting: the server keeps running, and the tray
-  icon (drawn at runtime, no image asset) brings the
-  window back or quits. pywebview's cancellable
-  closing event does the hiding; pystray + Pillow
-  (mainstream wheels) provide the tray. The tab is
-  hidden in a browser tab, where there is no window
-  to tray.
+  (on by default) hides the native window to the
+  tray instead of quitting: the server keeps
+  running, and the tray icon (drawn at runtime, no
+  image asset) brings the window back or quits.
+  pywebview's cancellable closing event does the
+  hiding; pystray + Pillow (mainstream wheels)
+  provide the tray. The tab is hidden in a browser
+  tab, where there is no window to tray.
 
 ### Changed
 

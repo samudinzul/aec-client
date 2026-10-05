@@ -29,7 +29,7 @@ chain = Chain(model_dir=os.path.join(ROOT, "models"))
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
-         "nsEnabled": True, "trayEnabled": False}
+         "nsEnabled": True, "trayEnabled": True}
 
 
 @app.get("/")
