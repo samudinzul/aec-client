@@ -56,8 +56,10 @@ another window against the running server. Stop:
 close the window — the server stops with it — or
 press Ctrl+C in the console. The Appearance tab
 minimizes to the system tray instead (on by
-default — the server keeps running; Quit from the
-tray icon stops it). If WebView2 is ever
+default — the server keeps running, the console
+minimizes to the taskbar, and only the tray
+icon is visible; Show restores both, Quit from
+the tray icon stops it). If WebView2 is ever
 missing, the default browser opens instead.
 
 **Manual path** (same thing, step by step):

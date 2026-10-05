@@ -24,6 +24,7 @@ Run:  python -m web.gui   (from the repo root)
 """
 
 import json
+import sys
 import threading
 import time
 import urllib.request
@@ -86,6 +87,33 @@ def _serve():
     _server.run()
 
 
+def _console_minimize():
+    """While the window is trayed, minimize the
+    console to the taskbar — only the tray icon
+    is visible, like any tray app."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.ShowWindow(
+            ctypes.windll.kernel32.GetConsoleWindow(),
+            6)  # SW_MINIMIZE
+    except Exception:
+        pass
+
+
+def _console_restore():
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.ShowWindow(
+            ctypes.windll.kernel32.GetConsoleWindow(),
+            9)  # SW_RESTORE
+    except Exception:
+        pass
+
+
 def _tray_icon():
     """Draw the tray icon at runtime (green square +
     waveform bars, the UI's palette) — no image
@@ -116,6 +144,7 @@ def _start_tray():
 def _tray_show(icon=None, item=None):
     if _window is not None:
         _window.show()
+        _console_restore()
 
 
 def _tray_quit(icon=None, item=None):
@@ -135,6 +164,7 @@ def _on_closing():
         return True
     if _prefs().get("trayEnabled"):
         _window.hide()
+        _console_minimize()
         return False
     return True
 
