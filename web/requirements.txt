@@ -16,5 +16,8 @@ pyaudiowpatch>=0.2.12 # PortAudio fork: mic in, WASAPI-loopback ref, CABLE out
                        # (single audio backend; sounddevice sees no loopback
                        # and its bundled PortAudio blanked real hardware)
 pywebview>=5.0        # native app window around the GUI (Edge WebView2,
-                       # preinstalled on Windows 10/11) — no browser needed;
-                       # falls back to the default browser if absent
+                        # preinstalled on Windows 10/11) — no browser needed;
+                        # falls back to the default browser if absent
+pystray>=0.19         # system-tray icon (minimize-to-tray; pure ctypes on
+                        # Windows, no extra system deps)
+Pillow>=10            # draws the tray icon at runtime (mainstream wheel)

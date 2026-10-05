@@ -29,7 +29,7 @@ chain = Chain(model_dir=os.path.join(ROOT, "models"))
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
-         "nsEnabled": True}
+         "nsEnabled": True, "trayEnabled": False}
 
 
 @app.get("/")
@@ -58,6 +58,11 @@ def state():
     return st
 
 
+@app.get("/api/prefs")
+def get_prefs():
+    return prefs
+
+
 @app.post("/api/prefs")
 def set_prefs(body: dict):
     for k in ("mic", "ref", "out"):
@@ -69,6 +74,10 @@ def set_prefs(body: dict):
         # applies to the running chain immediately.
         prefs["nsEnabled"] = bool(body["nsEnabled"])
         chain.ns_enabled = prefs["nsEnabled"]
+    if "trayEnabled" in body:
+        # Read by the native window (gui.py) to hide
+        # to the system tray instead of quitting.
+        prefs["trayEnabled"] = bool(body["trayEnabled"])
     return prefs
 
 

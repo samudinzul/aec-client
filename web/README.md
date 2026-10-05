@@ -31,8 +31,8 @@ nothing for antivirus heuristics to flag.
 
 You do NOT need: admin rights, a C++ compiler, CMake, Node, or Docker.
 Everything else (FastAPI, numpy, LiteRT,
-pyaudiowpatch, pywebview) installs itself
-on first run.
+pyaudiowpatch, pywebview, pystray, Pillow)
+installs itself on first run.
 
 ## Why this exists
 
@@ -54,7 +54,10 @@ Windows 10/11, so no browser is needed) once the
 models are loaded. Click it again any time to open
 another window against the running server. Stop:
 close the window — the server stops with it — or
-press Ctrl+C in the console. If WebView2 is ever
+press Ctrl+C in the console. The Appearance tab
+can minimize to the system tray instead (the
+server keeps running; Quit from the tray icon
+stops it). If WebView2 is ever
 missing, the default browser opens instead.
 
 **Manual path** (same thing, step by step):
@@ -105,7 +108,7 @@ Open http://localhost:8000 — that page IS the GUI.
 | `notch.py` | LMS adaptive feedback-suppression notch (2 sections, 60 Hz) | `notch.cpp` |
 | `audio.py` | pyaudiowpatch callback-mode mic/loopback/CABLE I/O, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |
-| `gui.py` | Native window (pywebview/WebView2): in-process server, preloads models before opening, attaches to a running server, browser fallback | — |
+| `gui.py` | Native window (pywebview/WebView2): in-process server, preloads models before opening, attaches to a running server, system tray, browser fallback | — |
 | `ui/index.html` | The GUI | — |
 | `test_offline.py` | WAV-in → WAV-out fidelity harness | — |
 

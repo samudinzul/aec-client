@@ -58,6 +58,7 @@
 </div>
 <div class="tabs">
   <button class="tab active" data-tab="audio">Audio</button>
+  <button class="tab" data-tab="appearance">Appearance</button>
   <button class="tab" data-tab="about">About</button>
 </div>
 <div id="tab-audio" class="tabpanel">
@@ -92,6 +93,17 @@
   this page is served by a plain Python script on your own machine.</div>
 </div>
 </div>
+<div id="tab-appearance" class="tabpanel" hidden>
+  <div class="card">
+    <div class="devhead"><span>Appearance</span></div>
+    <label class="chk"><input type="checkbox" id="trayOn">
+      Minimize to system tray</label>
+    <div class="hint">Closing the window hides it to the tray
+    instead of quitting — the server keeps running. Click the
+    tray icon to bring the window back, or Quit from it to stop.
+    (Needs the native window; hidden in a browser tab.)</div>
+  </div>
+</div>
 <div id="tab-about" class="tabpanel" hidden>
 <div class="card">
   <div class="devhead"><span>About</span></div>
@@ -122,8 +134,10 @@
       <li>FastAPI — Sebastián Ramírez (MIT)</li>
       <li>uvicorn — Tom Christie (BSD-3)</li>
       <li>websockets — Aymeric Augustin (BSD-3)</li>
-      <li>pywebview — Roman Sirokov (BSD-3)</li>
-      <li>pyaudiowpatch — Hubert Pham, S0D3S edition (Apache-2.0)</li>
+        <li>pywebview — Roman Sirokov (BSD-3)</li>
+        <li>pystray — Moses Palmér (LGPL-3.0)</li>
+        <li>Pillow — Alex Clark &amp; contributors (MIT-CMU)</li>
+        <li>pyaudiowpatch — Hubert Pham, S0D3S edition (Apache-2.0)</li>
     </ul>
     <div class="hint">Made with Python · source:
     <a href="https://github.com/samudinzul/aec-client"
@@ -183,7 +197,8 @@ const prefVal = id => { const v = $(id).value; return v === '' ? null : +v; };
 function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
     ref: prefVal('ref'), out: prefVal('out'),
-    nsEnabled: $('nsOn').checked});
+    nsEnabled: $('nsOn').checked,
+    trayEnabled: $('trayOn').checked});
 }
 // Live reconfigure is not supported (same as the desktop
 // app): a change while running applies after Stop -> Start.
@@ -197,10 +212,20 @@ $('rescan').onclick = loadDevices;
 
 // NS toggle applies live (no device reconfigure needed).
 $('nsOn').addEventListener('change', savePrefs);
-// Initialize the checkbox from the server's stored pref.
+// Initialize the checkboxes from the server's stored prefs.
 api('GET', '/api/state').then(st => {
   if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
 }).catch(() => {});
+api('GET', '/api/prefs').then(p => {
+  if (p && 'trayEnabled' in p) $('trayOn').checked = !!p.trayEnabled;
+}).catch(() => {});
+$('trayOn').addEventListener('change', savePrefs);
+// The tray is a native-window feature: in a plain browser
+// tab there is no window to minimize, so hide the tab.
+if (typeof window.pywebview === 'undefined') {
+  const t = document.querySelector('[data-tab="appearance"]');
+  if (t) t.style.display = 'none';
+}
 
 $('startBtn').onclick = async () => {
   savePrefs();
