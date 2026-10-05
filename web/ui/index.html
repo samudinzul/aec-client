@@ -43,11 +43,25 @@
   .about ul { margin: 4px 0 0; padding-left: 20px; font-size: 13px;
               color: #c8cfda; }
   .about li { margin: 3px 0; }
+  .header { max-width: 640px; margin: 0 auto 10px; }
+  .tabs { display: flex; gap: 8px; max-width: 640px; margin: 0 auto 14px; }
+  .tab { flex: 1; width: auto; margin: 0; padding: 8px;
+         font-weight: normal; background: #1d2127;
+         border-radius: 8px; opacity: .8; }
+  .tab.active { opacity: 1; border-color: #bfd9ff; color: #bfd9ff; }
+  .tabpanel[hidden] { display: none; }
 </style>
 </head>
 <body>
-<div class="card">
+<div class="header">
   <h1>aec-web <small>v1.10.1 · DTLN-AEC 128 + DTLN-NS · 16 kHz</small></h1>
+</div>
+<div class="tabs">
+  <button class="tab active" data-tab="audio">Audio</button>
+  <button class="tab" data-tab="about">About</button>
+</div>
+<div id="tab-audio" class="tabpanel">
+<div class="card">
   <div class="devhead"><span>Devices</span>
     <button id="rescan" class="mini">Rescan</button></div>
   <label>Microphone</label>
@@ -77,6 +91,8 @@
   in Discord pick <b>CABLE Output</b> as input. Nothing here is signed or scanned —
   this page is served by a plain Python script on your own machine.</div>
 </div>
+</div>
+<div id="tab-about" class="tabpanel" hidden>
 <div class="card">
   <div class="devhead"><span>About</span></div>
   <div class="about">
@@ -113,6 +129,7 @@
     <a href="https://github.com/samudinzul/aec-client"
        style="color:#9fd3a8">github.com/samudinzul/aec-client</a></div>
   </div>
+</div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -254,6 +271,14 @@ function connect() {
     if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
   };
 }
+document.querySelectorAll('.tab').forEach(b =>
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x =>
+      x.classList.toggle('active', x === b));
+    document.querySelectorAll('.tabpanel').forEach(p =>
+      p.hidden = p.id !== 'tab-' + b.dataset.tab);
+  }));
+
 connect();
 loadDevices();
 </script>
