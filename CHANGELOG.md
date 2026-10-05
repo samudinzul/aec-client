@@ -66,10 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tray instead of quitting: the server keeps
   running, and the tray icon (drawn at runtime, no
   image asset) brings the window back or quits.
-  With the tray on, the console minimizes to the
-  taskbar once the page loads — only the native
-  window is visible — and stays minimized while
-  the window is trayed; Show restores both.
+  With the tray on, the console hides once the
+  page loads (no taskbar button) — only the
+  native window is visible — and stays hidden
+  while the window is trayed; Show restores
+  both.
   pywebview's cancellable closing event does the
   hiding, its loaded event minimizes the console;
   pystray + Pillow (mainstream wheels)

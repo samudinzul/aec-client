@@ -13,9 +13,8 @@ Two modes, picked automatically:
             the window to the tray instead (the
             server keeps running; the tray icon
             brings it back). With the tray on, the
-            console minimizes to the taskbar once
-            the page loads — only the window is
-            visible.
+            console hides once the page loads —
+            only the window is visible.
   attach — a server is already running (second
            click): just open the window; closing it
            leaves the server up.
@@ -92,16 +91,18 @@ def _serve():
 
 
 def _console_minimize():
-    """While the window is trayed, minimize the
-    console to the taskbar — only the tray icon
-    is visible, like any tray app."""
+    """While the window is trayed, hide the
+    console completely — no taskbar button at
+    all, only the tray icon is visible, like
+    any tray app. (SW_SHOW brings it back,
+    scrollback intact.)"""
     if sys.platform != "win32":
         return
     try:
         import ctypes
         ctypes.windll.user32.ShowWindow(
             ctypes.windll.kernel32.GetConsoleWindow(),
-            6)  # SW_MINIMIZE
+            0)  # SW_HIDE
     except Exception:
         pass
 
@@ -113,7 +114,7 @@ def _console_restore():
         import ctypes
         ctypes.windll.user32.ShowWindow(
             ctypes.windll.kernel32.GetConsoleWindow(),
-            9)  # SW_RESTORE
+            5)  # SW_SHOW
     except Exception:
         pass
 
@@ -156,7 +157,8 @@ def _tray_quit(icon=None, item=None):
     _quitting = True
     if _tray is not None:
         _tray.visible = False
-    if _window is not None:
+    _console_restore()  # the exit messages +
+    if _window is not None:  # pause must be seen
         _window.destroy()
 
 
@@ -220,7 +222,7 @@ def main():
         _window.events.closing += _on_closing
         if _prefs().get("trayEnabled"):
             # App-like: once the page loads, the
-            # console minimizes to the taskbar —
+            # console hides (no taskbar button) —
             # only the native window is visible.
             # (Tray off keeps the console for
             # logs and Ctrl+C.)
