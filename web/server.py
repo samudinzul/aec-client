@@ -38,6 +38,27 @@ def index():
     return FileResponse(os.path.join(UI_DIR, "imgui_web.html"))
 
 
+@app.get("/imgui_web.js")
+def imgui_js():
+    # Direct route (not only /static/): the HTML references this
+    # path relatively, so a missing route here was a 404 which
+    # surfaced in the browser as "Failed to load DearImGui script".
+    return FileResponse(os.path.join(UI_DIR, "imgui_web.js"),
+                        media_type="application/javascript")
+
+
+@app.get("/imgui_web.css")
+def imgui_css():
+    return FileResponse(os.path.join(UI_DIR, "imgui_web.css"),
+                        media_type="text/css")
+
+
+@app.get("/classic")
+def classic():
+    # Keep the old plain-HTML UI reachable for fallback/debug.
+    return FileResponse(os.path.join(UI_DIR, "index.html"))
+
+
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
 
 

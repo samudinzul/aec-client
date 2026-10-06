@@ -458,26 +458,140 @@ input[type="checkbox"]:hover {
 .w-full { width: 100%; }
 .h-full { height: 100%; }
 
-/* Responsive design */
-@media (max-width: 768px) {
-    .window {
-        margin: 10px;
-        padding: 15px;
+/* Desktop ImGui parity: tab bar is always a horizontal row,
+   like ImGui::BeginTabBar — even in the 720px native window. */
+.tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+}
+
+.tab {
+    flex: 1 0 auto;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* SeparatorText look: small caps-ish label with a rule after it. */
+.sep {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #aab2c0;
+    font-size: 13px;
+    font-weight: 600;
+    margin: 16px 0 8px;
+}
+
+.sep::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #2c313a;
+}
+
+.sep:empty::before {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #2c313a;
+}
+
+/* Form row: fixed 190px label column + full-width widget,
+   like SameLine(labelCol) in the desktop client. */
+.frow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 8px 0;
+}
+
+.flabel {
+    flex: 0 0 190px;
+    color: #e8e8e8;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.flabel .status-dot {
+    margin-right: 0;
+    flex: 0 0 auto;
+}
+
+.frow select,
+.frow .fgrow {
+    flex: 1;
+    min-width: 0;
+}
+
+.chkline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.chkline input {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    accent-color: #2a9d5c;
+}
+
+.warn {
+    color: #ff7b72;
+    font-size: 13px;
+    margin: 8px 0;
+    line-height: 1.45;
+}
+
+select:disabled,
+button:disabled {
+    opacity: 0.55;
+}
+
+details.ig-more > summary {
+    cursor: pointer;
+    color: #e8e8e8;
+    font-size: 14px;
+    padding: 8px 0 0;
+    list-style-position: inside;
+}
+
+canvas.meter {
+    width: 100%;
+    height: 26px;
+    background: #101318;
+    border-radius: 6px;
+    display: block;
+}
+
+.footer-btns {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.footer-btns .button {
+    width: 160px;
+}
+
+.footer-status {
+    color: #8b93a1;
+    font-size: 13px;
+}
+
+/* Narrow windows: shrink the label column, never stack the tabs. */
+@media (max-width: 560px) {
+    .flabel {
+        flex-basis: 128px;
     }
-    
-    .card {
-        padding: 15px;
-    }
-    
-    h1 {
-        font-size: 18px;
-    }
-    
-    .tabs {
-        flex-direction: column;
-    }
-    
-    .tab {
-        text-align: center;
+
+    .footer-btns .button {
+        width: 128px;
     }
 }
