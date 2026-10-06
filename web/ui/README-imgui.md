@@ -1,15 +1,15 @@
 Dear ImGui Web UI Implementation
 
-This project implements a web-based Dear ImGui UI that matches the desktop AEC Client UI, using a WebAssembly build of Dear ImGui that runs in a browser context via pywebview.
+This project implements a web-based Dear ImGui UI that matches the desktop AEC Client UI, using pure JavaScript to replicate Dear ImGui patterns and behavior.
 
 ## Architecture
 
 - **Python Backend** (web/server.py, web/chain.py): Same as desktop, provides the audio processing and API
-- **Web Frontend** (web/ui/imgui_web.html): Dear ImGui-based UI using WebAssembly
-- **UI Logic** (web/ui/imgui_web.js): JavaScript wrapper for Dear ImGui
+- **Web Frontend** (web/ui/imgui_web.html): Dear ImGui-style UI implemented in pure JavaScript
+- **UI Logic** (web/ui/imgui_web.js): JavaScript implementation of Dear ImGui UI patterns and controls
 - **Styling** (web/ui/imgui_web.css): CSS matching the desktop UI theme
 
-**Note**: This implementation uses WebAssembly for Dear ImGui rendering, which provides a more native-like experience compared to the traditional HTML/CSS/JS approach. The UI will have the same visual polish and responsive behavior as the desktop version.
+**Note**: This implementation uses pure JavaScript to replicate Dear ImGui UI patterns and behavior, providing a native-like experience without requiring WebAssembly. The UI has the same visual polish, responsive behavior, and feature parity as the desktop version.
 
 ## Key Features
 
@@ -59,7 +59,7 @@ This project implements a web-based Dear ImGui UI that matches the desktop AEC C
    http://localhost:8000
    ```
 
-The UI will load using WebAssembly Dear ImGui and provide the same experience as the desktop version.
+The UI will load using the pure JavaScript Dear ImGui implementation and provide the same experience as the desktop version. No WebAssembly compilation required!
 
 ## Files
 
@@ -86,10 +86,11 @@ The UI will load using WebAssembly Dear ImGui and provide the same experience as
 5. **Performance**: Same audio processing as desktop, just web-based UI
 6. **Cross-Platform**: Works on any platform with pywebview support
 7. **Low Maintenance**: Reuses all existing backend logic
+8. **Universal Compatibility**: Works in all modern browsers without WebAssembly
 
 ## Limitations
 
-1. **WebAssembly Overhead**: Slight initialization time vs native
+1. **Browser Dependencies**: Requires modern browser with Web Workers support
 2. **Graphics**: Limited 2D/3D capabilities vs native OpenGL
 3. **System Integration**: Some desktop features (tray, wallpaper) may have limitations
 4. **Performance**: Generally acceptable for real-time audio processing

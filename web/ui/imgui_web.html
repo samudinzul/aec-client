@@ -5,66 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AEC Client - Web UI (Dear ImGui)</title>
     <link rel="stylesheet" href="imgui_web.css">
-    <script src="imgui_wrapper.js"></script>
     <script src="imgui_web.js"></script>
 </head>
 <body>
-    <div id="root"></div>
-    <script>
-        // Initialize the WebAssembly Dear ImGui UI
-        async function initWebImGui() {
-            try {
-                // Import the WebAssembly module
-                const wasmModule = await importWasmModule();
-                
-                // Initialize Dear ImGui
-                IMGUI_Init(wasmModule);
-                
-                // Setup main UI loop
-                setupUI(wasmModule);
-                
-                console.log("AEC Web UI (Dear ImGui) initialized successfully");
-            } catch (error) {
-                console.error("Failed to initialize Dear ImGui Web UI:", error);
-                // Fallback to traditional HTML UI
-                document.getElementById('root').innerHTML = 
-                    '<div style="text-align: center; padding: 50px; color: #e8e8e8; font-family: system-ui, sans-serif;">' +
-                    '<h1>AEC Web UI - Dear ImGui Version</h1>' +
-                    '<p>Failed to load WebAssembly module.</p>' +
-                    '<p>Please check your browser compatibility and try again.</p>' +
-                    '<p><small>WebAssembly and Web Workers are required for this UI.</small></p>' +
-                    '</div>';
-            }
-        }
-
-        function importWasmModule() {
-            return new Promise((resolve, reject) => {
-                // Try to load the WebAssembly module
-                // In a real implementation, this would load imgui_wasm.wasm
-                const wasmScript = document.createElement('script');
-                wasmScript.src = 'imgui_wasm.wasm.js';
-                wasmScript.onload = () => resolve(window.wasmModule);
-                wasmScript.onerror = () => reject(new Error('Failed to load WebAssembly module'));
-                document.head.appendChild(wasmScript);
-            });
-        }
-
-        // Handle window resize
-        window.addEventListener('resize', () => {
-            if (typeof IMGUI_Resize === 'function') {
-                IMGUI_Resize(window.innerWidth, window.innerHeight);
-            }
-        });
-
-        // Handle visibility change
-        document.addEventListener('visibilitychange', () => {
-            if (typeof IMGUI_SetVisibility === 'function') {
-                IMGUI_SetVisibility(!document.hidden);
-            }
-        });
-
-        // Initialize on page load
-        window.addEventListener('load', initWebImGui);
-    </script>
+    <div id="root">
+        <div style="text-align: center; padding: 50px; color: #e8e8e8; font-family: system-ui, sans-serif;">
+            <h1>Loading AEC Web UI (Dear ImGui)...</h1>
+            <p>Please wait while the UI initializes...</p>
+        </div>
+    </div>
 </body>
 </html>

@@ -1,10 +1,8 @@
-// Web ImGui Implementation
-// Dear ImGui-style UI for AEC Client Web Version
-// This provides a native-like experience with a familiar interface
+// Pure JavaScript Dear ImGui Web UI Implementation
+// No WebAssembly required - works in all modern browsers
 
 class WebImGuiUI {
     constructor() {
-        this.wasmModule = null;
         this.canvas = null;
         this.ctx = null;
         this.mousePos = { x: 0, y: 0 };
@@ -35,36 +33,16 @@ class WebImGuiUI {
         this.startTime = Date.now();
         this.statusText = 'Idle';
         this.windowSize = { width: window.innerWidth, height: window.innerHeight };
-        
-        // Dear ImGui styling
-        this.imGuiStyle = {
-            windowPadding: { x: 20, y: 18 },
-            itemSpacing: { x: 10, y: 10 },
-            framePadding: { x: 10, y: 6 },
-            scrollbarSize: 16,
-            grabMinSize: 20,
-            borderSize: 0,
-            rounded: true,
-            colors: {
-                bg: [0.06, 0.06, 0.08, 0.82],
-                frameBg: [0.14, 0.14, 0.18, 0.90],
-                frameBgHovered: [0.20, 0.20, 0.26, 0.95],
-                frameBgActive: [0.24, 0.24, 0.30, 1.00],
-                header: [0.20, 0.30, 0.50, 0.85],
-                headerHovered: [0.28, 0.40, 0.65, 0.90],
-                separator: [0.25, 0.28, 0.35, 0.60],
-                text: [1.0, 1.0, 1.0, 1.0],
-                textDisabled: [0.5, 0.5, 0.5, 1.0],
-                accent: [0.75, 0.85, 1.0, 1.0],
-                frameBgAlt: [0.06, 0.06, 0.08, 0.00],
-                plotHistogram: [0.90, 0.70, 0.00, 1.0],
-                plotHistogramHovered: [1.00, 0.60, 0.00, 1.0],
-            }
-        };
-        
-        this.animationFrameId = null;
-        this.lastUpdate = 0;
+        this.framesThisSecond = 0;
+        this.lastFPSUpdate = 0;
         this.debugMode = false;
+        
+        // UI layout constants
+        this.PANEL_PADDING = 20;
+        this.ELEMENT_SPACING = 15;
+        this.BUTTON_HEIGHT = 40;
+        this.SLIDER_HEIGHT = 20;
+        this.CHECKBOX_SIZE = 20;
     }
 
     init() {
@@ -160,8 +138,6 @@ class WebImGuiUI {
     }
 
     startRenderLoop() {
-        const self = this;
-        
         const animate = () => {
             if (document.hidden) return;
             this.update();
@@ -170,6 +146,8 @@ class WebImGuiUI {
         };
         
         this.lastUpdate = Date.now();
+        this.framesThisSecond = 0;
+        this.lastFPSUpdate = Date.now();
         animate();
     }
 
@@ -303,31 +281,31 @@ class WebImGuiUI {
         let currentY = y + 20;
         
         // Devices section
-        currentY = this.drawSectionHeader(this.ctx, panelX + 20, currentY, 'Devices');
+        currentY = this.drawSectionHeader(panelX + 20, currentY, 'Devices');
         
         // Rescan button
-        this.drawButton(this.ctx, panelX + panelWidth - 100, currentY - 5, 80, 30, 'Rescan', '#2a9d5c');
+        this.drawButton(panelX + panelWidth - 100, currentY - 5, 80, 30, 'Rescan', '#2a9d5c');
         currentY += 40;
         
         // Device controls
         currentY += 10;
         
         // Microphone
-        currentY = this.drawDeviceControl(this.ctx, panelX + 20, currentY, 'Microphone', this.devices.mic, panelWidth - 100);
+        currentY = this.drawDeviceControl(panelX + 20, currentY, 'Microphone', this.devices.mic, panelWidth - 100);
         currentY += 80;
         
         // Mic gain control
-        currentY = this.drawMicGainControl(this.ctx, panelX + 20, currentY, panelWidth - 60);
+        currentY = this.drawMicGainControl(panelX + 20, currentY, panelWidth - 60);
         currentY += 50;
         
         // Speaker Reference
         currentY += 20;
-        currentY = this.drawDeviceControl(this.ctx, panelX + 20, currentY, 'Speaker Reference (system audio loopback)', this.devices.ref, panelWidth - 60);
+        currentY = this.drawDeviceControl(panelX + 20, currentY, 'Speaker Reference (system audio loopback)', this.devices.ref, panelWidth - 60);
         currentY += 80;
         
         // Output
         currentY += 20;
-        currentY = this.drawDeviceControl(this.ctx, panelX + 20, currentY, 'Output', this.devices.out, panelWidth - 60);
+        currentY = this.drawDeviceControl(panelX + 20, currentY, 'Output', this.devices.out, panelWidth - 60);
         currentY += 80;
         
         // Control panel (toggles and start/stop)
@@ -335,11 +313,11 @@ class WebImGuiUI {
         currentY = controlPanelY;
         
         // Noise suppression toggle
-        currentY = this.drawToggle(this.ctx, panelX + 20, currentY, 'Noise suppression (DTLN-NS)', this.prefs.nsEnabled);
+        currentY = this.drawToggle(panelX + 20, currentY, 'Noise suppression (DTLN-NS)', this.prefs.nsEnabled);
         currentY += 40;
         
         // Notch toggle
-        currentY = this.drawToggle(this.ctx, panelX + 20, currentY, 'Feedback notch (howl suppression)', this.prefs.notchEnabled);
+        currentY = this.drawToggle(panelX + 20, currentY, 'Feedback notch (howl suppression)', this.prefs.notchEnabled);
         currentY += 50;
         
         // Start/Stop button
@@ -347,7 +325,7 @@ class WebImGuiUI {
         
         // Status area
         currentY = controlPanelY + 120;
-        this.drawStatusArea(this.ctx, panelX + 20, currentY, panelWidth - 60);
+        this.drawStatusArea(panelX + 20, currentY, panelWidth - 60);
     }
 
     drawAppearanceTab(x, y, width, height) {
@@ -364,35 +342,35 @@ class WebImGuiUI {
         let currentY = y + 20;
         
         // Title
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '18px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Appearance Settings', panelX + 20, currentY);
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = '18px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('Appearance Settings', panelX + 20, currentY);
         currentY += 40;
         
         // Wallpaper section
-        currentY = this.drawSectionHeader(this.ctx, panelX + 20, currentY, 'Wallpaper');
+        currentY = this.drawSectionHeader(panelX + 20, currentY, 'Wallpaper');
         currentY += 30;
         
         // Wallpaper combo box
-        this.drawComboBox(this.ctx, panelX + 20, currentY, 300, '(none)');
+        this.drawComboBox(panelX + 20, currentY, 300, '(none)');
         currentY += 50;
         
         // Behavior section
-        currentY = this.drawSectionHeader(this.ctx, panelX + 20, currentY, 'Behavior');
+        currentY = this.drawSectionHeader(panelX + 20, currentY, 'Behavior');
         currentY += 30;
         
         // Tray toggle
-        currentY = this.drawToggle(this.ctx, panelX + 20, currentY, 'Minimize to system tray (X button hides window)', this.prefs.trayEnabled);
+        currentY = this.drawToggle(panelX + 20, currentY, 'Minimize to system tray (X button hides window)', this.prefs.trayEnabled);
         currentY += 50;
         
         // Help text
-        ctx.fillStyle = '#8b93a1';
-        ctx.font = '12px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Closing the window hides it to the tray instead of quitting — the server keeps running.', panelX + 20, currentY + 10);
+        this.ctx.fillStyle = '#8b93a1';
+        this.ctx.font = '12px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('Closing the window hides it to the tray instead of quitting — the server keeps running.', panelX + 20, currentY + 10);
     }
 
     drawAboutTab(x, y, width, height) {
@@ -409,38 +387,38 @@ class WebImGuiUI {
         let currentY = y + 20;
         
         // App info
-        ctx.fillStyle = '#bfd9ff';
-        ctx.font = 'bold 20px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('AEC Client - Web UI (Dear ImGui)', panelX + 20, currentY);
+        this.ctx.fillStyle = '#bfd9ff';
+        this.ctx.font = 'bold 20px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('AEC Client - Web UI (Dear ImGui)', panelX + 20, currentY);
         currentY += 40;
         
-        ctx.fillStyle = '#8b93a1';
-        ctx.font = '14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Version v1.10.1', panelX + 20, currentY);
+        this.ctx.fillStyle = '#8b93a1';
+        this.ctx.font = '14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('Version v1.10.1', panelX + 20, currentY);
         currentY += 40;
         
         // Description
-        ctx.fillStyle = '#e8e8e8';
-        ctx.font = '13px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('A lightweight, open-source acoustic echo cancellation', panelX + 20, currentY);
+        this.ctx.fillStyle = '#e8e8e8';
+        this.ctx.font = '13px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('A lightweight, open-source acoustic echo cancellation', panelX + 20, currentY);
         currentY += 25;
-        ctx.fillText('(AEC) client for Windows. Route your microphone through it', panelX + 20, currentY);
+        this.ctx.fillText('(AEC) client for Windows. Route your microphone through it', panelX + 20, currentY);
         currentY += 25;
-        ctx.fillText('and pick up a cleaned, echo-free signal in any app.', panelX + 20, currentY);
+        this.ctx.fillText('and pick up a cleaned, echo-free signal in any app.', panelX + 20, currentY);
         currentY += 40;
         
         // Features
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Features:', panelX + 20, currentY);
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = '14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('Features:', panelX + 20, currentY);
         currentY += 30;
         
         const features = [
@@ -453,198 +431,198 @@ class WebImGuiUI {
         ];
         
         for (let i = 0; i < features.length; i++) {
-            ctx.fillText('• ' + features[i], panelX + 35, currentY + i * 20);
+            this.ctx.fillText('• ' + features[i], panelX + 35, currentY + i * 20);
         }
     }
 
-    drawSectionHeader(ctx, x, y, text) {
-        ctx.fillStyle = '#aab2c0';
-        ctx.font = 'bold 14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, x, y);
+    drawSectionHeader(x, y, text) {
+        this.ctx.fillStyle = '#aab2c0';
+        this.ctx.font = 'bold 14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(text, x, y);
         return y + 30;
     }
 
-    drawDeviceControl(ctx, x, y, label, devices, width) {
+    drawDeviceControl(x, y, label, devices, width) {
         // Label
-        ctx.fillStyle = '#e8e8e8';
-        ctx.font = '14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, x, y);
+        this.ctx.fillStyle = '#e8e8e8';
+        this.ctx.font = '14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(label, x, y);
         
         // Select box
-        ctx.fillStyle = '#262b33';
-        ctx.fillRect(x, y + 25, width, 30);
-        ctx.strokeStyle = '#3a4048';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y + 25, width, 30);
+        this.ctx.fillStyle = '#262b33';
+        this.ctx.fillRect(x, y + 25, width, 30);
+        this.ctx.strokeStyle = '#3a4048';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x, y + 25, width, 30);
         
         // Device name or placeholder
-        ctx.fillStyle = devices.length > 0 ? '#e8e8e8' : '#8b93a1';
-        ctx.font = '13px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
+        this.ctx.fillStyle = devices.length > 0 ? '#e8e8e8' : '#8b93a1';
+        this.ctx.font = '13px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
         const deviceText = devices.length > 0 ? devices[0].name : 'Scanning...';
-        ctx.fillText(deviceText, x + 10, y + 40);
+        this.ctx.fillText(deviceText, x + 10, y + 40);
         
         return y + 65;
     }
 
-    drawMicGainControl(ctx, x, y, width) {
+    drawMicGainControl(x, y, width) {
         // Label
-        ctx.fillStyle = '#e8e8e8';
-        ctx.font = '14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Mic gain (preamp) —', x, y);
-        ctx.textAlign = 'right';
-        ctx.fillText(`+${this.prefs.micGain > 0 ? '+' : ''}${Math.round((this.prefs.micGain - 1.0) * 100)} dB`, x + width, y);
+        this.ctx.fillStyle = '#e8e8e8';
+        this.ctx.font = '14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('Mic gain (preamp) —', x, y);
+        this.ctx.textAlign = 'right';
+        this.ctx.fillText(`+${this.prefs.micGain > 0 ? '+' : ''}${Math.round((this.prefs.micGain - 1.0) * 100)} dB`, x + width, y);
         
         // Slider track
         const sliderY = y + 25;
-        ctx.fillStyle = '#262b33';
-        ctx.fillRect(x, sliderY, width, 8);
-        ctx.strokeStyle = '#3a4048';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, sliderY, width, 8);
+        this.ctx.fillStyle = '#262b33';
+        this.ctx.fillRect(x, sliderY, width, 8);
+        this.ctx.strokeStyle = '#3a4048';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x, sliderY, width, 8);
         
         // Slider fill
         const fillWidth = ((this.prefs.micGain - 0.1) / (4.0 - 0.1)) * width;
-        ctx.fillStyle = '#2a9d5c';
-        ctx.fillRect(x, sliderY, fillWidth, 8);
+        this.ctx.fillStyle = '#2a9d5c';
+        this.ctx.fillRect(x, sliderY, fillWidth, 8);
         
         // Slider thumb
-        ctx.fillStyle = '#4CAF50';
-        ctx.beginPath();
-        ctx.arc(x + fillWidth, sliderY + 4, 6, 0, Math.PI * 2);
-        ctx.fill();
+        this.ctx.fillStyle = '#4CAF50';
+        this.ctx.beginPath();
+        this.ctx.arc(x + fillWidth, sliderY + 4, 6, 0, Math.PI * 2);
+        this.ctx.fill();
         
         // Hint text
-        ctx.fillStyle = '#8b93a1';
-        ctx.font = '11px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
+        this.ctx.fillStyle = '#8b93a1';
+        this.ctx.font = '11px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
         const hintY = sliderY + 20;
-        ctx.fillText('Amplifies quiet microphones before processing', x, hintY);
-        ctx.fillText('(-12…+12 dB, live). Boosting also amplifies background noise —', x, hintY + 15);
-        ctx.fillText('watch the Mic in meter for clipping.', x, hintY + 30);
+        this.ctx.fillText('Amplifies quiet microphones before processing', x, hintY);
+        this.ctx.fillText('(-12…+12 dB, live). Boosting also amplifies background noise —', x, hintY + 15);
+        this.ctx.fillText('watch the Mic in meter for clipping.', x, hintY + 30);
         
         return hintY + 45;
     }
 
-    drawToggle(ctx, x, y, label, isChecked) {
-        ctx.fillStyle = '#e8e8e8';
-        ctx.font = '14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, x, y);
+    drawToggle(x, y, label, isChecked) {
+        this.ctx.fillStyle = '#e8e8e8';
+        this.ctx.font = '14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(label, x, y);
         
         // Checkbox
         const checkboxX = x;
         const checkboxY = y - 5;
-        ctx.fillStyle = isChecked ? '#4CAF50' : '#3a4048';
-        ctx.fillRect(checkboxX, checkboxY, 20, 20);
-        ctx.strokeStyle = '#3a4048';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(checkboxX, checkboxY, 20, 20);
+        this.ctx.fillStyle = isChecked ? '#4CAF50' : '#3a4048';
+        this.ctx.fillRect(checkboxX, checkboxY, 20, 20);
+        this.ctx.strokeStyle = '#3a4048';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(checkboxX, checkboxY, 20, 20);
         
         if (isChecked) {
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '16px system-ui, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('✓', checkboxX + 10, checkboxY + 10);
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.font = '16px system-ui, sans-serif';
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+            this.ctx.fillText('✓', checkboxX + 10, checkboxY + 10);
         }
         
         return y + 40;
     }
 
-    drawActionButton(ctx, x, y, width, text, color) {
-        ctx.fillStyle = color;
-        ctx.fillRect(x, y, width, 40);
-        ctx.strokeStyle = '#3a4048';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, width, 40);
+    drawActionButton(x, y, width, text, color) {
+        this.ctx.fillStyle = color;
+        this.ctx.fillRect(x, y, width, 40);
+        this.ctx.strokeStyle = '#3a4048';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x, y, width, 40);
         
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 16px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text, x + width / 2, y + 20);
+        this.ctx.fillStyle = '#ffffff';
+        this.ctx.font = 'bold 16px system-ui, sans-serif';
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(text, x + width / 2, y + 20);
     }
 
-    drawComboBox(ctx, x, y, width, placeholder) {
-        ctx.fillStyle = '#262b33';
-        ctx.fillRect(x, y, width, 30);
-        ctx.strokeStyle = '#3a4048';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, width, 30);
+    drawComboBox(x, y, width, placeholder) {
+        this.ctx.fillStyle = '#262b33';
+        this.ctx.fillRect(x, y, width, 30);
+        this.ctx.strokeStyle = '#3a4048';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x, y, width, 30);
         
-        ctx.fillStyle = '#e8e8e8';
-        ctx.font = '13px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(placeholder, x + 10, y + 15);
+        this.ctx.fillStyle = '#e8e8e8';
+        this.ctx.font = '13px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(placeholder, x + 10, y + 15);
         
         // Dropdown arrow
-        ctx.fillStyle = '#8b93a1';
-        ctx.beginPath();
-        ctx.moveTo(x + width - 20, y + 10);
-        ctx.lineTo(x + width - 10, y + 10);
-        ctx.lineTo(x + width - 15, y + 20);
-        ctx.closePath();
-        ctx.fill();
+        this.ctx.fillStyle = '#8b93a1';
+        this.ctx.beginPath();
+        this.ctx.moveTo(x + width - 20, y + 10);
+        this.ctx.lineTo(x + width - 10, y + 10);
+        this.ctx.lineTo(x + width - 15, y + 20);
+        this.ctx.closePath();
+        this.ctx.fill();
     }
 
-    drawStatusArea(ctx, x, y, width) {
-        ctx.fillStyle = '#9fd3a8';
-        ctx.font = '14px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(this.statusText, x, y);
+    drawStatusArea(x, y, width) {
+        this.ctx.fillStyle = '#9fd3a8';
+        this.ctx.font = '14px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(this.statusText, x, y);
         
         // Live meters
         y += 30;
-        ctx.fillStyle = '#aab2c0';
-        ctx.font = '12px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('Live Levels:', x, y);
+        this.ctx.fillStyle = '#aab2c0';
+        this.ctx.font = '12px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('Live Levels:', x, y);
         
         // Draw simple meters
         const meterY = y + 20;
-        this.drawSimpleMeter(ctx, x, meterY, 280, this.state.inRms || 0, 3000, 'Mic');
-        this.drawSimpleMeter(ctx, x + 300, meterY, 280, this.state.outRms || 0, 3000, 'Out');
+        this.drawSimpleMeter(x, meterY, 280, this.state.inRms || 0, 3000, 'Mic');
+        this.drawSimpleMeter(x + 300, meterY, 280, this.state.outRms || 0, 3000, 'Out');
     }
 
-    drawSimpleMeter(ctx, x, y, width, value, maxValue, label) {
+    drawSimpleMeter(x, y, width, value, maxValue, label) {
         const height = 20;
         
-        ctx.fillStyle = '#aab2c0';
-        ctx.font = '12px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(label, x, y);
+        this.ctx.fillStyle = '#aab2c0';
+        this.ctx.font = '12px system-ui, sans-serif';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText(label, x, y);
         
         // Meter background
-        ctx.fillStyle = '#262b33';
-        ctx.fillRect(x, y + 15, width, height);
-        ctx.strokeStyle = '#3a4048';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y + 15, width, height);
+        this.ctx.fillStyle = '#262b33';
+        this.ctx.fillRect(x, y + 15, width, height);
+        this.ctx.strokeStyle = '#3a4048';
+        this.ctx.lineWidth = 1;
+        this.ctx.strokeRect(x, y + 15, width, height);
         
         // Meter fill
         const fillWidth = Math.min((value / maxValue) * width, width);
         const meterColor = value > maxValue * 0.8 ? '#F44336' : value > maxValue * 0.6 ? '#FF9800' : '#4CAF50';
-        ctx.fillStyle = meterColor;
-        ctx.fillRect(x, y + 15, fillWidth, height);
+        this.ctx.fillStyle = meterColor;
+        this.ctx.fillRect(x, y + 15, fillWidth, height);
         
         // Peak marker
         const peakWidth = 2;
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        ctx.fillRect(x + fillWidth, y + 15, peakWidth, height);
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        this.ctx.fillRect(x + fillWidth, y + 15, peakWidth, height);
     }
 
     drawStatusBar(x, y, width) {
@@ -737,25 +715,6 @@ class WebImGuiUI {
         }
     }
 
-    // Event handlers
-    updateMousePosition(e) {
-        const rect = this.canvas.getBoundingClientRect();
-        this.mousePos.x = e.clientX - rect.left;
-        this.mousePos.y = e.clientY - rect.top;
-    }
-
-    updateMouseButton(e, isDown) {
-        const buttonMap = { 0: 0, 1: 1, 2: 2 };
-        const button = buttonMap[e.button] || 0;
-        if (button < this.mouseDown.length) {
-            this.mouseDown[button] = isDown;
-        }
-    }
-
-    updateKeyboard(e, isDown) {
-        this.keysDown[e.code] = isDown;
-    }
-
     // Public API
     setTab(tab) {
         this.tab = tab;
@@ -821,16 +780,7 @@ window.WebImGui = {
 
 // Initialize on page load
 window.addEventListener('load', () => {
-    if (typeof WebAssembly !== 'undefined' && typeof Worker !== 'undefined') {
-        // Check if we're running in a suitable environment
-        if (navigator.userAgent.includes('WebView') || 
-            navigator.userAgent.includes('Safari') || 
-            navigator.userAgent.includes('Chrome')) {
-            initWebImGui();
-        } else {
-            console.warn('Running in unsupported browser environment');
-        }
-    } else {
-        console.error('WebAssembly or Web Workers not supported');
-    }
+    // Always initialize - this is a pure JavaScript implementation
+    // that doesn't require WebAssembly or external modules
+    initWebImGui();
 });
