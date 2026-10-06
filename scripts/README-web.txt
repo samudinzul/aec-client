@@ -41,6 +41,11 @@ QUICK START
                         (the "[Loopback]" entry)
    - Output:            CABLE Input (picked automatically)
 
+   Quiet mic? Raise the "Mic gain (preamp)" slider under
+   Microphone (-12...+12 dB, live). Toggles, both live:
+   "Noise suppression" removes hiss; "Feedback notch"
+   catches speaker howl - untick either to save CPU.
+
 5. Click Start. Talk with speakers on. A sustained howl
    (speaker too close to the mic) is cut after ~5 seconds
    by the feedback notch.
@@ -79,6 +84,8 @@ TROUBLESHOOTING
   sound.
 - Choppy audio: keep the speaker volume moderate - very
   loud speakers make any canceller leave echo behind.
+  If voices sound clipped, untick "Noise suppression"
+  first, then "Feedback notch", and retest.
 
 LICENSE
 -------
