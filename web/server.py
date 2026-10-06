@@ -35,7 +35,7 @@ prefs = {"mic": None, "ref": None, "out": None,
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(UI_DIR, "index.html"))
+    return FileResponse(os.path.join(UI_DIR, "imgui_web.html"))
 
 
 app.mount("/static", StaticFiles(directory=UI_DIR), name="static")
