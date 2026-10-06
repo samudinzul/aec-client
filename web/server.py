@@ -104,7 +104,8 @@ def set_prefs(body: dict):
         chain.notch_enabled = prefs["notchEnabled"]
     if "micGain" in body:
         # Live preamp gain, linear, clamped to 0.1x..4.0x
-        # (-20..+12 dB); applies to the running chain immediately.
+        # (the UI shows 0..200%, like the desktop client);
+        # applies to the running chain immediately.
         try:
             g = float(body["micGain"])
         except (TypeError, ValueError):

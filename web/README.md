@@ -87,9 +87,9 @@ Open http://localhost:8000 — that page IS the GUI.
 1. Install VB-CABLE (https://vb-audio.com/Cable/, free) and reboot.
 2. In the page: Microphone = your mic, Speaker Reference = your
    speakers (loopback), Output = CABLE Input.
-3. If your mic is quiet, raise the **Mic gain (preamp)** slider
-   under Microphone (−12…+12 dB, live, default 0 dB). Boosting
-   also boosts background noise — watch the Mic in meter.
+3. If your mic is quiet, raise the **Microphone level** slider
+   under More → Levels (0–200%, live, default 100%). Boosting
+   also boosts background noise — watch the Mic meter.
 4. Click Start. Talk with speakers on.
 5. In Discord: input = CABLE Output.
 6. Optional, both live: untick **Noise suppression (DTLN-NS)**
@@ -112,9 +112,9 @@ Open http://localhost:8000 — that page IS the GUI.
   ~2 s after the howl stops (the engine leaves a brief residual
   at the howl frequency that the notch rides out). Unticking
   **Feedback notch** in the UI skips this stage entirely.
-- **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): −12…+12 dB
-  applied to the mic before the engine (linear 0.1×…4.0×, clamped
-  server-side), for quiet microphones.
+- **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%
+  (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
+  the mic before the engine, for quiet microphones.
 
 16 kHz only (same auto-lock as the desktop DTLN path).
 

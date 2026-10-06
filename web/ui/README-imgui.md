@@ -9,7 +9,12 @@ This project implements a web-based Dear ImGui UI that matches the desktop AEC C
 - **UI Logic** (web/ui/imgui_web.js): JavaScript implementation of Dear ImGui UI patterns and controls
 - **Styling** (web/ui/imgui_web.css): CSS matching the desktop UI theme
 
-**Note**: This implementation uses pure JavaScript to replicate Dear ImGui UI patterns and behavior, providing a native-like experience without requiring WebAssembly. The UI has the same visual polish, responsive behavior, and feature parity as the desktop version.
+**Note**: This is a DOM implementation (real selects, sliders, checkboxes
+and buttons) styled to mirror the desktop Dear ImGui layout — same
+sections, labels, tab bar and footer. No canvas, no WebAssembly, so
+every control is clickable. Engine-bound widgets the server has no
+endpoint for (profile switching, WPE, sample rate) are shown fixed,
+the way the desktop shows a forced choice.
 
 ## Key Features
 
@@ -23,16 +28,14 @@ This project implements a web-based Dear ImGui UI that matches the desktop AEC C
 - Wallpaper support
 
 ### Same Functionality
-- Device enumeration and selection
-- Microphone gain control (-12dB to +12dB)
-- Noise suppression toggle
-- Feedback notch toggle
-- Start/Stop button with live status
-- Level meters for Mic/Ref/Out
-- Live level telemetry
-- Minimize to system tray
-- Experimental engines toggle
-- Wallpapers (if available)
+- Device enumeration and selection (devices locked while running)
+- Microphone level 0–200% (More → Levels, like the desktop)
+- Noise suppression + feedback notch toggles (live)
+- Profile section (fixed DTLN-AEC 128 — the web engine is not switchable)
+- Start/Stop + Reset to defaults, with live status
+- Live level meters (Mic/Out) with peak hold, while running
+- Minimize to system tray (native window only)
+- Wallpaper picker (browser-side backdrop, remembered in localStorage)
 
 ### Live Controls
 - NS and notch toggles apply immediately
@@ -59,15 +62,16 @@ This project implements a web-based Dear ImGui UI that matches the desktop AEC C
    http://localhost:8000
    ```
 
-The UI will load using the pure JavaScript Dear ImGui implementation and provide the same experience as the desktop version. No WebAssembly compilation required!
+The UI loads as plain DOM + CSS/JS with no build step and no
+WebAssembly.
 
 ## Files
 
 ### web/ui/
-- `imgui_web.html` - Main UI page with WebAssembly integration
-- `imgui_web.js` - JavaScript wrapper for Dear ImGui
-- `imgui_web.css` - CSS styling matching desktop UI
-- `imgui_wrapper.js` - Python-WebAssembly communication bridge
+- `imgui_web.html` - Main UI page (loads `imgui_web.js`, shows real boot errors)
+- `imgui_web.js` - DOM UI mirroring src/main.cpp DrawUI sections and footer
+- `imgui_web.css` - Dear ImGui dark theme (horizontal tab bar, 190px label rows)
+- `index.html` - Classic fallback UI at `/classic`
 
 ### web/server.py
 - Modified to serve the new UI from web/ui/imgui_web.html
