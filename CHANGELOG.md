@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.tflite` pair twice (6 live interpreters instead of 4); it now
   loads once and builds its rings in the same step.
 
+- **Web UI feedback-notch toggle.** A `Feedback notch (howl
+  suppression)` checkbox sits under Noise suppression in the Audio
+  tab (`notchEnabled` pref, default on, applies live like NS).
+  Unticking skips the adaptive notch entirely — the largest
+  remaining Python cost (~16% in profiles) — at the price of no
+  feedback-howl protection. While the notch is parked the output
+  is bit-identical either way.
+
 ### Changed
 
 - **Web UI DTLN-only CPU pass (no new engines).** Same audio, less

@@ -29,7 +29,7 @@ chain = Chain(model_dir=os.path.join(ROOT, "models"))
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
-         "nsEnabled": True, "trayEnabled": True}
+         "nsEnabled": True, "notchEnabled": True, "trayEnabled": True}
 
 
 @app.get("/")
@@ -74,6 +74,12 @@ def set_prefs(body: dict):
         # applies to the running chain immediately.
         prefs["nsEnabled"] = bool(body["nsEnabled"])
         chain.ns_enabled = prefs["nsEnabled"]
+    if "notchEnabled" in body:
+        # Live toggle like NS: the notch is a post
+        # stage, so skipping it needs no device
+        # reconfigure and applies immediately.
+        prefs["notchEnabled"] = bool(body["notchEnabled"])
+        chain.notch_enabled = prefs["notchEnabled"]
     if "trayEnabled" in body:
         # Read by the native window (gui.py) to hide
         # to the system tray instead of quitting.
@@ -91,6 +97,7 @@ def start():
             return {"ok": False, "error": chain.last_error or
                     "Failed to load DTLN model"}
         chain.ns_enabled = prefs.get("nsEnabled", True)
+        chain.notch_enabled = prefs.get("notchEnabled", True)
         if any(prefs[k] is None for k in ("mic", "ref", "out")):
             chain.stop()
             return {"ok": False,

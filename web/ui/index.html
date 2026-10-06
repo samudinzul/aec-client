@@ -79,6 +79,10 @@
     Noise suppression (DTLN-NS) — removes background hiss</label>
   <div class="hint">Applies live: untick to hear the raw echo-cancelled
   voice, tick again to re-apply suppression.</div>
+  <label class="chk"><input type="checkbox" id="notchOn" checked>
+    Feedback notch (howl suppression)</label>
+  <div class="hint">Applies live: untick to skip the adaptive notch and
+  save CPU; howling feedback will no longer be caught.</div>
   <button id="startBtn">Start</button>
   <div id="status">Stopped.</div>
   <div id="err"></div>
@@ -198,6 +202,7 @@ function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
     ref: prefVal('ref'), out: prefVal('out'),
     nsEnabled: $('nsOn').checked,
+    notchEnabled: $('notchOn').checked,
     trayEnabled: $('trayOn').checked});
 }
 // Live reconfigure is not supported (same as the desktop
@@ -210,11 +215,13 @@ function savePrefs() {
 }));
 $('rescan').onclick = loadDevices;
 
-// NS toggle applies live (no device reconfigure needed).
+// NS + notch toggles apply live (no device reconfigure needed).
 $('nsOn').addEventListener('change', savePrefs);
+$('notchOn').addEventListener('change', savePrefs);
 // Initialize the checkboxes from the server's stored prefs.
 api('GET', '/api/state').then(st => {
   if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
+  if (st && 'notchEnabled' in st) $('notchOn').checked = !!st.notchEnabled;
 }).catch(() => {});
 api('GET', '/api/prefs').then(p => {
   if (p && 'trayEnabled' in p) $('trayOn').checked = !!p.trayEnabled;
@@ -291,6 +298,8 @@ function connect() {
     if (st.running !== running) setRunning(st.running, st);
     if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
       $('nsOn').checked = !!st.nsEnabled;
+    if (st.notchEnabled !== undefined && st.notchEnabled !== $('notchOn').checked)
+      $('notchOn').checked = !!st.notchEnabled;
     if (!st.running) return;
     meter('mIn', st.inRms || 0);
     meter('mOut', st.outRms || 0);

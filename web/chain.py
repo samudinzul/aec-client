@@ -34,6 +34,7 @@ class Chain:
         self.dtln = None
         self.ns = None
         self.ns_enabled = True
+        self.notch_enabled = True
         self.running = False
         self.last_error = ""
         self.frames = 0
@@ -122,7 +123,7 @@ class Chain:
             # detector, which releases the notch so it
             # can latch the tone. Fail-open: any failure
             # leaves the frame untouched.
-            if self.notch is not None:
+            if self.notch_enabled and self.notch is not None:
                 try:
                     self.notch.set_speech(self.gate.for_notch())
                     self.notch.process(cleaned)
@@ -151,6 +152,7 @@ class Chain:
                                            and self.ns_enabled) else (
                 "DTLN-AEC" if self.running else ""),
             "nsEnabled": 1 if self.ns_enabled else 0,
+            "notchEnabled": 1 if self.notch_enabled else 0,
             "sampleRate": 16000,
             "dtlnBackend": dtln_obj.backend if dtln_obj else 0,
             "ns": ns,
