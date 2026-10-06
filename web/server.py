@@ -29,7 +29,8 @@ chain = Chain(model_dir=os.path.join(ROOT, "models"))
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
-         "nsEnabled": True, "notchEnabled": True, "trayEnabled": True}
+         "nsEnabled": True, "notchEnabled": True, "micGain": 1.0,
+         "trayEnabled": True}
 
 
 @app.get("/")
@@ -80,6 +81,16 @@ def set_prefs(body: dict):
         # reconfigure and applies immediately.
         prefs["notchEnabled"] = bool(body["notchEnabled"])
         chain.notch_enabled = prefs["notchEnabled"]
+    if "micGain" in body:
+        # Live preamp gain, linear, clamped to 0.1x..4.0x
+        # (-20..+12 dB); applies to the running chain immediately.
+        try:
+            g = float(body["micGain"])
+        except (TypeError, ValueError):
+            g = 1.0
+        g = min(4.0, max(0.1, g))
+        prefs["micGain"] = g
+        chain.mic_gain = g
     if "trayEnabled" in body:
         # Read by the native window (gui.py) to hide
         # to the system tray instead of quitting.
@@ -98,6 +109,7 @@ def start():
                     "Failed to load DTLN model"}
         chain.ns_enabled = prefs.get("nsEnabled", True)
         chain.notch_enabled = prefs.get("notchEnabled", True)
+        chain.mic_gain = prefs.get("micGain", 1.0)
         if any(prefs[k] is None for k in ("mic", "ref", "out")):
             chain.stop()
             return {"ok": False,

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Web UI mic preamp gain.** A `Mic gain (preamp)` slider sits under
+  the Microphone selector (−12…+12 dB, live, default 0 dB). It
+  amplifies the mic before echo cancellation (`micGain` pref, linear
+  0.1×…4.0× clamped server-side); boosting also amplifies background
+  noise, so the hint points at the Mic in meter for clipping.
+
 ### Fixed
 
 - **Web UI 48 kHz output silence.** `dsp.resample_from_16k` called a

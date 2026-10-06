@@ -35,6 +35,7 @@ class Chain:
         self.ns = None
         self.ns_enabled = True
         self.notch_enabled = True
+        self.mic_gain = 1.0
         self.running = False
         self.last_error = ""
         self.frames = 0
@@ -103,6 +104,13 @@ class Chain:
         ref = np.asarray(ref_i16, dtype=np.int16)
         if not self.running or self.dtln is None:
             return mic.copy()
+        if self.mic_gain != 1.0:
+            # Mic preamp: amplify the mic (and everything it
+            # picked up, echo included) before the engine.
+            # The != 1.0 guard keeps the default path
+            # bit-identical (no extra conversion).
+            mic = np.clip(mic.astype(np.float32) * self.mic_gain,
+                          -32768.0, 32767.0).astype(np.int16)
         try:
             cleaned = self.dtln.process(mic, ref)
             # Speech gate on the ENGINE output — never
@@ -153,6 +161,7 @@ class Chain:
                 "DTLN-AEC" if self.running else ""),
             "nsEnabled": 1 if self.ns_enabled else 0,
             "notchEnabled": 1 if self.notch_enabled else 0,
+            "micGain": self.mic_gain,
             "sampleRate": 16000,
             "dtlnBackend": dtln_obj.backend if dtln_obj else 0,
             "ns": ns,

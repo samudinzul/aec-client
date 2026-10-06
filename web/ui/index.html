@@ -67,6 +67,13 @@
     <button id="rescan" class="mini">Rescan</button></div>
   <label>Microphone</label>
   <select id="mic" title="The mic you speak into"></select>
+  <label>Mic gain (preamp) — <span id="gainVal">0 dB</span></label>
+  <input type="range" id="micGain" min="-12" max="12" step="1" value="0"
+    title="Microphone preamp gain, applied before echo cancellation"
+    style="width:100%">
+  <div class="hint">Amplifies quiet microphones before processing
+  (−12…+12 dB, live). Boosting also amplifies background noise —
+  watch the Mic in meter for clipping.</div>
   <label>Speaker Reference (system audio loopback)</label>
   <select id="ref" title="The speakers whose sound gets removed from your mic"></select>
   <label>Output</label>
@@ -197,13 +204,20 @@ async function loadDevices() {
     $('err').textContent = 'devices: could not reach server (' + e.message + ')';
   }
 }
+const db2gain = db => Math.pow(10, db / 20);
+const gain2db = g => Math.round(20 * Math.log10(Math.max(0.001, g)));
 const prefVal = id => { const v = $(id).value; return v === '' ? null : +v; };
 function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
     ref: prefVal('ref'), out: prefVal('out'),
     nsEnabled: $('nsOn').checked,
     notchEnabled: $('notchOn').checked,
+    micGain: db2gain(+$('micGain').value),
     trayEnabled: $('trayOn').checked});
+}
+function showGain() {
+  $('gainVal').textContent = (+$('micGain').value >= 0 ? '+' : '')
+    + $('micGain').value + ' dB';
 }
 // Live reconfigure is not supported (same as the desktop
 // app): a change while running applies after Stop -> Start.
@@ -218,11 +232,14 @@ $('rescan').onclick = loadDevices;
 // NS + notch toggles apply live (no device reconfigure needed).
 $('nsOn').addEventListener('change', savePrefs);
 $('notchOn').addEventListener('change', savePrefs);
+$('micGain').addEventListener('input', () => { showGain(); savePrefs(); });
 // Initialize the checkboxes from the server's stored prefs.
 api('GET', '/api/state').then(st => {
   if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
   if (st && 'notchEnabled' in st) $('notchOn').checked = !!st.notchEnabled;
-}).catch(() => {});
+  if (st && st.micGain !== undefined) $('micGain').value = gain2db(+st.micGain);
+  showGain();
+}).catch(() => { showGain(); });
 api('GET', '/api/prefs').then(p => {
   if (p && 'trayEnabled' in p) $('trayOn').checked = !!p.trayEnabled;
 }).catch(() => {});
@@ -300,6 +317,10 @@ function connect() {
       $('nsOn').checked = !!st.nsEnabled;
     if (st.notchEnabled !== undefined && st.notchEnabled !== $('notchOn').checked)
       $('notchOn').checked = !!st.notchEnabled;
+    if (st.micGain !== undefined && gain2db(+st.micGain) !== +$('micGain').value) {
+      $('micGain').value = gain2db(+st.micGain);
+      showGain();
+    }
     if (!st.running) return;
     meter('mIn', st.inRms || 0);
     meter('mOut', st.outRms || 0);
