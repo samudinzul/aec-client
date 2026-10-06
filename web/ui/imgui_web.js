@@ -784,3 +784,17 @@ window.addEventListener('load', () => {
     // that doesn't require WebAssembly or external modules
     initWebImGui();
 });
+// Timeout handler for UI initialization
+window.addEventListener('load', function() {
+    setTimeout(function() {
+        if (!document.getElementById('root') || document.getElementById('root').innerHTML.includes('Loading AEC Web UI')) {
+            console.log('UI initialization timeout - showing fallback');
+            document.getElementById('root').innerHTML = 
+                '<div style="text-align: center; padding: 50px; color: #e8e8e8; font-family: system-ui, sans-serif;">' +
+                '<h1>AEC Client - Web UI (Dear ImGui)</h1>' +
+                '<p>UI initialization timed out. Please refresh the page.</p>' +
+                '<button onclick="location.reload()" style="padding: 10px 20px; margin: 10px; background: #2a9d5c; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh Page</button>' +
+                '</div>';
+        }
+    }, 10000); // 10 second timeout
+});

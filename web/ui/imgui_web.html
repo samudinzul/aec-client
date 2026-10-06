@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AEC Client - Web UI (Dear ImGui)</title>
     <link rel="stylesheet" href="imgui_web.css">
-    <script src="imgui_web.js"></script>
 </head>
 <body>
     <div id="root">
@@ -14,5 +13,50 @@
             <p>Please wait while the UI initializes...</p>
         </div>
     </div>
+    
+    <script>
+        // Load the JavaScript
+        const script = document.createElement('script');
+        script.src = 'imgui_web.js';
+        script.defer = true;
+        
+        script.onload = function() {
+            console.log('Dear ImGui script loaded successfully');
+            if (typeof initWebImGui === 'function') {
+                console.log('Initializing Dear ImGui UI...');
+                initWebImGui();
+            } else {
+                console.error('Dear ImGui init function not found');
+                document.getElementById('root').innerHTML = 
+                    '<div style="text-align: center; padding: 50px; color: #e8e8e8; font-family: system-ui, sans-serif;">' +
+                    '<h1>AEC Client - Web UI (Dear ImGui)</h1>' +
+                    '<p>Dear ImGui UI initialization failed.</p>' +
+                    '<p>Please check the browser console for errors.</p>' +
+                    '<button onclick="location.reload()" style="padding: 10px 20px; margin: 10px; background: #2a9d5c; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh Page</button>' +
+                    '</div>';
+            }
+        };
+        
+        script.onerror = function(e) {
+            console.error('Failed to load Dear ImGui script:', e);
+            document.getElementById('root').innerHTML = 
+                '<div style="text-align: center; padding: 50px; color: #e8e8e8; font-family: system-ui, sans-serif;">' +
+                '<h1>AEC Client - Web UI (Dear ImGui)</h1>' +
+                '<p>Failed to load Dear ImGui script.</p>' +
+                '<p>Error: ' + e.message + '</p>' +
+                '<button onclick="location.reload()" style="padding: 10px 20px; margin: 10px; background: #2a9d5c; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh Page</button>' +
+                '</div>';
+        };
+        
+        // Add error handling for general page errors
+        window.addEventListener('error', function(e) {
+            if (e.error) {
+                console.error('Page error:', e.error);
+            }
+        });
+        
+        // Add script to document head
+        document.head.appendChild(script);
+    </script>
 </body>
 </html>
