@@ -32,7 +32,10 @@ nothing for antivirus heuristics to flag.
 You do NOT need: admin rights, a C++ compiler, CMake, Node, or Docker.
 Everything else (FastAPI, numpy, LiteRT,
 pyaudiowpatch, pywebview, pystray, Pillow)
-installs itself on first run.
+installs itself on first run. `scipy` is optional
+(see requirements.txt) and speeds up the notch
+bypass when present — install separately if you
+want the lowest CPU.
 
 ## Why this exists
 

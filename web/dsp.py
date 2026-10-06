@@ -13,6 +13,77 @@ in framing semantics:
 
 import numpy as np
 
+# Cached 61-tap FIR lowpass (fc ~7 kHz, normalized), reused on
+# every resample call — building it (sinc + Hann) on each call
+# was wasted work in the hot audio path.
+_FIR = None
+_FIR_UP = None
+
+
+def _build_fir():
+    taps = 61
+    n = np.arange(taps) - taps // 2
+    fc = 7000.0 / 48000.0
+    h = np.sinc(2 * fc * n) * (0.54 - 0.46 * np.cos(2 * np.pi * (n + taps // 2) / (taps - 1)))
+    return h / h.sum()
+
+
+_FIR = _build_fir()
+_FIR_UP = _FIR * 3.0  # upsampling gain x3
+
+
+class _Ring:
+    """Lock-free circular buffer over a numpy array.
+
+    One producer, one consumer (the audio pump); every _Ring is
+    used by exactly one worker thread, so no concurrency
+    protection is needed.
+    """
+
+    __slots__ = ("buf", "cap", "w", "r", "dropped")
+
+    def __init__(self, cap, dtype):
+        self.buf = np.zeros(cap, dtype=dtype)
+        self.cap = cap
+        self.w = 0
+        self.r = 0
+        self.dropped = 0
+
+    @property
+    def size(self):
+        s = self.w - self.r
+        return s if s >= 0 else s + self.cap
+
+    @property
+    def free(self):
+        return self.cap - self.size
+
+    def push(self, src):
+        n = len(src)
+        if n > self.free:
+            self.dropped += n - self.free
+            return
+        if self.w + n <= self.cap:
+            self.buf[self.w:self.w + n] = src
+            self.w += n
+        else:
+            part = self.cap - self.w
+            self.buf[self.w:] = src[:part]
+            self.buf[:n - part] = src[part:]
+            self.w = n - part
+
+    def pop(self, n):
+        """n samples from the read head; returns a copy."""
+        assert n <= self.size
+        idx = self.r
+        if idx + n <= self.cap:
+            out = self.buf[idx:idx + n]
+        else:
+            out = np.concatenate([self.buf[idx:], self.buf[:idx + n - self.cap]])
+        self.r += n
+        return out.copy()
+
+
 BLOCK_LEN = 512
 BLOCK_SHIFT = 128
 BINS = 257  # rfft(512)
@@ -43,7 +114,7 @@ def f32_to_i16_trunc(block: np.ndarray) -> np.ndarray:
         float v = h->outBuf[i] * 32768.0f; clip; (int16_t)v
 
     (clip first, then C-cast truncate toward zero)."""
-    v = np.clip(np.asarray(block, dtype=np.float64) * 32768.0, -32768.0, 32767.0)
+    v = np.clip(np.asarray(block, dtype=np.float32) * 32768.0, -32768.0, 32767.0)
     return v.astype(np.int16)  # numpy float->int cast truncates, like C
 
 
@@ -66,14 +137,9 @@ def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
 
     Coefficients: windowed sinc, 61 taps, ~60 dB stopband. Reference
     quality only needs aliasing below audibility-vs-AEC tolerance, and
-    this is far beyond that.
+    this is far beyond that. Coefficients are computed once at import.
     """
-    taps = 61
-    n = np.arange(taps) - taps // 2
-    fc = 7000.0 / 48000.0
-    h = np.sinc(2 * fc * n) * (0.54 - 0.46 * np.cos(2 * np.pi * (n + taps // 2) / (taps - 1)))
-    h = h / h.sum()
-    y = np.convolve(x.astype(np.float64), h, mode="same")
+    y = np.convolve(x.astype(np.float64), _FIR, mode="same")
     return y[::3].astype(np.float32)
 
 
@@ -100,14 +166,7 @@ def resample_from_16k(frame_f32: np.ndarray, rate: int) -> np.ndarray:
         return x
     if rate == 48000:
         # x3 polyphase: zero-stuff + the same 61-tap lowpass, gain x3.
-        taps = 61
-        n = np.arange(taps) - taps // 2
-        fc = 7000.0 / 48000.0
-        h = np.sinc(2 * fc * n) * (0.54 - 0.46 * np.cos(2 * np.pi * (n + taps // 2) / (taps - 1)))
-        h = (h / h.sum()) * 3.0
-        up = np.zeros(x.size * 3, dtype=np.float64)
-        up[::3] = x.astype(np.float64)
-        return np.convolve(up, h, mode="same").astype(np.float32)
+        return _fir_interpolate_3(x)
     want = int(round(x.size * rate / SAMPLE_RATE))
     if want <= 0:
         return np.zeros(0, dtype=np.float32)

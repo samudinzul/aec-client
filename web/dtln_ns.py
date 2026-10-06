@@ -55,11 +55,21 @@ class DtlnNs:
             )
         self.mic_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
         self.out_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
-        self.q = deque()
-        self.ring = deque([0.0] * RING_PREFILL if self.backend else [])
         self.dropped = 0
         self.in_rms = 0.0
         self.out_rms = 0.0
+        self.mic_ring = None
+        self.ring = None
+        try:
+            self._load(model_prefix)
+            self.backend = 1
+            self.mic_ring = dsp._Ring(Q_CAP + 512, dtype=np.float32)
+            self.ring = dsp._Ring(RING_CAP, dtype=np.float32)
+            self.ring.push(np.zeros(RING_PREFILL, dtype=np.float32))
+        except Exception as e:
+            self.last_error = (
+                f"dtln_ns model pair not found in models/ (NS stays off): {e}"
+            )
 
     def _load(self, prefix):
         if Interpreter is None:
@@ -91,8 +101,10 @@ class DtlnNs:
     def reset(self):
         self.mic_buf.fill(0)
         self.out_buf.fill(0)
-        self.q.clear()
-        self.ring.clear()
+        if self.mic_ring is not None:
+            self.mic_ring = dsp._Ring(Q_CAP + 512, dtype=np.float32)
+            self.ring = dsp._Ring(RING_CAP, dtype=np.float32)
+            self.ring.push(np.zeros(RING_PREFILL, dtype=np.float32))
         self.dropped = 0
         self.in_rms = self.out_rms = 0.0
         if self.backend:
@@ -153,11 +165,7 @@ class DtlnNs:
         est = dsp.apply_mask_irfft(spec, mask)
         out_block = self._run_second(est)
         self.out_buf += out_block
-        for i in range(BLOCK_SHIFT):
-            if len(self.ring) < RING_CAP:
-                self.ring.append(float(self.out_buf[i]))
-            else:
-                self.dropped += 1
+        self.ring.push(self.out_buf[:BLOCK_SHIFT])
         self.out_buf = np.roll(self.out_buf, -BLOCK_SHIFT)
         self.out_buf[-BLOCK_SHIFT:] = 0.0
 
@@ -169,24 +177,26 @@ class DtlnNs:
         if not self.ready:
             self.out_rms = self.in_rms
             return frame.copy()
-        if len(self.q) + n > Q_CAP:
+        if self.mic_ring.size + n > Q_CAP:
             self.out_rms = self.in_rms
             return frame.copy()
-        self.q.extend(float(v) for v in frame)
-        while len(self.q) >= BLOCK_SHIFT:
-            mic_new = np.array([self.q.popleft() for _ in range(BLOCK_SHIFT)],
-                               dtype=np.float32)
+        self.mic_ring.push(frame)
+        while self.mic_ring.size >= BLOCK_SHIFT:
+            mic_new = self.mic_ring.pop(BLOCK_SHIFT)
             self._process_shift(mic_new)
         out = np.empty(n, dtype=np.float32)
-        for i in range(n):
-            out[i] = self.ring.popleft() if self.ring else frame[i]
+        if self.ring.size >= n:
+            out[:] = self.ring.pop(n)
+        else:
+            for i in range(n):
+                out[i] = self.ring.pop(1) if self.ring.size else frame[i]
         self.out_rms = rms(out)
         return out
 
     def stats(self):
         return {
             "backend": self.backend,
-            "rCount": len(self.ring),
+            "rCount": self.ring.size if self.ring else 0,
             "inRms": self.in_rms,
             "outRms": self.out_rms,
             "dropped": self.dropped,

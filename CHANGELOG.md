@@ -109,6 +109,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backoff; the page survives a server restart
   without a manual refresh.
 
+### Performance
+
+- **Lower CPU on modern CPUs.** The audio path was hot from per-call
+  FIR filter rebuilds and one-by-one deque pulls: the 61-tap
+  resampling filter is now computed once at import, `DtlnAec` /
+  `DtlnNs` pull 128-sample shifts from preallocated numpy ring
+  buffers instead of 128 `popleft()` calls per shift, and int16
+  clipping uses float32. When `scipy` is installed, the notch's
+  passive (non-adapting, unengaged) bypass path is computed with a
+  vectorized IIR instead of a per-sample Python loop.
+
 ### Fixed
 
 - **Ort::Session takes a wchar_t path on Windows.** The ONNX backend

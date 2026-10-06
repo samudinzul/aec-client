@@ -171,23 +171,26 @@ class DtlnAec:
         self.last_error = ""
         self.backend = 0  # 0=none, 1=tflite
         self.pair = None
+        self.mic_ring = None
+        self.ref_ring = None
+        self.out_ring = None
+        self.mic_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
+        self.lpb_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
+        self.out_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
         try:
             self.pair = _TflitePair(
                 model_prefix + "_1.tflite", model_prefix + "_2.tflite",
                 BINS, 2,
             )
             self.backend = 1
+            self.mic_ring = dsp._Ring(1024, dtype=np.float32)
+            self.ref_ring = dsp._Ring(1024, dtype=np.float32)
+            self.out_ring = dsp._Ring(512, dtype=np.int16)
         except Exception as e:  # missing files / no litert -> fail-open
             self.last_error = (
                 f"DTLN: model pair not found for prefix '{model_prefix}' "
                 f"(need *_1.tflite+*_2.tflite and ai-edge-litert): {e}"
             )
-        self.mic_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
-        self.lpb_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
-        self.out_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
-        self.mic_accum = deque()
-        self.ref_accum = deque()
-        self.out_accum = deque()
 
     @property
     def ready(self):
@@ -197,9 +200,10 @@ class DtlnAec:
         self.mic_buf.fill(0)
         self.lpb_buf.fill(0)
         self.out_buf.fill(0)
-        self.mic_accum.clear()
-        self.ref_accum.clear()
-        self.out_accum.clear()
+        if self.mic_ring is not None:
+            self.mic_ring = dsp._Ring(1024, dtype=np.float32)
+            self.ref_ring = dsp._Ring(1024, dtype=np.float32)
+            self.out_ring = dsp._Ring(512, dtype=np.int16)
         if self.pair is not None:
             self.pair.states1.fill(0)
             self.pair.states2.fill(0)
@@ -226,19 +230,18 @@ class DtlnAec:
         n = len(mic_i16)
         if not self.ready:
             return np.asarray(mic_i16, dtype=np.int16).copy()
-        self.mic_accum.extend(dsp.i16_to_f32(np.asarray(mic_i16)))
-        self.ref_accum.extend(dsp.i16_to_f32(np.asarray(ref_i16)))
-        while len(self.mic_accum) >= BLOCK_SHIFT and len(self.ref_accum) >= BLOCK_SHIFT:
-            mic_new = np.array([self.mic_accum.popleft() for _ in range(BLOCK_SHIFT)],
-                               dtype=np.float32)
-            lpb_new = np.array([self.ref_accum.popleft() for _ in range(BLOCK_SHIFT)],
-                               dtype=np.float32)
+        self.mic_ring.push(dsp.i16_to_f32(np.asarray(mic_i16)))
+        self.ref_ring.push(dsp.i16_to_f32(np.asarray(ref_i16)))
+        while self.mic_ring.size >= BLOCK_SHIFT and self.ref_ring.size >= BLOCK_SHIFT:
+            mic_new = self.mic_ring.pop(BLOCK_SHIFT)
+            lpb_new = self.ref_ring.pop(BLOCK_SHIFT)
             self._process_shift(mic_new, lpb_new)
-            self.out_accum.extend(
-                dsp.f32_to_i16_trunc(self.out_buf[:BLOCK_SHIFT])
-            )
+            self.out_ring.push(dsp.f32_to_i16_trunc(self.out_buf[:BLOCK_SHIFT]))
             self.out_buf[:BLOCK_SHIFT] = 0.0
-        out = np.zeros(n, dtype=np.int16)
-        for i in range(n):
-            out[i] = self.out_accum.popleft() if self.out_accum else 0
+        out = np.empty(n, dtype=np.int16)
+        if self.out_ring.size >= n:
+            out[:] = self.out_ring.pop(n)
+        else:
+            for i in range(n):
+                out[i] = self.out_ring.pop(1) if self.out_ring.size else 0
         return out

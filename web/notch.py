@@ -48,6 +48,12 @@ import math
 
 import numpy as np
 
+try:
+    from scipy.signal import lfilter as _lfilter
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
+
 _SECTIONS = 2
 _BANDWIDTH_HZ = 60.0
 _MIN_HZ = 80.0
@@ -161,65 +167,83 @@ class Notch:
         w_max = self.w_max
         dead = _DEAD_FRAC * dw_max
 
-        for i in range(n):
-            x = float(buf[i]) / 32768.0
+        if _HAS_SCIPY and not adapt and all(not s.engaged for s in secs):
+            # Pure-bypass: every section is a fixed linear IIR and
+            # the output equals the input (no engage) - vectorize
+            # the biquad across the whole buffer for history
+            # tracking; the engage gate still uses the same acc_*
+            # telemetry as the loop version.
+            x = f
             for k in range(_SECTIONS):
                 s = secs[k]
-                xin = x
+                zi = (s.b1 * s.x1 + s.x2 - s.a1 * s.y1 - s.a2 * s.y2,
+                      s.x1 - s.a2 * s.y1)
+                y, _ = _lfilter((1.0, s.b1, 1.0), (1.0, -s.a1, -s.a2), x, zi=zi)
+                acc_pin[k] += float(np.dot(x, x))
+                acc_pout[k] += float(np.dot(y, y))
+                s.x2, s.x1 = x[-2], x[-1]
+                s.y2, s.y1 = y[-2], y[-1]
+            buf[:] = np.clip(np.round(f * 32768.0), -32768.0, 32767.0).astype(np.int16)
+        else:
+            for i in range(n):
+                x = float(buf[i]) / 32768.0
+                for k in range(_SECTIONS):
+                    s = secs[k]
+                    xin = x
 
-                # Notch difference equation.
-                y = (x + s.b1 * s.x1 + s.x2
-                     + s.a1 * s.y1 + s.a2 * s.y2)
+                    # Notch difference equation.
+                    y = (x + s.b1 * s.x1 + s.x2
+                         + s.a1 * s.y1 + s.a2 * s.y2)
 
-                # Sensitivity dy/dw (same denominator
-                # recursion).
-                g = (2.0 * s.sw * s.x1
-                     - 2.0 * s.r * s.sw * s.y1
-                     + s.a1 * s.s1 + s.a2 * s.s2)
+                    # Sensitivity dy/dw (same denominator
+                    # recursion).
+                    g = (2.0 * s.sw * s.x1
+                         - 2.0 * s.r * s.sw * s.y1
+                         + s.a1 * s.s1 + s.a2 * s.s2)
 
-                if adapt:
-                    s.ema_g = (_EMA_ALPHA * s.ema_g
-                               + (1.0 - _EMA_ALPHA) * (y * g))
-                    s.ema_p = (_EMA_ALPHA * s.ema_p
-                               + (1.0 - _EMA_ALPHA) * (g * g))
-                    dwe = -_MU * s.ema_g / (s.ema_p + _EPS)
-                    if dwe > dw_max:
-                        dwe = dw_max
-                    elif dwe < -dw_max:
-                        dwe = -dw_max
-                    # Dead-zone: below 2% of the slew cap the
-                    # estimate is noise — frozen instead, it
-                    # settles deep and stays put.
-                    if dwe > dead or dwe < -dead:
-                        w = s.w + dwe
-                        if w < w_min:
-                            w = w_min
-                        elif w > w_max:
-                            w = w_max
-                        if w != s.w:
-                            s.set_freq(w)
+                    if adapt:
+                        s.ema_g = (_EMA_ALPHA * s.ema_g
+                                   + (1.0 - _EMA_ALPHA) * (y * g))
+                        s.ema_p = (_EMA_ALPHA * s.ema_p
+                                   + (1.0 - _EMA_ALPHA) * (g * g))
+                        dwe = -_MU * s.ema_g / (s.ema_p + _EPS)
+                        if dwe > dw_max:
+                            dwe = dw_max
+                        elif dwe < -dw_max:
+                            dwe = -dw_max
+                        # Dead-zone: below 2% of the slew cap the
+                        # estimate is noise — frozen instead, it
+                        # settles deep and stays put.
+                        if dwe > dead or dwe < -dead:
+                            w = s.w + dwe
+                            if w < w_min:
+                                w = w_min
+                            elif w > w_max:
+                                w = w_max
+                            if w != s.w:
+                                s.set_freq(w)
 
-                # Engage telemetry: how much energy would
-                # this section remove right now?
-                acc_pin[k] += xin * xin
-                acc_pout[k] += y * y
+                    # Engage telemetry: how much energy would
+                    # this section remove right now?
+                    acc_pin[k] += xin * xin
+                    acc_pout[k] += y * y
 
-                # Histories shift; the filter keeps running
-                # while bypassed so adaptation stays coherent.
-                s.x2 = s.x1
-                s.x1 = xin
-                s.y2 = s.y1
-                s.y1 = y
-                s.s2 = s.s1
-                s.s1 = g
-                x = y if s.engaged else xin
+                    # Histories shift; the filter keeps running
+                    # while bypassed so adaptation stays coherent.
+                    s.x2 = s.x1
+                    s.x1 = xin
+                    s.y2 = s.y1
+                    s.y1 = y
+                    s.s2 = s.s1
+                    s.s1 = g
+                    x = y if s.engaged else xin
 
-            v = x * 32768.0
-            if v > 32767.0:
-                v = 32767.0
-            elif v < -32768.0:
-                v = -32768.0
-            buf[i] = int(v)
+                v = x * 32768.0
+                if v > 32767.0:
+                    v = 32767.0
+                elif v < -32768.0:
+                    v = -32768.0
+                buf[i] = int(v)
 
         # Engage gate: latch a section once it has
         # demonstrably captured a tone (>45% of its input
