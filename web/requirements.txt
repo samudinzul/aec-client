@@ -12,14 +12,9 @@ uvicorn>=0.29         # ASGI server (run: python server.py)
 websockets>=13        # WebSocket transport for uvicorn (meters would 404 without it)
 numpy>=1.26           # DSP: rfft/irfft framing, OLA, resampling, meters
 ai-edge-litert>=2.2   # Google LiteRT: runs the .tflite DTLN pairs directly
-pyaudiowpatch>=0.2.12 # PortAudio fork: mic in, WASAPI-loopback ref, CABLE out
-                       # (single audio backend; sounddevice sees no loopback
-                       # and its bundled PortAudio blanked real hardware)
-pywebview>=5.0        # native app window around the GUI (Edge WebView2,
-                         preinstalled on Windows 10/11) — no browser needed;
-                         falls back to the default browser if absent
-pystray>=0.19         # system-tray icon (minimize-to-tray; pure ctypes on
-                         Windows, no extra system deps)
+pyaudiowpatch>=0.2.12 # PortAudio fork: mic in, WASAPI-loopback ref, CABLE out (single backend)
+pywebview>=5.0        # native window (Edge WebView2, preinstalled on Windows 10/11); browser fallback
+pystray>=0.19         # system-tray icon (minimize-to-tray; pure ctypes on Windows)
 Pillow>=10            # draws the tray icon at runtime (mainstream wheel)
 
 # Optional extra (recommended for lowest CPU on howling/feedback

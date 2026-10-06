@@ -122,6 +122,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Requirements parsing with pip 26.x.** The `pywebview` /
+  `pystray` / `pyaudiowpatch` comment blocks used whitespace-
+  indented continuation lines that pip 26.x rejects; all
+  requirements are now single-line.
+
 - **Ort::Session takes a wchar_t path on Windows.** The ONNX backend
   passed a `const char*` to the Session constructor, which only accepts
   `ORTCHAR_T*` (wchar_t on Windows) — same fix the DTLN wrapper
