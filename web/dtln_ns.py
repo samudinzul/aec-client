@@ -46,13 +46,6 @@ class DtlnNs:
         self.last_error = ""
         self.backend = 0  # 0=none, 1=tflite
         self.i1 = self.i2 = None
-        try:
-            self._load(model_prefix)
-            self.backend = 1
-        except Exception as e:
-            self.last_error = (
-                f"dtln_ns model pair not found in models/ (NS stays off): {e}"
-            )
         self.mic_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
         self.out_buf = np.zeros(BLOCK_LEN, dtype=np.float32)
         self.dropped = 0
@@ -158,7 +151,7 @@ class DtlnNs:
             return np.asarray(est, dtype=np.float32).copy()
 
     def _process_shift(self, mic_new):
-        self.mic_buf = np.roll(self.mic_buf, -BLOCK_SHIFT)
+        self.mic_buf[:-BLOCK_SHIFT] = self.mic_buf[BLOCK_SHIFT:]
         self.mic_buf[-BLOCK_SHIFT:] = mic_new
         spec, mag = dsp.rfft_mag(self.mic_buf)
         mask = self._run_first(mag)
@@ -166,7 +159,7 @@ class DtlnNs:
         out_block = self._run_second(est)
         self.out_buf += out_block
         self.ring.push(self.out_buf[:BLOCK_SHIFT])
-        self.out_buf = np.roll(self.out_buf, -BLOCK_SHIFT)
+        self.out_buf[:-BLOCK_SHIFT] = self.out_buf[BLOCK_SHIFT:]
         self.out_buf[-BLOCK_SHIFT:] = 0.0
 
     def process(self, frame_f32):

@@ -185,8 +185,14 @@ class Notch:
                 s.y2, s.y1 = y[-2], y[-1]
             buf[:] = np.clip(np.round(f * 32768.0), -32768.0, 32767.0).astype(np.int16)
         else:
+            # No-scipy fallback: identical math, but convert the
+            # buffer once and batch the int16 write (per-sample
+            # float()/int() conversions dominated this path).
+            # astype truncates toward zero, same as int(v).
+            xs = (f / 32768.0).tolist()
+            ys = [0.0] * n
             for i in range(n):
-                x = float(buf[i]) / 32768.0
+                x = xs[i]
                 for k in range(_SECTIONS):
                     s = secs[k]
                     xin = x
@@ -238,12 +244,11 @@ class Notch:
                     s.s1 = g
                     x = y if s.engaged else xin
 
-                v = x * 32768.0
-                if v > 32767.0:
-                    v = 32767.0
-                elif v < -32768.0:
-                    v = -32768.0
-                buf[i] = int(v)
+                ys[i] = x
+
+            buf[:] = np.clip(
+                np.asarray(ys, dtype=np.float64) * 32768.0,
+                -32768.0, 32767.0).astype(np.int16)
 
         # Engage gate: latch a section once it has
         # demonstrably captured a tone (>45% of its input

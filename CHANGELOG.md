@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Web UI 48 kHz output silence.** `dsp.resample_from_16k` called a
+  `_fir_interpolate_3` that was never defined, so any cable output
+  running at 48 kHz raised `NameError` inside the PortAudio callback
+  (swallowed → silence). The zero-stuff ×3 + 61-tap lowpass (gain ×3)
+  upsampler now exists; a 160-sample frame round-trips to 480 samples
+  at unity DC gain.
+
+- **Web UI NS double model load.** `DtlnNs.__init__` loaded its
+  `.tflite` pair twice (6 live interpreters instead of 4); it now
+  loads once and builds its rings in the same step.
+
+### Changed
+
+- **Web UI DTLN-only CPU pass (no new engines).** Same audio, less
+  Python overhead: `np.roll` buffer shifts replaced with in-place
+  memmove slices, `rms()` in float32, one `astype` per frame in the
+  chain, no redundant `lpb_buf.copy()` into the second model, cached
+  second-model output classify, and a batched int16 write in the
+  no-scipy notch fallback loop. Smoke output is bit-identical
+  (`frames=200 out_rms=938.7 peak=9733`).
+
 ## [1.10.1] — 2026-09-29 (web UI: 2026-10-04)
 
 ### Added

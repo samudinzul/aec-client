@@ -102,6 +102,10 @@ class _TflitePair:
         c0 = int(np.prod(self.o1[0]["shape"]))
         c1 = int(np.prod(self.o1[1]["shape"])) if len(self.o1) > 1 else 0
         self.o1_prim, self.o1_state = _classify_out(c0, c1)
+        c0b = int(np.prod(self.o2[0]["shape"]))
+        self.o2_out = 0
+        if len(self.o2) >= 2:
+            self.o2_out = 0 if c0b == BLOCK_LEN else 1
         self.states1 = np.zeros(s1[self.s1_state], dtype=np.float32)
         self.states2 = np.zeros(s2[self.s2_state], dtype=np.float32)
         self._n_feats = n_feats
@@ -145,10 +149,7 @@ class _TflitePair:
         try:
             self._feed(self.i2, self.d2, vals2)
             self.i2.invoke()
-            c0 = int(np.prod(self.o2[0]["shape"]))
-            oi = 0
-            if len(self.o2) >= 2:
-                oi = 0 if c0 == BLOCK_LEN else 1
+            oi = self.o2_out
             out = np.asarray(
                 self.i2.get_tensor(self.o2[oi]["index"]), dtype=np.float32
             ).reshape(-1)[:BLOCK_LEN].copy()
@@ -209,8 +210,10 @@ class DtlnAec:
             self.pair.states2.fill(0)
 
     def _process_shift(self, mic_new, lpb_new):
-        self.mic_buf = np.roll(self.mic_buf, -BLOCK_SHIFT)
-        self.lpb_buf = np.roll(self.lpb_buf, -BLOCK_SHIFT)
+        # In-place memmove shifts (was np.roll: same values, no 512-sample
+        # temp alloc per shift, ~3 shifts per 160-sample frame incl. NS).
+        self.mic_buf[:-BLOCK_SHIFT] = self.mic_buf[BLOCK_SHIFT:]
+        self.lpb_buf[:-BLOCK_SHIFT] = self.lpb_buf[BLOCK_SHIFT:]
         self.mic_buf[-BLOCK_SHIFT:] = mic_new
         self.lpb_buf[-BLOCK_SHIFT:] = lpb_new
 
@@ -219,9 +222,9 @@ class DtlnAec:
 
         mask = self.pair.run_first(mic_mag, lpb_mag)
         est = dsp.apply_mask_irfft(mic_spec, mask)
-        out_block = self.pair.run_second(est, self.lpb_buf.copy())
+        out_block = self.pair.run_second(est, self.lpb_buf)
 
-        self.out_buf = np.roll(self.out_buf, -BLOCK_SHIFT)
+        self.out_buf[:-BLOCK_SHIFT] = self.out_buf[BLOCK_SHIFT:]
         self.out_buf[-BLOCK_SHIFT:] = 0.0
         self.out_buf += out_block
 

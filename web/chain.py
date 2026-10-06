@@ -107,11 +107,10 @@ class Chain:
             # Speech gate on the ENGINE output — never
             # on the stages' own output, so a notch cut
             # can't flip the gate that froze it.
-            self.gate.update(
-                dsp.rms(cleaned.astype(np.float32)),
-                FRAME_DUR_MS)
+            cf = cleaned.astype(np.float32)
+            self.gate.update(dsp.rms(cf), FRAME_DUR_MS)
             if self.ns_enabled and self.ns is not None and self.ns.ready:
-                f = cleaned.astype(np.float32) / 32768.0
+                f = cf / 32768.0
                 try:
                     f = self.ns.process(f)
                 except Exception:

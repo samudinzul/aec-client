@@ -131,9 +131,10 @@ def f32_to_i16_round(block: np.ndarray) -> np.ndarray:
 
 def rms(x: np.ndarray) -> float:
     """RMS of a float frame (matches the C++ sqrt(sum(x^2)/n))."""
-    if x.size == 0:
+    v = np.asarray(x, dtype=np.float32).ravel()
+    if v.size == 0:
         return 0.0
-    return float(np.sqrt(np.mean(x.astype(np.float64) ** 2)))
+    return float(np.sqrt(np.dot(v, v) / v.size))
 
 
 def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
@@ -145,6 +146,19 @@ def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
     """
     y = np.convolve(x.astype(np.float64), _FIR, mode="same")
     return y[::3].astype(np.float32)
+
+
+def _fir_interpolate_3(x: np.ndarray) -> np.ndarray:
+    """16000 -> 48000: zero-stuff x3 + the same 61-tap lowpass, gain x3.
+
+    Stateless per chunk (same convention as _fir_decimate_3): the
+    cable-output callback feeds consecutive frames, so keeping it
+    stateless avoids cross-thread filter state.
+    """
+    up = np.zeros(x.size * 3, dtype=np.float64)
+    up[::3] = np.asarray(x, dtype=np.float64)
+    y = np.convolve(up, _FIR_UP, mode="same")
+    return y.astype(np.float32)
 
 
 def resample_to_16k(pcm_i16: np.ndarray, rate: int) -> np.ndarray:
