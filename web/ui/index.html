@@ -75,6 +75,13 @@
   <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
   from the list (Windows lists only enabled devices).</div>
   <div id="devhint" class="hint" style="color:#ffd75e"></div>
+  <label class="chk"><input type="checkbox" id="lowCpuOn">
+    Low CPU mode — skips noise suppression</label>
+  <div class="hint">
+    Skips the DTLN-NS noise-suppression model to reduce CPU
+    usage. Echo cancellation (DTLN-AEC) still runs, so
+    echo/feedback cleanup works but background hiss stays.
+  </div>
   <label class="chk"><input type="checkbox" id="nsOn" checked>
     Noise suppression (DTLN-NS) — removes background hiss</label>
   <div class="hint">Applies live: untick to hear the raw echo-cancelled
@@ -210,11 +217,25 @@ function savePrefs() {
 }));
 $('rescan').onclick = loadDevices;
 
-// NS toggle applies live (no device reconfigure needed).
-$('nsOn').addEventListener('change', savePrefs);
+// Low CPU mode and NS are the same setting — keep the
+// two checkboxes in sync, and save the current state.
+$('lowCpuOn').addEventListener('change', () => {
+  $('nsOn').checked = !$('lowCpuOn').checked;
+  savePrefs();
+});
+$('nsOn').addEventListener('change', () => {
+  $('lowCpuOn').checked = !$('nsOn').checked;
+  savePrefs();
+});
 // Initialize the checkboxes from the server's stored prefs.
 api('GET', '/api/state').then(st => {
-  if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
+  if (st && 'nsEnabled' in st) {
+    $('nsOn').checked = !!st.nsEnabled;
+    $('lowCpuOn').checked = !st.nsEnabled;
+  } else {
+    $('nsOn').checked = true;
+    $('lowCpuOn').checked = false;
+  }
 }).catch(() => {});
 api('GET', '/api/prefs').then(p => {
   if (p && 'trayEnabled' in p) $('trayOn').checked = !!p.trayEnabled;
@@ -291,6 +312,8 @@ function connect() {
     if (st.running !== running) setRunning(st.running, st);
     if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
       $('nsOn').checked = !!st.nsEnabled;
+    if (st.nsEnabled !== undefined)
+      $('lowCpuOn').checked = !st.nsEnabled;
     if (!st.running) return;
     meter('mIn', st.inRms || 0);
     meter('mOut', st.outRms || 0);
