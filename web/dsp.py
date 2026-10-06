@@ -37,10 +37,11 @@ class _Ring:
 
     One producer, one consumer (the audio pump); every _Ring is
     used by exactly one worker thread, so no concurrency
-    protection is needed.
+    protection is needed. _count tracks the number of elements so
+    size/free stay correct even when the write/read heads wrap.
     """
 
-    __slots__ = ("buf", "cap", "w", "r", "dropped")
+    __slots__ = ("buf", "cap", "w", "r", "dropped", "_count")
 
     def __init__(self, cap, dtype):
         self.buf = np.zeros(cap, dtype=dtype)
@@ -48,15 +49,15 @@ class _Ring:
         self.w = 0
         self.r = 0
         self.dropped = 0
+        self._count = 0
 
     @property
     def size(self):
-        s = self.w - self.r
-        return s if s >= 0 else s + self.cap
+        return self._count
 
     @property
     def free(self):
-        return self.cap - self.size
+        return self.cap - self._count
 
     def push(self, src):
         n = len(src)
@@ -71,16 +72,19 @@ class _Ring:
             self.buf[self.w:] = src[:part]
             self.buf[:n - part] = src[part:]
             self.w = n - part
+        self._count += n
 
     def pop(self, n):
         """n samples from the read head; returns a copy."""
-        assert n <= self.size
+        assert n <= self._count
         idx = self.r
         if idx + n <= self.cap:
             out = self.buf[idx:idx + n]
         else:
             out = np.concatenate([self.buf[idx:], self.buf[:idx + n - self.cap]])
         self.r += n
+        self.r %= self.cap
+        self._count -= n
         return out.copy()
 
 
