@@ -243,5 +243,5 @@ class DtlnAec:
             out[:] = self.out_ring.pop(n)
         else:
             for i in range(n):
-                out[i] = self.out_ring.pop(1) if self.out_ring.size else 0
+                out[i] = self.out_ring.pop(1)[0] if self.out_ring.size else 0
         return out

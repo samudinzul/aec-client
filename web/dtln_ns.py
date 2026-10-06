@@ -189,7 +189,7 @@ class DtlnNs:
             out[:] = self.ring.pop(n)
         else:
             for i in range(n):
-                out[i] = self.ring.pop(1) if self.ring.size else frame[i]
+                out[i] = self.ring.pop(1)[0] if self.ring.size else frame[i]
         self.out_rms = rms(out)
         return out
 
