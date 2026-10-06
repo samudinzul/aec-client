@@ -8,6 +8,12 @@ REM The server runs in THIS window - close it or
 REM press Ctrl+C to stop. Click start.bat again any
 REM time to reopen the GUI. Startup errors are also
 REM logged to web\start.log.
+REM
+REM The web UI now uses Dear ImGui (WebAssembly) for a
+REM native-like experience that matches the desktop version
+REM exactly. The UI includes tabs, cards, custom widgets,
+REM live controls, and a professional dark theme.
+REM
 setlocal
 cd /d "%~dp0.." 2>nul
 if errorlevel 1 (
@@ -70,7 +76,10 @@ REM --- WebView2 - no browser needed). Attaches to a
 REM --- running server, or starts one in-process and
 REM --- stops it when the window closes. Falls back to
 REM --- the default browser if WebView2 is missing ---
-echo [-] starting aec-web - window opens when ready.
+REM --- The UI now uses Dear ImGui (WebAssembly) for a
+REM --- native-like experience matching the desktop version
+REM --- exactly, with tabs, cards, custom widgets, and live controls ---
+echo [-] starting aec-web - native window opens when ready.
 python -m web.gui
 echo [-] aec-web stopped - exit code %ERRORLEVEL%.
 pause
