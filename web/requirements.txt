@@ -1,6 +1,6 @@
 # aec-web requirements — the FULL set (start.bat installs this:
 # base server + native window + extra engines). For the lean
-# install, see requirements-base.txt (server.bat uses that).
+# base-only install, see requirements-base.txt.
 # Install:  pip install -r requirements.txt   (Python 3.10+ on Windows)
 #
 # AV note: every package here is a mainstream, reputable wheel.

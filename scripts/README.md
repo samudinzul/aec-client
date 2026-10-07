@@ -26,7 +26,7 @@ scripts/test.sh                        # offline tests (native + web)
 | Script | Purpose | Typical use |
 |--------|---------|-------------|
 | `make-desktop-build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/make-desktop-build.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
-| `make-web-build.sh` | Prepare + verify the web runtime (venv, packages, compile, engine smoke — no compiler involved) | `scripts/make-web-build.sh` · `--fresh` rebuilds `.venv` · `--lean` installs the base set only (mirrors `server.bat`) · `--run` builds then launches the GUI |
+| `make-web-build.sh` | Prepare + verify the web runtime (venv, packages, compile, engine smoke — no compiler involved) | `scripts/make-web-build.sh` · `--fresh` rebuilds `.venv` · `--lean` installs the base set only (DTLN profiles, ~140 MB) · `--run` builds then launches the GUI |
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
 | `make-release-desktop.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release-desktop.sh` (version defaults to `APP_VERSION`) |
 | `make-release-web.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-release-web.sh` |

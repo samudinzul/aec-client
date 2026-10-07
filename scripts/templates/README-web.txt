@@ -38,10 +38,6 @@ QUICK START
      press Ctrl+C to stop.
    - Click start.bat again any time to reopen the GUI
      while the server keeps running.
-   - Leaner alternative: web\server.bat installs fewer
-     packages (smaller environment, DTLN profiles only)
-     and opens the GUI in your own browser instead of
-     a separate window.
 
 4. In the GUI, pick your devices:
    - Microphone:        your physical microphone

@@ -8,7 +8,7 @@
 #
 # Contract:
 #   release/AEC-Web-vX-win64/
-#     web/        (the app: start.bat, server.bat, server, DSP, GUI)
+#     web/        (the app: start.bat, server, DSP, GUI)
 #     models/     (the two DTLN pairs + nkf.onnx — all three
 #                  profiles work offline; AEC3 needs no model file,
 #                  its pip package installs via requirements.txt)
@@ -33,7 +33,7 @@ if [ $# -gt 1 ]; then
 fi
 VER="${1:-$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)}"
 echo "-- version: $VER"
-test -d web -a -d models -a -f web/start.bat -a -f web/server.bat || {
+test -d web -a -d models -a -f web/start.bat || {
     echo "run from the repo root" >&2; exit 1; }
 command -v zip >/dev/null || { echo "zip not found" >&2; exit 1; }
 
@@ -63,7 +63,7 @@ sed "s/%%VERSION%%/${VER}/g" scripts/templates/README-web.txt > "$STAGE/README.t
 
 # ---- contract asserts ----
 fail=0
-for f in web/start.bat web/server.bat web/server.py web/chain.py \
+for f in web/start.bat web/server.py web/chain.py \
          web/audio.py web/aec3.py web/nkf.py web/gui.py \
          web/ui/index.html web/ui/imgui_web.js \
          models/dtln_aec_128_1.tflite \

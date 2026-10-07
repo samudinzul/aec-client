@@ -1,7 +1,7 @@
-# Base set — server.bat installs ONLY this (lean .venv: DTLN-AEC 128
-# + DTLN-NS work fully offline after first run; the AEC3/NKF profiles
-# and the native window stay disabled until their packages exist —
-# the UI marks them "(unavailable)" instead of failing).
+# Base set — the lean .venv (DTLN-AEC 128 + DTLN-NS work fully
+# offline after first run; the AEC3/NKF profiles and the native
+# window stay disabled until their packages exist — the UI marks
+# them "(unavailable)" instead of failing).
 # Install:  pip install -r web\requirements-base.txt
 
 fastapi>=0.110        # REST + WebSocket server

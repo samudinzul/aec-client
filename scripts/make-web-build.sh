@@ -6,8 +6,8 @@
 # Usage (MSYS2 UCRT64 bash, from the repo root):
 #   scripts/make-web-build.sh          # venv + full packages + checks
 #   scripts/make-web-build.sh --fresh  # wipe .venv first, rebuild it
-#   scripts/make-web-build.sh --lean   # base packages only (DTLN;
-#                                      # mirrors server.bat, ~140 MB)
+#   scripts/make-web-build.sh --lean   # base packages only
+#                                      # (DTLN profiles, ~140 MB)
 #   scripts/make-web-build.sh --run    # build, then launch the GUI
 #                                      # (native window via web.gui,
 #                                      # attaches if a server runs)

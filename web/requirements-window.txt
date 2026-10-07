@@ -1,6 +1,6 @@
 # Native-window set — start.bat installs this on top of base
-# (Edge WebView2 window + system-tray icon). server.bat skips it:
-# a browser tab needs none of it.
+# (Edge WebView2 window + system-tray icon). A plain browser tab
+# needs none of it.
 # Install:  pip install -r web\requirements-window.txt
 
 pywebview>=5.0        # native window (Edge WebView2, preinstalled on Windows 10/11); browser fallback

@@ -64,19 +64,16 @@ so only the window is visible, and only the tray icon
 is visible while the window is closed; Show restores
 both, Quit from the tray icon stops it).
 
-**Leaner (less RAM, no extra processes):** double-click
-`web\server.bat` instead. Same setup, but it installs only
-the base packages (no window/tray libs, no extra engines —
-smaller `.venv`) and the GUI opens in your already-running
-browser — no WebView2 window, no extra renderer processes.
-Close the `aec-web server` window to stop. Either launcher
-is pure script: no `.exe`, no installer, nothing for
-antivirus to flag. To slim an existing full install, delete
-the `.venv` folder once and let `server.bat` recreate it
-(DTLN profiles keep working; the extra profiles show
-"(unavailable)" until their packages exist — get them back
-any time with `pip install -r web\requirements-engines.txt`
-inside the venv, or by running `start.bat` once).
+**Leaner (less RAM, no extra processes):** skip the native
+window — activate the venv and run `python -m web.server`,
+then open http://localhost:8000/ in your already-running
+browser. No WebView2 window, no extra renderer processes.
+With a base-only venv (`pip install -r
+web\requirements-base.txt`, ~140 MB) the DTLN profiles keep
+working and the rest show "(unavailable)"; add engines back
+any time with `pip install -r web\requirements-engines.txt`.
+Everything is pure script either way: no `.exe`, no
+installer, nothing for antivirus to flag.
 
 Running start.bat inside Windows Terminal?
 The terminal window itself stays (it holds your
