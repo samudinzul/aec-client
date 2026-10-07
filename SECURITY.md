@@ -21,7 +21,7 @@ decision below follows from that rule.
 Hardened as far as an unsigned binary can be; every item is
 enforced, not advisory:
 
-- No packers, ever (`scripts/make-build-desktop.sh`, `CMakeLists.txt`).
+- No packers, ever (`scripts/make-desktop-build.sh`, `CMakeLists.txt`).
   UPX-packing trips the exact heuristics this project dodges.
 - Symbols stripped, dead code GC'd (`-s`, `--gc-sections`, MinSizeRel).
 - Full publisher metadata in `version.rc` (Company/Product/FileVersion

@@ -4,7 +4,7 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 
 ## Layout
 
-- **Tools** (this folder): `make-build-desktop.sh`, `test.sh`,
+- **Tools** (this folder): `make-desktop-build.sh`, `test.sh`,
   `make-release-desktop.sh`, `make-release-web.sh`,
   `standardize-releases.sh` — plus this file, the only `.md`
   here, which documents them.
@@ -17,7 +17,7 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 ## Daily loop
 
 ```bash
-scripts/make-build-desktop.sh --fresh   # wipe + rebuild aec_gui.exe only (smoke tools need --with-smoke)
+scripts/make-desktop-build.sh --fresh   # wipe + rebuild aec_gui.exe only (smoke tools need --with-smoke)
 scripts/test.sh                        # offline tests (native + web)
 ```
 
@@ -25,7 +25,7 @@ scripts/test.sh                        # offline tests (native + web)
 
 | Script | Purpose | Typical use |
 |--------|---------|-------------|
-| `make-build-desktop.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/make-build-desktop.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
+| `make-desktop-build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/make-desktop-build.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
 | `make-web-build.sh` | Prepare + verify the web runtime (venv, packages, compile, engine smoke — no compiler involved) | `scripts/make-web-build.sh` · `--fresh` rebuilds `.venv` · `--lean` installs the base set only (mirrors `server.bat`) · `--run` builds then launches the GUI |
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
 | `make-release-desktop.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release-desktop.sh` (version defaults to `APP_VERSION`) |

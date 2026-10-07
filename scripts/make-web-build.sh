@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # make-web-build.sh — prepare + verify the web runtime (the web
-# counterpart to make-build-desktop.sh: pure Python needs no
+# counterpart to make-desktop-build.sh: pure Python needs no
 # compiler, so "build" means environment + checks).
 #
 # Usage (MSYS2 UCRT64 bash, from the repo root):
@@ -107,7 +107,7 @@ else
     echo "engine smoke FAILED" >&2; exit 1
 fi
 
-# ---- 6. launch (opt-in --run, like make-build-desktop.sh) ----
+# ---- 6. launch (opt-in --run, like make-desktop-build.sh) ----
 if [ "$RUN" -ne 0 ]; then
     echo ""
     # Detached, terminal stays free (pywebview window owns its

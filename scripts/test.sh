@@ -54,7 +54,7 @@ if [ "$NATIVE" -ne 0 ]; then
     esac
     if [ "${native_ok:-0}" -ne 0 ] && [ ! -x build/nkf_smoke.exe ]; then
         native_ok=0
-        report "native" SKIP "(build/nkf_smoke.exe missing — run scripts/make-build-desktop.sh --with-smoke)"
+        report "native" SKIP "(build/nkf_smoke.exe missing — run scripts/make-desktop-build.sh --with-smoke)"
     fi
     if [ "${native_ok:-0}" -ne 0 ] && [ ! -f models/nkf.onnx ]; then
         native_ok=0

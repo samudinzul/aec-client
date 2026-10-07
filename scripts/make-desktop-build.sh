@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# make-build-desktop.sh — configure + build the desktop app, lean and bloat-free.
+# make-desktop-build.sh — configure + build the desktop app, lean and bloat-free.
 #
 # Quiet by default: cmake/ninja chatter goes to build/build.log, the
 # console shows only progress, failures, and the size audit.
@@ -13,13 +13,13 @@
 #     looks stale.
 #
 # Usage (MSYS2 UCRT64 bash, from the repo root):
-#   scripts/make-build-desktop.sh              # build app (MinSizeRel)
-#   scripts/make-build-desktop.sh --fresh      # wipe build/, then build app
-#   scripts/make-build-desktop.sh --debug      # debuggable build instead of size build
-#   scripts/make-build-desktop.sh --with-smoke # also build nkf_smoke.exe (needed by
+#   scripts/make-desktop-build.sh              # build app (MinSizeRel)
+#   scripts/make-desktop-build.sh --fresh      # wipe build/, then build app
+#   scripts/make-desktop-build.sh --debug      # debuggable build instead of size build
+#   scripts/make-desktop-build.sh --with-smoke # also build nkf_smoke.exe (needed by
 #                                              # scripts/test.sh --native-only)
-#   scripts/make-build-desktop.sh --run        # build, then launch aec_gui.exe
-#   scripts/make-build-desktop.sh -v           # verbose: full cmake/ninja output
+#   scripts/make-desktop-build.sh --run        # build, then launch aec_gui.exe
+#   scripts/make-desktop-build.sh -v           # verbose: full cmake/ninja output
 #
 # --run launches build/aec_gui.exe detached (terminal stays free).
 # DLLs + models are staged next to the exe by CMake, and the app
