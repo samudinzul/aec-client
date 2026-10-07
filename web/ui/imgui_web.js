@@ -111,8 +111,7 @@ class WebImGuiUI {
         p.appendChild(prof);
         const stages = this.mk('div');
         stages.innerHTML =
-            '<label class="chkline"><input type="checkbox" id="ig-nsOn" checked>Noise suppression (DTLN-NS)</label>' +
-            '<label class="chkline"><input type="checkbox" id="ig-notchOn" checked>Feedback suppression (notch)</label>';
+            '<label class="chkline"><input type="checkbox" id="ig-nsOn" checked>Noise suppression (DTLN-NS)</label>';
         p.appendChild(stages);
 
         // --- Devices (Refresh top-right, dot + 190px label rows) ---
@@ -213,7 +212,6 @@ class WebImGuiUI {
         const f = this.mk('div');
         f.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
             '<li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>' +
-            '<li>Adaptive feedback notch + speech gate — howl suppression</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
             '<li>Live level meters</li>' +
@@ -225,7 +223,6 @@ class WebImGuiUI {
         c.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
             '<li>DTLN-AEC — Westhausen &amp; Meyer (ICASSP 2021, MIT)</li>' +
             '<li>DTLN-NS — networkedaudio port of breizhn/DTLN denoise (MIT)</li>' +
-            '<li>Adaptive notch — Widrow &amp; Hoff LMS (1960)</li>' +
             '<li>Dear ImGui — Omar Cornut (MIT) — layout reference for this page</li>' +
             '<li>FastAPI, uvicorn, pywebview, pystray, numpy, ai-edge-litert</li>' +
             '</ul><div class="hint">Made with Python · source: github.com/samudinzul/aec-client</div>';
@@ -240,7 +237,7 @@ class WebImGuiUI {
         const q = (id) => this.$(id);
         this.el.mic = q('ig-mic'); this.el.ref = q('ig-ref'); this.el.out = q('ig-out');
         this.el.gain = q('ig-micGain'); this.el.gainVal = q('ig-gainVal');
-        this.el.ns = q('ig-nsOn'); this.el.notch = q('ig-notchOn');
+        this.el.ns = q('ig-nsOn');
         this.el.tray = q('ig-trayOn');
         this.el.start = q('ig-startBtn'); this.el.reset = q('ig-resetBtn');
         this.el.status = q('ig-status');
@@ -267,7 +264,6 @@ class WebImGuiUI {
             }));
         this.el.rescan.addEventListener('click', () => this.loadDevices());
         this.el.ns.addEventListener('change', () => this.savePrefs());
-        this.el.notch.addEventListener('change', () => this.savePrefs());
         this.el.gain.addEventListener('input', () => { this.showGain(); this.savePrefs(); });
         this.el.tray.addEventListener('change', () => this.savePrefs());
         this.el.start.addEventListener('click', () => this.toggleStart());
@@ -301,7 +297,7 @@ class WebImGuiUI {
         this.api('POST', '/api/prefs', {
             mic: this.prefVal(this.el.mic), ref: this.prefVal(this.el.ref),
             out: this.prefVal(this.el.out),
-            nsEnabled: this.el.ns.checked, notchEnabled: this.el.notch.checked,
+            nsEnabled: this.el.ns.checked,
             micGain: Math.min(4.0, Math.max(0.1, (+this.el.gain.value) / 100)),
             trayEnabled: this.el.tray.checked,
         }).catch(() => {});
@@ -310,7 +306,6 @@ class WebImGuiUI {
     refreshToggles() {
         this.api('GET', '/api/state').then((st) => {
             if (st && st.nsEnabled !== undefined) this.el.ns.checked = !!+st.nsEnabled;
-            if (st && st.notchEnabled !== undefined) this.el.notch.checked = !!+st.notchEnabled;
             if (st && st.micGain !== undefined)
                 this.el.gain.value = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
             this.showGain();
@@ -378,7 +373,6 @@ class WebImGuiUI {
         this.el.gain.value = 100;
         this.showGain();
         this.el.ns.checked = true;
-        this.el.notch.checked = true;
         this.savePrefs();
         this.el.status.textContent = this.running ? this.el.status.textContent : 'Defaults restored - press Start.';
     }
@@ -487,8 +481,6 @@ class WebImGuiUI {
             }
             if (st.nsEnabled !== undefined && !!+st.nsEnabled !== this.el.ns.checked)
                 this.el.ns.checked = !!+st.nsEnabled;
-            if (st.notchEnabled !== undefined && !!+st.notchEnabled !== this.el.notch.checked)
-                this.el.notch.checked = !!+st.notchEnabled;
             if (st.micGain !== undefined) {
                 const pct = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }
@@ -498,10 +490,7 @@ class WebImGuiUI {
             this.meter(this.el.mOut, st.outRms || 0, 'out');
             this.el.status.textContent =
                 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ') · NS ' + ((st.ns && st.ns.backend) || '?') +
-                (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '') +
-                (st.gate ? ' · gate ' + (st.gate.stuck ? 'tone?' : (st.gate.on ? 'speech' : 'quiet')) : '') +
-                (st.notch && (st.notch.engaged[0] || st.notch.engaged[1])
-                    ? ' · notch @ ' + (st.notch.hz[0] || st.notch.hz[1]) + ' Hz' : '');
+                (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '');
             if (st.error || (st.ns && st.ns.error))
                 this.el.err.textContent = st.error || (st.ns && st.ns.error);
         };
@@ -539,7 +528,6 @@ window.WebImGui = {
     setRunning: (on, st) => webImGuiUI && webImGuiUI.setRunning(on, st || {}),
     setMicGain: () => {},
     setNSToggled: () => {},
-    setNotchToggled: () => {},
     setTrayEnabled: () => {},
     toggleDebug: () => {},
 };

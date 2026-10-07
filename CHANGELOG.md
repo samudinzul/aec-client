@@ -9,11 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Web UI mic preamp gain.** A `Mic gain (preamp)` slider sits under
-  the Microphone selector (−12…+12 dB, live, default 0 dB). It
-  amplifies the mic before echo cancellation (`micGain` pref, linear
-  0.1×…4.0× clamped server-side); boosting also amplifies background
-  noise, so the hint points at the Mic in meter for clipping.
+- **Web UI optional Rust accelerator (`ext/aec_dsp`).** PyO3
+  extension (rustfft + numpy crates, maturin build) replacing the
+  hot DSP kernels in `web/dsp.py` — int16/float converts (exact),
+  rFFT/masked-iFFT (≤5e-6 vs pocketfft), RMS, FIR + linear
+  resamplers (exact). `dsp.py` falls back to NumPy when the
+  extension is absent; end-to-end smoke output is identical
+  (`frames=200 out_rms=938.7 peak=9733`). Measured ~8% chain-CPU
+  reduction on the test machine; TFLite `invoke()` is unchanged
+  (moving inference itself to Rust needs the TF Lite C toolchain
+  — tracked as follow-up in `ext/README.md`). Single worker now
+  pinned explicitly (`workers=1`) in `server.py`/`gui.py`.
+
+- **Web UI mic preamp gain.** A `Microphone level` slider sits under
+  More → Levels (0–200%, live, default 100%, like the desktop
+  client). It amplifies the mic before echo cancellation
+  (`micGain` pref, linear 0.1×…4.0× clamped server-side); boosting
+  also amplifies background noise, so the hint points at the Mic
+  meter for clipping.
 
 ### Fixed
 
@@ -28,14 +41,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.tflite` pair twice (6 live interpreters instead of 4); it now
   loads once and builds its rings in the same step.
 
-- **Web UI feedback-notch toggle.** A `Feedback notch (howl
-  suppression)` checkbox sits under Noise suppression in the Audio
-  tab (`notchEnabled` pref, default on, applies live like NS).
-  Unticking skips the adaptive notch entirely — the largest
-  remaining Python cost (~16% in profiles) — at the price of no
-  feedback-howl protection. While the notch is parked the output
-  is bit-identical either way.
-
 ### Changed
 
 - **Web UI DTLN-only CPU pass (no new engines).** Same audio, less
@@ -45,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second-model output classify, and a batched int16 write in the
   no-scipy notch fallback loop. Smoke output is bit-identical
   (`frames=200 out_rms=938.7 peak=9733`).
+
+### Removed
+
+- **Web UI notch + speech-gate stages.** The adaptive feedback notch
+  (and the `SpeechGate` that existed only to drive it) are gone from
+  the web chain: `web/notch.py` and `web/speech_gate.py` deleted,
+  `notchEnabled` pref and `notch`/`gate` state keys removed, both UIs
+  and docs updated. Rationale: the desktop runs those stages on the
+  NKF path only; the web chain is DTLN-only, and NS is the switchable
+  post stage. Side effect: scipy is no longer needed (it only
+  vectorized the notch bypass) and drops out of the install. Note:
+  sustained speaker howl is no longer suppressed — keep the mic away
+  from the speakers.
 
 ## [1.10.1] — 2026-09-29 (web UI: 2026-10-04)
 

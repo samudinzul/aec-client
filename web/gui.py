@@ -87,7 +87,7 @@ def _serve():
     # appear.
     _server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1",
-                       port=PORT, log_level="warning"))
+                       port=PORT, workers=1, log_level="warning"))
     _server.run()
 
 

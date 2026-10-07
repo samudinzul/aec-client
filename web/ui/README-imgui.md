@@ -30,7 +30,7 @@ the way the desktop shows a forced choice.
 ### Same Functionality
 - Device enumeration and selection (devices locked while running)
 - Microphone level 0–200% (More → Levels, like the desktop)
-- Noise suppression + feedback notch toggles (live)
+- Noise suppression toggle (live) — the sole post stage
 - Profile section (fixed DTLN-AEC 128 — the web engine is not switchable)
 - Start/Stop + Reset to defaults, with live status
 - Live level meters (Mic/Out) with peak hold, while running
@@ -38,7 +38,7 @@ the way the desktop shows a forced choice.
 - Wallpaper picker (browser-side backdrop, remembered in localStorage)
 
 ### Live Controls
-- NS and notch toggles apply immediately
+- NS toggle applies immediately
 - Mic gain applies live to running chain
 - Device changes require restart
 - All status updates via WebSocket

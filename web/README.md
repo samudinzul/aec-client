@@ -32,10 +32,7 @@ nothing for antivirus heuristics to flag.
 You do NOT need: admin rights, a C++ compiler, CMake, Node, or Docker.
 Everything else (FastAPI, numpy, LiteRT,
 pyaudiowpatch, pywebview, pystray, Pillow)
-installs itself on first run. `scipy` is optional
-(see requirements.txt) and speeds up the notch
-bypass when present — install separately if you
-want the lowest CPU.
+installs itself on first run.
 
 ## Why this exists
 
@@ -92,10 +89,8 @@ Open http://localhost:8000 — that page IS the GUI.
    also boosts background noise — watch the Mic meter.
 4. Click Start. Talk with speakers on.
 5. In Discord: input = CABLE Output.
-6. Optional, both live: untick **Noise suppression (DTLN-NS)**
-   to halve model CPU at the cost of background hiss, or untick
-   **Feedback notch** to skip howl suppression and save the
-   remaining Python overhead (howls will no longer be caught).
+6. Optional, live: untick **Noise suppression (DTLN-NS)**
+   to halve model CPU at the cost of background hiss.
 
 ## What runs
 
@@ -104,14 +99,6 @@ Open http://localhost:8000 — that page IS the GUI.
   128-shift / 257-bin, Hann-free rFFT like the C++ pocketfft path.
 - **DTLN-NS** (`models/dtln_ns_128_*.tflite`) after the engine,
   fail-open — missing/broken models pass audio through, never mute.
-- **Feedback suppression** (`notch.py` + `speech_gate.py`, ports of
-  the desktop `notch.cpp` + `speech_gate.h`): a sustained howl
-  (speaker too close to the mic, mic-test playback) is tracked and
-  cut after ~3.5 s — two 60 Hz adaptive notches that only latch on
-  narrowband tones, so voice is never touched. The cut releases
-  ~2 s after the howl stops (the engine leaves a brief residual
-  at the howl frequency that the notch rides out). Unticking
-  **Feedback notch** in the UI skips this stage entirely.
 - **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%
   (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
   the mic before the engine, for quiet microphones.
@@ -125,9 +112,7 @@ Open http://localhost:8000 — that page IS the GUI.
 | `dsp.py` | rFFT/OLA framing, int16/float, RMS | `dtln_wrapper.cpp` DSP |
 | `dtln.py` | DTLN-AEC engine + LiteRT backend | `DtlnNew/Process/Reset` |
 | `dtln_ns.py` | DTLN-NS stage + ring + stats | `DtlnNsNew/Process/Stats` |
-| `chain.py` | DTLN → NS → notch stacking, fail-open | `main.cpp` frame pump |
-| `speech_gate.py` | RMS-hysteresis voice gate + stuck-tone watchdog | `speech_gate.h` |
-| `notch.py` | LMS adaptive feedback-suppression notch (2 sections, 60 Hz) | `notch.cpp` |
+| `chain.py` | DTLN → NS stacking, fail-open | `main.cpp` frame pump |
 | `audio.py` | pyaudiowpatch callback-mode mic/loopback/CABLE I/O, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |
 | `gui.py` | Native window (pywebview/WebView2): in-process server, preloads models before opening, attaches to a running server, system tray, browser fallback | — |

@@ -29,7 +29,7 @@ chain = Chain(model_dir=os.path.join(ROOT, "models"))
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
-         "nsEnabled": True, "notchEnabled": True, "micGain": 1.0,
+         "nsEnabled": True, "micGain": 1.0,
          "trayEnabled": True}
 
 
@@ -96,12 +96,6 @@ def set_prefs(body: dict):
         # applies to the running chain immediately.
         prefs["nsEnabled"] = bool(body["nsEnabled"])
         chain.ns_enabled = prefs["nsEnabled"]
-    if "notchEnabled" in body:
-        # Live toggle like NS: the notch is a post
-        # stage, so skipping it needs no device
-        # reconfigure and applies immediately.
-        prefs["notchEnabled"] = bool(body["notchEnabled"])
-        chain.notch_enabled = prefs["notchEnabled"]
     if "micGain" in body:
         # Live preamp gain, linear, clamped to 0.1x..4.0x
         # (the UI shows 0..200%, like the desktop client);
@@ -130,7 +124,6 @@ def start():
             return {"ok": False, "error": chain.last_error or
                     "Failed to load DTLN model"}
         chain.ns_enabled = prefs.get("nsEnabled", True)
-        chain.notch_enabled = prefs.get("notchEnabled", True)
         chain.mic_gain = prefs.get("micGain", 1.0)
         if any(prefs[k] is None for k in ("mic", "ref", "out")):
             chain.stop()
@@ -195,8 +188,10 @@ def main():
     print("Loading models… (a few seconds)",
           flush=True)
     chain.preload()
+    # Single worker, always: extra workers would duplicate the
+    # preloaded models in RAM and fight over the one audio pump.
     uvicorn.run(app, host="127.0.0.1", port=8000,
-                log_level="info")
+                workers=1, log_level="info")
 
 
 if __name__ == "__main__":

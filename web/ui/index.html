@@ -86,10 +86,6 @@
     Noise suppression (DTLN-NS) — removes background hiss</label>
   <div class="hint">Applies live: untick to hear the raw echo-cancelled
   voice, tick again to re-apply suppression.</div>
-  <label class="chk"><input type="checkbox" id="notchOn" checked>
-    Feedback notch (howl suppression)</label>
-  <div class="hint">Applies live: untick to skip the adaptive notch and
-  save CPU; howling feedback will no longer be caught.</div>
   <button id="startBtn">Start</button>
   <div id="status">Stopped.</div>
   <div id="err"></div>
@@ -129,7 +125,6 @@
     <div class="devhead"><span>Features</span></div>
     <ul>
       <li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>
-      <li>Adaptive feedback notch + speech gate — howl suppression</li>
       <li>Real-time processing with low CPU usage</li>
       <li>Works with speakers, earphones, and headsets</li>
       <li>Live level meters</li>
@@ -139,7 +134,6 @@
     <ul>
       <li>DTLN-AEC — Westhausen &amp; Meyer (ICASSP 2021, MIT)</li>
       <li>DTLN-NS — networkedaudio port of breizhn/DTLN denoise (MIT)</li>
-      <li>Adaptive notch — Widrow &amp; Hoff LMS (1960)</li>
       <li>numpy — NumPy developers (BSD-3)</li>
       <li>ai-edge-litert — Google (Apache-2.0)</li>
       <li>FastAPI — Sebastián Ramírez (MIT)</li>
@@ -211,7 +205,6 @@ function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
     ref: prefVal('ref'), out: prefVal('out'),
     nsEnabled: $('nsOn').checked,
-    notchEnabled: $('notchOn').checked,
     micGain: pct2gain(+$('micGain').value),
     trayEnabled: $('trayOn').checked});
 }
@@ -228,14 +221,12 @@ function showGain() {
 }));
 $('rescan').onclick = loadDevices;
 
-// NS + notch toggles apply live (no device reconfigure needed).
+// NS toggle applies live (no device reconfigure needed).
 $('nsOn').addEventListener('change', savePrefs);
-$('notchOn').addEventListener('change', savePrefs);
 $('micGain').addEventListener('input', () => { showGain(); savePrefs(); });
 // Initialize the checkboxes from the server's stored prefs.
 api('GET', '/api/state').then(st => {
   if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
-  if (st && 'notchEnabled' in st) $('notchOn').checked = !!st.notchEnabled;
   if (st && st.micGain !== undefined) $('micGain').value = gain2pct(+st.micGain);
   showGain();
 }).catch(() => { showGain(); });
@@ -314,8 +305,7 @@ function connect() {
     if (st.running !== running) setRunning(st.running, st);
     if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
       $('nsOn').checked = !!st.nsEnabled;
-    if (st.notchEnabled !== undefined && st.notchEnabled !== $('notchOn').checked)
-      $('notchOn').checked = !!st.notchEnabled;
+
     if (st.micGain !== undefined && gain2pct(+st.micGain) !== +$('micGain').value) {
       $('micGain').value = gain2pct(+st.micGain);
       showGain();
@@ -325,13 +315,7 @@ function connect() {
     meter('mOut', st.outRms || 0);
     $('status').textContent =
       `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
-      (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '') +
-      (st.gate
-        ? ` · gate ${st.gate.stuck ? 'tone?' : (st.gate.on ? 'speech' : 'quiet')}`
-        : '') +
-      (st.notch && (st.notch.engaged[0] || st.notch.engaged[1])
-        ? ` · feedback notch @ ${st.notch.hz[0] || st.notch.hz[1]} Hz`
-        : '');
+      (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
     if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
   };
 }

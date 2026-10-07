@@ -2,14 +2,14 @@
 
   engine (int16 -> int16)
   int16 -> float (/ 32768)
-  DTLN-NS (float -> float, fail-open)
+  DTLN-NS (float -> float, fail-open, on/off toggle)
   float -> int16 (round-half-even + clamp, like ``clamp_s16(lrintf)``)
 
 Notes on fidelity vs the desktop app:
 - 16 kHz only (the DTLN-NR model is 16 kHz; other rates skip NS —
   aec-web runs 16 kHz always, so NS always applies when ready).
-- The desktop speech gate only drives the NKF-only WPE stage; the
-  DTLN path ignores it, so aec-web v1 carries no gate.
+- No notch / speech gate: the desktop runs those on the NKF path
+  only, and the web chain is DTLN-only — NS is the sole post stage.
 - Ref silence when speakers are idle: the loopback stream delivers
   silence naturally, same as the desktop ref-ring-underflow path.
 """
@@ -21,11 +21,6 @@ import numpy as np
 from . import dsp
 from .dtln import DtlnAec
 from .dtln_ns import DtlnNs
-from .notch import Notch
-from .speech_gate import SpeechGate
-
-# One frame is FRAME_SIZE samples at SAMPLE_RATE.
-FRAME_DUR_MS = 1000.0 * dsp.FRAME_SIZE / dsp.SAMPLE_RATE
 
 
 class Chain:
@@ -34,18 +29,10 @@ class Chain:
         self.dtln = None
         self.ns = None
         self.ns_enabled = True
-        self.notch_enabled = True
         self.mic_gain = 1.0
         self.running = False
         self.last_error = ""
         self.frames = 0
-        # Near-end speech gate + feedback-suppression
-        # notch (ports of the desktop app's post stages;
-        # the desktop runs the notch on the NKF path only,
-        # the web chain adds it to the DTLN path — it is
-        # engine-agnostic, fail-open DSP).
-        self.gate = SpeechGate()
-        self.notch = None
         self._load_lock = threading.Lock()
 
     def _load_engines(self):
@@ -77,8 +64,6 @@ class Chain:
                 self.ns = None
                 self.running = False
                 return False
-            self.notch = Notch(dsp.SAMPLE_RATE)
-            self.gate = SpeechGate()
             self.running = True
             self.frames = 0
             self.last_error = "" if self.ns.ready else self.ns.last_error
@@ -93,8 +78,6 @@ class Chain:
                 self.dtln.reset()
             if self.ns is not None:
                 self.ns.reset()
-            self.notch = None
-            self.gate = SpeechGate()
             self.running = False
             self.frames = 0
 
@@ -113,30 +96,13 @@ class Chain:
                           -32768.0, 32767.0).astype(np.int16)
         try:
             cleaned = self.dtln.process(mic, ref)
-            # Speech gate on the ENGINE output — never
-            # on the stages' own output, so a notch cut
-            # can't flip the gate that froze it.
-            cf = cleaned.astype(np.float32)
-            self.gate.update(dsp.rms(cf), FRAME_DUR_MS)
             if self.ns_enabled and self.ns is not None and self.ns.ready:
-                f = cf / 32768.0
+                f = cleaned.astype(np.float32) / 32768.0
                 try:
                     f = self.ns.process(f)
                 except Exception:
                     pass  # fail-open: keep engine output
                 cleaned = dsp.f32_to_i16_round(f)
-            # Feedback-suppression notch: adapts only
-            # while the gate says quiet-and-not-speaking;
-            # a sustained howl trips the gate's stuck
-            # detector, which releases the notch so it
-            # can latch the tone. Fail-open: any failure
-            # leaves the frame untouched.
-            if self.notch_enabled and self.notch is not None:
-                try:
-                    self.notch.set_speech(self.gate.for_notch())
-                    self.notch.process(cleaned)
-                except Exception:
-                    pass
             self.frames += 1
             return cleaned
         except Exception as e:  # fail-open: ship mic, never silence
@@ -160,25 +126,10 @@ class Chain:
                                            and self.ns_enabled) else (
                 "DTLN-AEC" if self.running else ""),
             "nsEnabled": 1 if self.ns_enabled else 0,
-            "notchEnabled": 1 if self.notch_enabled else 0,
             "micGain": self.mic_gain,
             "sampleRate": 16000,
             "dtlnBackend": dtln_obj.backend if dtln_obj else 0,
             "ns": ns,
-            "notch": {
-                "engaged": ([self.notch.engaged(0),
-                             self.notch.engaged(1)]
-                            if self.notch else [0, 0]),
-                "hz": ([round(self.notch.freq(0)),
-                        round(self.notch.freq(1))]
-                       if self.notch else [0, 0]),
-            },
-            "gate": {
-                "on": 1 if self.gate.on else 0,
-                "stuck": 1 if self.gate.stuck else 0,
-                "runMs": round(self.gate.run_ms),
-                "evMs": round(self.gate.evidence_ms),
-            },
             "frames": self.frames,
             "error": self.last_error,
             "dtlnError": dtln_obj.last_error if dtln_obj else "",

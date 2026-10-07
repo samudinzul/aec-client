@@ -41,14 +41,14 @@ QUICK START
                         (the "[Loopback]" entry)
    - Output:            CABLE Input (picked automatically)
 
-   Quiet mic? Raise the "Mic gain (preamp)" slider under
-   Microphone (-12...+12 dB, live). Toggles, both live:
-   "Noise suppression" removes hiss; "Feedback notch"
-   catches speaker howl - untick either to save CPU.
+   Quiet mic? Raise the "Microphone level" slider under
+   More -> Levels (0-200%, live). "Noise suppression"
+   removes hiss - untick it (live) to halve model CPU.
 
-5. Click Start. Talk with speakers on. A sustained howl
-   (speaker too close to the mic) is cut after ~5 seconds
-   by the feedback notch.
+5. Click Start. Talk with speakers on. Note: unlike the
+   desktop app, this build has no feedback-notch stage,
+   so a sustained speaker howl is NOT suppressed -
+   keep the mic away from the speakers.
 
 6. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:  CABLE Output (VB-Audio Virtual Cable)
@@ -62,9 +62,10 @@ WHY NO ANTIVIRUS WARNING
 -------------------------
 The desktop app is an unsigned .exe that bundles ML
 runtimes, which trips two heuristics (Wacatac.B!ml,
-susgen). This bundle is pure Python - every package is a
-mainstream PyPI wheel and nothing in it is a Windows
-executable, so those heuristics never apply.
+susgen). This bundle is Python + mainstream PyPI wheels,
+with one optional locally-built accelerator (aec_dsp.pyd,
+see ext/README.md) - no packed executables, so those
+heuristics have no packed-binary target.
 
 Do NOT freeze or pack this with PyInstaller/Nuitka -
 that would reintroduce the exact problem.
@@ -85,7 +86,7 @@ TROUBLESHOOTING
 - Choppy audio: keep the speaker volume moderate - very
   loud speakers make any canceller leave echo behind.
   If voices sound clipped, untick "Noise suppression"
-  first, then "Feedback notch", and retest.
+  and retest.
 
 LICENSE
 -------

@@ -62,12 +62,15 @@ for f in web/start.bat web/server.py web/chain.py \
          models/dtln_ns_128_2.tflite README.txt LICENSE; do
     test -f "$STAGE/$f" || { echo "missing: $f" >&2; fail=1; }
 done
-# The whole point: no PE binaries, no caches, no venv.
+# No PE binaries except the optional local aec_dsp accelerator
+# (ext/aec_dsp, staged as web/aec_dsp*.pyd when built; the web UI
+# falls back to NumPy without it) — no caches, no venv.
 bad=$(find "$STAGE" \( -name '*.exe' -o -name '*.dll' \
-    -o -name '*.pyd' -o -name '*.pyc' -o -name '__pycache__' \
+    -o -name '*.pyc' -o -name '__pycache__' \
     -o -name '.venv' -o -name 'start.log' -o -name '*.pdb' \) \
     -print || true)
-if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
+bad_pyd=$(find "$STAGE" -name '*.pyd' ! -name 'aec_dsp*.pyd' -print || true)
+if [ -n "$bad$bad_pyd" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad$bad_pyd"; fail=1; fi
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
 [ $fail -ne 0 ] && exit 1
 
@@ -80,10 +83,11 @@ import zipfile, re
 names = zipfile.ZipFile('release/AEC-Web-v${VER}-win64.zip').namelist()
 roots = sorted({n.split('/')[0] for n in names})
 assert roots == ['AEC-Web-v${VER}-win64'], f'zip root layout wrong: {roots}'
-pat = re.compile(r'__pycache__|\.pyc$|\.venv|start\.log|\.exe$|\.dll$|\.pyd$|\.pdb$', re.I)
+pat = re.compile(r'__pycache__|\.pyc$|\.venv|start\.log|\.exe$|\.dll$|\.pdb$', re.I)
 bad = [n for n in names if pat.search(n)]
-assert not bad, f'forbidden files in zip: {bad}'
-print(f'zip entries: {len(names)}, single root, no PE binaries, no caches')
+bad_pyd = [n for n in names if n.endswith('.pyd') and 'aec_dsp' not in n]
+assert not bad and not bad_pyd, f'forbidden files in zip: {bad + bad_pyd}'
+print(f'zip entries: {len(names)}, single root, no packed binaries, no caches')
 "
 
 echo "----"

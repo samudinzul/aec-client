@@ -1,10 +1,11 @@
-# aec-web requirements — pure-Python stack, zero compiled artifacts of our own.
+# aec-web requirements — Python stack with one optional local accelerator.
 # Install:  pip install -r requirements.txt   (Python 3.10+ on Windows)
 #
 # AV note: every package here is a mainstream, reputable wheel
-# (Microsoft-scale reputation). Nothing we ship is a PE binary, so
-# the Wacatac.B!ml / susgen unsigned-ML-binary heuristics have no
-# target. Do NOT freeze this into a PyInstaller/Nuitka exe — that
+# (Microsoft-scale reputation). The only binary of our own is the
+# OPTIONAL aec_dsp Rust extension (ext/aec_dsp, built with maturin;
+# see ext/README.md) — web/dsp.py falls back to NumPy without it.
+# Do NOT freeze this into a PyInstaller/Nuitka exe — that
 # reintroduces the exact problem this project exists to dodge.
 
 fastapi>=0.110        # REST + WebSocket server
@@ -17,7 +18,5 @@ pywebview>=5.0        # native window (Edge WebView2, preinstalled on Windows 10
 pystray>=0.19         # system-tray icon (minimize-to-tray; pure ctypes on Windows)
 Pillow>=10            # draws the tray icon at runtime (mainstream wheel)
 
-# Optional extra (recommended for lowest CPU on howling/feedback
-# scenarios): scipy vectorizes the notch's passive bypass path.
-# Install separately if needed:
-#     pip install scipy>=1.11
+# Note: scipy was an optional extra for the (now removed) notch
+# stage's vectorized bypass path. Nothing in the chain needs it.
