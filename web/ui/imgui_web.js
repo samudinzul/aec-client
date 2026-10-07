@@ -13,7 +13,7 @@
 
 let webImGuiUI = null;
 
-const APP_VERSION = 'v1.10.1';
+const APP_VERSION = 'v1.11.0';
 
 class WebImGuiUI {
     constructor() {
@@ -124,7 +124,10 @@ class WebImGuiUI {
             '<div class="frow"><span class="flabel"><span id="ig-dotRef" class="status-dot inactive"></span>Your speakers</span><select id="ig-ref"></select></div>' +
             '<div class="frow"><span class="flabel"><span id="ig-dotOut" class="status-dot inactive"></span>Send cleaned sound to</span><select id="ig-out"></select></div>' +
             '<div id="ig-cablewarn" class="warn" hidden>VB-CABLE not found - install VB-CABLE and enable CABLE Input, then hit Refresh.</div>' +
-            '<div id="ig-devhint" class="hint" style="color:#ffd75e"></div>';
+            '<div id="ig-devhint" class="hint" style="color:#ffd75e"></div>' +
+            '<label class="chkline"><input type="checkbox" disabled>Listen to myself</label>' +
+            '<div class="hint">Hear yourself through your speakers instead of sending to voice apps. ' +
+            '(Needs the native app; the web backend sends cleaned audio to voice apps only.)</div>';
         p.appendChild(rows);
 
         // --- More (Processing + Levels, like the desktop CollapsingHeader) ---
@@ -191,7 +194,9 @@ class WebImGuiUI {
         b.innerHTML =
             '<label class="chkline"><input type="checkbox" id="ig-trayOn">Minimize to system tray (X button hides window)</label>' +
             '<div class="hint">When ON: X hides the window, tray icon stays active. When OFF: X closes the app completely. ' +
-            '(Needs the native window; hidden in a browser tab.)</div>';
+            '(Needs the native window; hidden in a browser tab.)</div>' +
+            '<label class="chkline"><input type="checkbox" disabled>Show experimental engines (WebRTC AEC3, NKF-AEC)</label>' +
+            '<div class="hint">The web backend runs DTLN-AEC 128 only; extra engines need the native app.</div>';
         p.appendChild(b);
         return p;
     }
@@ -202,7 +207,7 @@ class WebImGuiUI {
         p.appendChild(this.sep('About'));
         const a = this.mk('div');
         a.innerHTML =
-            '<p class="text-accent" style="font-size:15px;font-weight:bold;margin:4px 0 0">aec-web</p>' +
+            '<p class="text-accent" style="font-size:15px;font-weight:bold;margin:4px 0 0">AEC Client</p>' +
             '<p class="text-secondary" style="font-size:13px">Version ' + APP_VERSION + '</p>' +
             '<p style="font-size:14px;line-height:1.45">A lightweight, open-source acoustic echo cancellation ' +
             '(AEC) client for Windows. Route your microphone through it and pick up a cleaned, echo-free ' +
@@ -214,7 +219,7 @@ class WebImGuiUI {
             '<li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
-            '<li>Live level meters</li>' +
+            '<li>Live level meters with peak hold</li>' +
             '<li>Native app window (Edge WebView2) with browser fallback</li>' +
             '</ul>';
         p.appendChild(f);
