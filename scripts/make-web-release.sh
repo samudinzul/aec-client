@@ -53,7 +53,7 @@ for m in models/dtln_aec_128_1.tflite \
 done
 
 cp LICENSE "$STAGE/"
-sed "s/%%VERSION%%/${VER}/g" scripts/README-web.txt > "$STAGE/README.txt"
+sed "s/%%VERSION%%/${VER}/g" scripts/templates/README-web.txt > "$STAGE/README.txt"
 
 # ---- contract asserts ----
 fail=0

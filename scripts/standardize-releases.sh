@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # standardize-releases.sh — align every GitHub release title with
-# release-template.md ("AEC Client vX.Y.Z"), and optionally rewrite
-# the NOTES of one release (normally the current latest) to the template.
+# templates/release-template.md ("AEC Client vX.Y.Z"), and optionally
+# rewrite the NOTES of one release (normally the current latest) to
+# the template.
 #
 #   Usage:
 #     scripts/standardize-releases.sh              # titles only
@@ -10,7 +11,7 @@
 #
 #   Notes file is optional when VERSION is given: without it the script
 #   only fixes the title for that tag. With it, notes are rewritten from
-#   the file (use scripts/release-template.md + CHANGELOG for content).
+#   the file (use scripts/templates/release-template.md + CHANGELOG).
 #
 #   Old releases keep their historical notes (per the template).
 #   Run from a shell where `gh auth login` has been done (MSYS2 UCRT64).

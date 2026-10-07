@@ -55,7 +55,7 @@ for m in models/nkf.onnx \
 done
 
 cp LICENSES/THIRD-PARTY.txt "$STAGE/LICENSES/"
-sed "s/%%VERSION%%/${VER}/g" scripts/README.txt > "$STAGE/README.txt"
+sed "s/%%VERSION%%/${VER}/g" scripts/templates/README-desktop.txt > "$STAGE/README.txt"
 
 # ---- contract asserts ----
 fail=0

@@ -2,6 +2,18 @@
 
 Run everything from the **repo root** in MSYS2 UCRT64 bash.
 
+## Layout
+
+- **Tools** (this folder): `build.sh`, `test.sh`,
+  `make-release.sh`, `make-web-release.sh`,
+  `standardize-releases.sh` — plus this file, the only `.md`
+  here, which documents them.
+- **`templates/`**: release *inputs*, not docs — end-user README
+  sources (`README-desktop.txt`, `README-web.txt`) and the GitHub
+  notes template (`release-template.md`). The release scripts stamp
+  versions into these; never edit the stamped outputs in `release/`
+  (gitignored) — edit the templates.
+
 ## Daily loop
 
 ```bash
