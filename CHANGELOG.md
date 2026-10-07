@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Desktop NKF anti-wander + backstop floor.** TDC no longer
+  teleports between periodicity artifacts (coarse pass needs a
+  clearly-better peak to displace the delay, near-ties keep the
+  smaller lag; applied motion slew-limited to 512 samples/update —
+  the 800 ms search range is preserved for genuine long round
+  trips). The howl backstop now floors at −24 dB instead of diving
+  to −84 dB, so a false trigger attenuates rather than mutes.
+- **Desktop NKF reference-parity fixes.** Two deviations from the
+  official `nkf.py` closed: the analysis/synthesis window is now the
+  periodic Hann the model trained on (`sin²(π·i/N)` instead of the
+  symmetric `sin(π·i/(N−1))` — exact 50%-overlap sum), and silent
+  far-end frames now skip inference with mic passthrough
+  (`lpb-history mean < 1e-5`, same quantity the reference checks),
+  which also saves the ONNX invoke on silence. Hop stays 512
+  (halving it would double inference CPU for a retraining-scale
+  fidelity question — deliberately deferred).
+
 ### Changed
 
 - **Desktop: DTLN-NS on every engine, WPE/notch removed.** The NKF

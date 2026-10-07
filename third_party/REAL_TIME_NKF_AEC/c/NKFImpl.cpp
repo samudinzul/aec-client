@@ -1,5 +1,7 @@
 #include "NKFImpl.h"
 
+#include <cmath>
+
 // ============================================================
 //  NKFImpl implementation for MinGW / Windows
 // ============================================================
@@ -108,8 +110,20 @@ void NKFImpl::OnnxInfer() {
         mic_real[i] = static_cast<float>(mic_res[i].real());
         mic_imag[i] = static_cast<float>(mic_res[i].imag());
     }
+    // Silent far-end skip (mirrors official nkf.py `xt.abs().mean() < 1e-5:
+    // continue`): mean magnitude over the same 4-frame lpb history the
+    // reference checks. Skipped frames update nothing (states, priors
+    // frozen) and emit mic — and skip the ONNX invoke entirely.
+    double lpbMean = 0.0;
+    for (int i = 0; i < NKF_LEN * FFT_OUT_SIZE; i++) {
+        const double re = m_pEngine.lpb_real[i], im = m_pEngine.lpb_imag[i];
+        lpbMean += std::sqrt(re * re + im * im);
+    }
+    lpbMean /= (double)(NKF_LEN * FFT_OUT_SIZE);
+    const bool farActive = lpbMean >= 1e-5;
     float dh_real[NKF_LEN * FFT_OUT_SIZE] = { 0 };
     float dh_imag[NKF_LEN * FFT_OUT_SIZE] = { 0 };
+    if (farActive) {
     for (int i = 0; i < NKF_LEN * FFT_OUT_SIZE; i++) {
         dh_real[i] = static_cast<float>(m_pEngine.h_posterior_real[i] - m_pEngine.h_prior_real[i]);
         dh_imag[i] = static_cast<float>(m_pEngine.h_posterior_imag[i] - m_pEngine.h_prior_imag[i]);
@@ -117,6 +131,7 @@ void NKFImpl::OnnxInfer() {
 
     memcpy(m_pEngine.h_prior_real, m_pEngine.h_posterior_real, NKF_LEN * FFT_OUT_SIZE * sizeof(double));
     memcpy(m_pEngine.h_prior_imag, m_pEngine.h_posterior_imag, NKF_LEN * FFT_OUT_SIZE * sizeof(double));
+    }  // farActive: dh + prior carry
 
     float input_feature_real[(2 * NKF_LEN + 1) * FFT_OUT_SIZE] = { 0 };
     float input_feature_imag[(2 * NKF_LEN + 1) * FFT_OUT_SIZE] = { 0 };
@@ -142,7 +157,7 @@ void NKFImpl::OnnxInfer() {
         input_feature_imag[k * i + NKF_LEN] = static_cast<float>(e_imag[i]);
     }
 
-    if (!m_frozen) {
+    if (!m_frozen && farActive) {
     ort_inputs.clear();
     ort_inputs.resize(6);
 
@@ -186,6 +201,10 @@ void NKFImpl::OnnxInfer() {
     double echohat_real[FFT_OUT_SIZE] = { 0 };
     double echohat_imag[FFT_OUT_SIZE] = { 0 };
 
+    // Skipped (silent far-end) frames emit mic: echohat stays zero, so
+    // mic_res keeps the mic spectrum from the r2c above — exactly the
+    // official `continue` (output = mic, no state touched).
+    if (farActive) {
     for (int i = 0; i < FFT_OUT_SIZE; i++) {
         for (int j = 0; j < NKF_LEN; j++) {
             echohat_real[i] += m_pEngine.lpb_real[j * FFT_OUT_SIZE + i] * m_pEngine.h_posterior_real[NKF_LEN * i + j]
@@ -194,6 +213,7 @@ void NKFImpl::OnnxInfer() {
                              + m_pEngine.lpb_imag[j * FFT_OUT_SIZE + i] * m_pEngine.h_posterior_real[NKF_LEN * i + j];
         }
         mic_res[i] = cpx_type(mic_real[i] - echohat_real[i], mic_imag[i] - echohat_imag[i]);
+    }
     }
 
     pocketfft::c2r(fft_shape, fft_stride_out, fft_stride_in, fft_axes,

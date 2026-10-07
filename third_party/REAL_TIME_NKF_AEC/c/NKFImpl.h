@@ -109,8 +109,12 @@ private:
 public:
     NKFImpl(const std::string ModelPath) {
         init_onnx_model(ModelPath);
+        // Periodic Hann (torch.hann_window, what the model trained on):
+        // w[i] = sin^2(pi*i/N). NOT the symmetric sin(pi*i/(N-1)) —
+        // at 50% overlap the periodic window sums to exactly 1.0.
         for (int i = 0; i < BLOCK_LEN; i++) {
-            m_windows[i] = sinf(PI * i / (BLOCK_LEN - 1));
+            const float s = sinf(PI * i / BLOCK_LEN);
+            m_windows[i] = s * s;
         }
         mic_res.resize(BLOCK_LEN);
         lpb_res.resize(BLOCK_LEN);
