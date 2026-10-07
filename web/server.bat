@@ -48,8 +48,10 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 call .venv\Scripts\activate
-echo [-] installing packages - skipped if up to date.
-python -m pip install -q --disable-pip-version-check -r web\requirements.txt
+echo [-] installing base packages - skipped if up to date.
+echo [-] (DTLN profiles only; WebRTC AEC3 / NKF-AEC need the full set:
+echo [-]  pip install -r web\requirements-engines.txt - or run start.bat once.)
+python -m pip install -q --disable-pip-version-check -r web\requirements-base.txt
 if errorlevel 1 (
   echo [-] ERROR - pip install failed - check your internet connection.
   echo %DATE% %TIME% pip-failed >> web\start.log

@@ -34,6 +34,10 @@ QUICK START
      press Ctrl+C to stop.
    - Click start.bat again any time to reopen the GUI
      while the server keeps running.
+   - Leaner alternative: web\server.bat installs fewer
+     packages (smaller environment, DTLN profiles only)
+     and opens the GUI in your own browser instead of
+     a separate window.
 
 4. In the GUI, pick your devices:
    - Microphone:        your physical microphone
@@ -45,10 +49,10 @@ QUICK START
    More -> Levels (0-200%, live). "Noise suppression"
    removes hiss - untick it (live) to halve model CPU.
 
-5. Click Start. Talk with speakers on. Note: unlike the
-   desktop app, this build has no feedback-notch stage,
-   so a sustained speaker howl is NOT suppressed -
-   keep the mic away from the speakers.
+5. Click Start. Talk with speakers on. Keep the mic away
+   from the speakers - no canceller holds a loud
+   mic-to-speaker loop forever (the NKF profile trims a
+   sustained howl instead of feeding it).
 
 6. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:  CABLE Output (VB-Audio Virtual Cable)
@@ -62,10 +66,11 @@ WHY NO ANTIVIRUS WARNING
 -------------------------
 The desktop app is an unsigned .exe that bundles ML
 runtimes, which trips two heuristics (Wacatac.B!ml,
-susgen). This bundle is Python + mainstream PyPI wheels,
-with one optional locally-built accelerator (aec_dsp.pyd,
-see ext/README.md) - no packed executables, so those
-heuristics have no packed-binary target.
+susgen). This bundle is Python + mainstream PyPI wheels
+only - no .exe, no .dll, no .pyd, no packed executables,
+so those heuristics have no target. (A local-only Rust
+accelerator exists in ext/ for developers; it never
+ships in this ZIP.)
 
 Do NOT freeze or pack this with PyInstaller/Nuitka -
 that would reintroduce the exact problem.

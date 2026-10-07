@@ -64,12 +64,18 @@ restores both, Quit from the tray icon stops
 it).
 
 **Leaner (less RAM, no extra processes):** double-click
-`web\server.bat` instead. Same setup, but the server runs
-minimized in the background and the GUI opens in your
-already-running browser — no WebView2 window, no extra
-renderer processes. Close the `aec-web server` window
-to stop. Either launcher is pure script: no `.exe`, no
-installer, nothing for antivirus to flag.
+`web\server.bat` instead. Same setup, but it installs only
+the base packages (no window/tray libs, no extra engines —
+smaller `.venv`) and the GUI opens in your already-running
+browser — no WebView2 window, no extra renderer processes.
+Close the `aec-web server` window to stop. Either launcher
+is pure script: no `.exe`, no installer, nothing for
+antivirus to flag. To slim an existing full install, delete
+the `.venv` folder once and let `server.bat` recreate it;
+to get the experimental engines back later,
+`pip install -r web\requirements-engines.txt` (or run
+`start.bat` once — the UI marks missing backends
+"(unavailable)" instead of failing).
 
 Running start.bat inside Windows Terminal?
 The terminal window itself stays (it holds your

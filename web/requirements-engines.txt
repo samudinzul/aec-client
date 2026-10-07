@@ -1,0 +1,10 @@
+# Extra-engine set — experimental profiles (WebRTC AEC3, NKF-AEC).
+# Neither ships in a base install; the chain fails closed with a
+# clear error if a profile is picked without its package, and the
+# UI disables options whose backend is missing.
+# Install:  pip install -r web\requirements-engines.txt
+
+pywebrtc-audio>=0.2   # WebRTC AEC3 engine (EchoCanceller): same code as Chrome,
+                      # prebuilt wheels incl. Windows x86_64, Python 3.10-3.14
+onnxruntime>=1.20     # NKF-AEC engine: runs models/nkf.onnx on CPU
+                      # (Windows wheels; 45 KB model ships in this repo)

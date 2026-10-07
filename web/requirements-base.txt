@@ -1,0 +1,12 @@
+# Base set — server.bat installs ONLY this (lean .venv: DTLN-AEC 128
+# + DTLN-NS work fully offline after first run; the AEC3/NKF profiles
+# and the native window stay disabled until their packages exist —
+# the UI marks them "(unavailable)" instead of failing).
+# Install:  pip install -r web\requirements-base.txt
+
+fastapi>=0.110        # REST + WebSocket server
+uvicorn>=0.29         # ASGI server (run: python server.py)
+websockets>=13        # WebSocket transport for uvicorn (meters would 404 without it)
+numpy>=1.26           # DSP: rfft/irfft framing, OLA, resampling, meters
+ai-edge-litert>=2.2   # Google LiteRT: runs the .tflite DTLN pairs directly
+pyaudiowpatch>=0.2.12 # PortAudio fork: mic in, WASAPI-loopback ref, CABLE out (single backend)

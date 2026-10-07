@@ -1,26 +1,19 @@
-# aec-web requirements — Python stack with one optional local accelerator.
+# aec-web requirements — the FULL set (start.bat installs this:
+# base server + native window + extra engines). For the lean
+# install, see requirements-base.txt (server.bat uses that).
 # Install:  pip install -r requirements.txt   (Python 3.10+ on Windows)
 #
-# AV note: every package here is a mainstream, reputable wheel
-# (Microsoft-scale reputation). The only binary of our own is the
-# OPTIONAL aec_dsp Rust extension (ext/aec_dsp, built with maturin;
-# see ext/README.md) — web/dsp.py falls back to NumPy without it.
+# AV note: every package here is a mainstream, reputable wheel.
+# The only binary of our own is the OPTIONAL local aec_dsp Rust
+# extension (ext/aec_dsp, built with maturin; see ext/README.md) —
+# web/dsp.py falls back to NumPy without it, and it must NEVER
+# ship in a release zip (see scripts/make-release-web.sh).
 # Do NOT freeze this into a PyInstaller/Nuitka exe — that
 # reintroduces the exact problem this project exists to dodge.
 
-fastapi>=0.110        # REST + WebSocket server
-uvicorn>=0.29         # ASGI server (run: python server.py)
-websockets>=13        # WebSocket transport for uvicorn (meters would 404 without it)
-numpy>=1.26           # DSP: rfft/irfft framing, OLA, resampling, meters
-ai-edge-litert>=2.2   # Google LiteRT: runs the .tflite DTLN pairs directly
-pyaudiowpatch>=0.2.12 # PortAudio fork: mic in, WASAPI-loopback ref, CABLE out (single backend)
-pywebview>=5.0        # native window (Edge WebView2, preinstalled on Windows 10/11); browser fallback
-pystray>=0.19        # system-tray icon (minimize-to-tray; pure ctypes on Windows)
-Pillow>=10            # draws the tray icon at runtime (mainstream wheel)
-pywebrtc-audio>=0.2   # WebRTC AEC3 engine (EchoCanceller): same code as Chrome,
-                      # prebuilt wheels incl. Windows x86_64, Python 3.10-3.14
-onnxruntime>=1.20     # NKF-AEC engine: runs models/nkf.onnx on CPU
-                      # (Windows wheels; 45 KB model ships in this repo)
+-r requirements-base.txt
+-r requirements-window.txt
+-r requirements-engines.txt
 
 # Note: scipy was an optional extra for the (now removed) notch
 # stage's vectorized bypass path. Nothing in the chain needs it.
