@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Desktop: DTLN-NS on every engine, WPE/notch removed.** The NKF
+  path now runs the same DTLN-NS post stage as DTLN/AEC3 (NKF is
+  16 kHz-only, so the stage always applies when ticked) instead of
+  its own WPE dereverb + adaptive notch. `src/wpe.*`,
+  `src/notch.*`, `src/speech_gate.h` and `models/gtcrn_stream.onnx`
+  (long-unused leftover) are deleted; the UI shows one NS tick for
+  all engines, the profile label reads `engine -> NS`, and the
+  status line reports `+ NS`. Config slots for the retired toggles
+  are preserved positionally (written 0, gen bumped to 9).
+  Motivation: the NKF output-suppression investigation showed the
+  backstop trimming a wandering-TDC residual — one shared,
+  well-understood post stage beats three engine-specific ones.
+
 ### Added
 
 - **Web UI optional Rust accelerator (`ext/aec_dsp`).** PyO3

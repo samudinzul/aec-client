@@ -537,8 +537,8 @@ static void NkfBackstopWindow(NkfHandle* h) {
 
 // Ship finished post-NKF samples (float, ±1) to the wire: outHist
 // (loop detector tap — what the speakers actually get) and the clamped
-// int16 outAccum. v2.0: WebRTC NS retired — dereverb runs as the
-// global WPE stage stacked after every engine (see wpe.h).
+// int16 outAccum. v2.0: WebRTC NS retired — DTLN-NS runs as the
+// global post stage stacked after every engine.
 static void NkfEmit(NkfHandle* h, const float* v, int n) {
     for (int i = 0; i < n; i++) {
         h->outHist.push_back(v[i]);
@@ -640,7 +640,7 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
     }
     // Loop detection runs even after fail-open: it reads only ref/out
     // histories (no engine), and the UI must show a live loop while
-    // the notch + gate watchdog carry the ring by themselves.
+    // it persists.
     h->samplesSinceLoop += frameSize;
     if (h->samplesSinceLoop >= LOOP_PERIOD) NkfDetectLoop(h);
 
@@ -766,7 +766,7 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         // to be held by an active loop until the delay was confident —
         // but pinning NKF on raw mic while a feedback loop runs strips
         // the wire of all cancellation and the howl grows on exactly
-        // that fuel (WPE/notch cannot hold a near-field loop alone;
+        // that fuel (no post stage can hold a near-field loop alone;
         // DTLN/AEC3 never un-expose either). Live-in-loop is safe now:
         // the engine adapts straight through the loop (see above),
         // cancelling the pickup so loop gain stays below 1.

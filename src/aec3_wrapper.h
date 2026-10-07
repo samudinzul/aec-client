@@ -10,7 +10,7 @@ typedef struct Aec3Handle Aec3Handle;
 
 // Create AEC3 engine. frameSize = samples per 10 ms frame.
 // v2.0: the WebRTC noise-suppression stage is retired (the global
-// WPE/notch post stages carry the cleanup; see wpe.h / notch.h).
+// DTLN-NS post stage carries the cleanup).
 Aec3Handle* Aec3New(int sampleRate, int frameSize);
 
 // Process one frame: mic + ref -> out

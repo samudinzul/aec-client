@@ -20,13 +20,13 @@ Sizes and SHA-256 hashes below were verified for the files currently in the tree
 The DTLN-NR pair is the same 512-block / 128-shift / 257-bin DSP as the
 AEC pair, minus the loud-playback feed: `model_1 [mag(257), states] ->
 [mask(257), states]`, `model_2 [est(512), states] -> [block(512), states]`.
-It runs after the engine on the DTLN and WebRTC AEC3 paths (WebRTC NS is
-retired); NKF keeps its own WPE dereverb + adaptive notch instead.
+It runs after the engine on every path (WebRTC NS is retired).
 
 Retired: `silero_vad.onnx` (voice gate) is gone; `gtcrn_stream.onnx`
 (the old NKF "dry voice" stage) and the `dfn/` graphs (DeepFilterNet,
-evaluated pre-release) were cut before that line shipped. The WPE / notch
-post stages are model-free in-tree DSP — no files to download.
+evaluated pre-release) were cut before that line shipped, and the
+model file itself is deleted. The retired WPE / notch post stages
+were model-free in-tree DSP — no files to download.
 
 ## Runtime library (in `libs/`)
 

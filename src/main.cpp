@@ -25,9 +25,6 @@
 #include "nkf_wrapper.h"
 #include "dtln_wrapper.h"
 #include "dtln_ns_wrapper.h"
-#include "wpe.h"
-#include "notch.h"
-#include "speech_gate.h"
 
 #include <cstdio>
 #include <cmath>
@@ -156,18 +153,16 @@ struct EngineState {
     Aec3Handle* aec3  = nullptr;
     NkfHandle*  nkf   = nullptr;
     DtlnHandle* dtln  = nullptr;
-    DtlnNsHandle* ns = nullptr;   // DTLN noise reduction (DTLN/AEC3 only)
-    WpeHandle*  wpe   = nullptr;   // WPE dereverb post stage (per g_wpeEnabled)
-    NotchHandle* notch = nullptr;  // adaptive notch post stage (per g_notchEnabled)
+    DtlnNsHandle* ns = nullptr;   // DTLN noise reduction (all engines)
 };
 
 // ============================================================
 //  Profiles
 // ============================================================
 // Profile = engine selection. The combo label shows the engine name
-// directly; the running chain is engine + the post stages while they
-// are ticked. Filter length comes from here; sample rate, gains,
-// devices and the two post-stage ticks are free knobs.
+// directly; the running chain is engine + noise suppression while it
+// is ticked. Filter length comes from here; sample rate, gains,
+// devices and the NS tick are free knobs.
 struct Profile {
     const char* name;
     int   engine;
@@ -203,16 +198,10 @@ std::atomic<int>   g_sampleRate(16000);
 std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
 std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
-// Post-stage ticks are global prefs (like the gains): a profile
-// switch never resets them. Both default ON for every engine.
-std::atomic<bool>  g_wpeEnabled{ true };      // WPE dereverb post stage (NKF only)
-std::atomic<bool>  g_notchEnabled{ true };    // adaptive notch feedback suppression (NKF only)
-std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (DTLN/AEC3 only)
+// Post-stage tick is a global pref (like the gains): a profile
+// switch never resets it. Defaults ON for every engine.
+std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
 std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC in the list
-// Near-end speech gate (audio thread): RMS hysteresis on the engine
-// output + sustained-loudness watchdog feeding WpeSetSpeech /
-// NotchSetSpeech each frame (see speech_gate.h).
-SpeechGate          g_speechGate;             // .on / .stuck read by UI tooltip
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -503,11 +492,9 @@ void RenderWallpaper(int vpW, int vpH) {
 // ============================================================
 //  Settings
 // ============================================================
-// Post-stage prefs are engine-scoped (WPE + notch = NKF, DTLN-NR =
-    // DTLN/AEC3). Syncs each stage to the engine's defaults so a toggle
-    // left on for another engine cannot leak into a chain that doesn't
-    // run it — the panel hides the irrelevant toggles anyway, but stale
-    // prefs were what made Start look broken after a switch.
+// Post-stage pref sync: NS runs on every engine, so this just
+    // restores the global default. Kept as a function because the
+    // call sites (profile apply, settings load, reset) sync here.
 static void SyncStagePrefsToEngine();
 
 void SaveSettings() {
@@ -515,7 +502,7 @@ void SaveSettings() {
     if (!f.is_open()) return;
     f << g_micIndex << "\n" << g_refIndex << "\n" << g_outIndex << "\n"
       << g_engineIndex << "\n" << g_sampleRateIndex << "\n" << g_filterIndex << "\n"
-      << (g_wpeEnabled.load() ? 1 : 0) << "\n"  // WPE flag (was preprocess/DFN)
+      << 0 << "\n"  // retired: WPE flag (was preprocess/DFN)
       << (int)(g_micGain.load() * 100) << "\n"
       << (int)(g_outputGain.load() * 100) << "\n"
       << g_wallpaperIndex << "\n"
@@ -525,14 +512,14 @@ void SaveSettings() {
        << (g_listenToSelf ? 1 : 0) << "\n"
        << (g_advancedOpen ? 1 : 0) << "\n"
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
-<< (g_notchEnabled.load() ? 1 : 0) << "\n"  // notch flag (was custom-profile)
+ << 0 << "\n"  // retired: notch flag (was custom-profile)
         << (g_nsEnabled.load() ? 1 : 0) << "\n"    // DTLN noise reduction flag
 << 0 << "\n"  // retired: calibrated gate open threshold
         << 0 << "\n"  // retired: calibrated gate close threshold
         << 0 << "\n"  // retired: show-legacy-engines toggle
         << (g_experimentalEngines.load() ? 1 : 0) << "\n"  // experimental engines flag
        << 0 << "\n"  // retired: nuked DEC-toggle slot
-       << 6 << "\n"  // config gen (6 = v2.0: WPE + notch post stages)
+       << 9 << "\n"  // config gen (9: WPE/notch removed, NS on all engines)
        << 0 << "\n"; // retired: NKF WPE dereverb (kept for file alignment)
 }
 
@@ -673,17 +660,11 @@ void LoadSettings() {
         } else {
             g_sampleRate.store(rates[g_sampleRateIndex == 0 ? 0 : 1]);
         }
-        // Post stages: gen6 persists both live toggles. Older files
-        // carry the retired preprocess/DFN flag and the retired
-        // custom-profile flag in those slots — ignored; both stages
-        // default ON (global prefs, like the gains).
-        if (pgen >= 6) {
-            g_wpeEnabled.store(wpeRaw != 0);
-            g_notchEnabled.store(notchRaw != 0);
-        } else {
-            g_wpeEnabled.store(true);
-            g_notchEnabled.store(true);
-        }
+        // (Retired slots: gen6 WPE + notch live toggles. Read
+        // positionally above; the stages no longer exist, so the
+        // values are ignored and NS is the only post stage.)
+        (void)wpeRaw;
+        (void)notchRaw;
         if (pgen >= 7) g_nsEnabled.store(nsRaw != 0);
         else           g_nsEnabled.store(true);
         // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden by
@@ -726,9 +707,8 @@ void ResetToDefaults() {
     g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 0;  // profile 0 (DTLN @16 kHz)
     g_profileIndex = 0;
     g_preprocessEnabled = false;
-    // Post-stage prefs are engine-scoped: set the engine first, then
-    // sync — otherwise "both on" leaks into a chain that doesn't run
-    // them (DTLN/AEC3 have no WPE or notch).
+    // Post-stage pref: set the engine first, then sync (NS runs
+    // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
     g_minimizeToTray = true;
     g_listenToSelf = false;
@@ -748,22 +728,11 @@ void ResetToDefaults() {
 }
 
 // Apply a profile: engine and filter length follow. Sample rate,
-// gains, devices and the post-stage ticks are untouched.
-// Post-stage prefs are engine-scoped (WPE + notch = NKF, DTLN-NR =
-    // DTLN/AEC3). Call this whenever the engine changes so a toggle
-    // left on for another engine cannot leak into a chain that doesn't
-    // run it — the panel hides the irrelevant toggles anyway, but
-    // stale prefs were what made Start look broken after a switch.
+// gains, devices and the NS tick are untouched (NS runs on every
+// engine, so there is nothing engine-scoped left to sync).
     static void SyncStagePrefsToEngine() {
-        if (g_engineIndex == ENGINE_NKF) {
-            g_wpeEnabled.store(true);
-            g_notchEnabled.store(true);
-            g_nsEnabled.store(true);   // harmless: NKF ignores it
-        } else {
-            g_nsEnabled.store(true);
-            g_wpeEnabled.store(false); // DTLN/AEC3 don't run WPE
-            g_notchEnabled.store(false);
-        }
+        // NS runs on every engine: restore the global default.
+        g_nsEnabled.store(true);
     }
 
 void ApplyProfile(int idx) {
@@ -784,10 +753,9 @@ void ApplyProfile(int idx) {
         g_sampleRateIndex = 0;
         g_sampleRate.store(16000);
     }
-    // Post stages are engine-scoped: WPE + notch belong to NKF, the
-    // DTLN-NR stage to DTLN/AEC3. Switching engines resets each to its
-    // default so a toggle left on for another engine can never leak
-    // into a chain that doesn't run it (and confuse Start).
+    // Post-stage pref sync: NS runs on every engine, so switching
+    // engines only restores the global default (never leaks a stale
+    // toggle into a chain, which once made Start look broken).
     SyncStagePrefsToEngine();
 }
 
@@ -795,12 +763,10 @@ void ApplyProfile(int idx) {
 //  Engine init
 // ============================================================
 void ReinitEngine() {
-    if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3); g_engine.aec3  = nullptr; }
+    if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3);   g_engine.aec3  = nullptr; }
     if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
     if (g_engine.ns)   { DtlnNsDestroy(g_engine.ns);   g_engine.ns   = nullptr; }
-    if (g_engine.wpe)   { WpeDestroy(g_engine.wpe);    g_engine.wpe   = nullptr; }
-    if (g_engine.notch) { NotchDestroy(g_engine.notch); g_engine.notch = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
@@ -824,19 +790,12 @@ void ReinitEngine() {
         g_engine.type = ENGINE_DTLN;
     }
 
-    // DTLN noise reduction: the DTLN-AEC pair cancels echo but leaves
-    // background noise; the DTLN-NR pair (same 512/128/257 DSP, single
-    // mic feed) runs after it. AEC3 also gets it (WebRTC NS is retired).
-    // NKF keeps its own WPE + notch post chain — no DTLN NS there.
-    if (g_nsEnabled.load() && (eng == ENGINE_AEC3 || eng == ENGINE_DTLN))
+    // DTLN noise reduction: the echo canceller leaves background
+    // noise; the DTLN-NR pair (same 512/128/257 DSP, single mic feed)
+    // runs after the engine on every path (WebRTC NS is retired, and
+    // the NKF-only WPE + notch stages are gone).
+    if (g_nsEnabled.load())
         g_engine.ns = DtlnNsNew("models/dtln_ns_128");
-
-    // WPE dereverb + adaptive notch are NKF-only: the DTLN and AEC3 paths
-    // use the DTLN-NR noise reduction stage instead (WebRTC NS retired).
-    if (eng == ENGINE_NKF && g_wpeEnabled.load())
-        g_engine.wpe   = WpeNew(sr);
-    if (eng == ENGINE_NKF && g_notchEnabled.load())
-        g_engine.notch = NotchNew(sr);
 }
 
 // Soft limiter for the final gain stage: linear to -3 dBFS, tanh knee
@@ -905,7 +864,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     int16_t micFrame[MAX_FRAME_SIZE];
     int16_t refFrame[MAX_FRAME_SIZE];
     int16_t cleanedFrame[MAX_FRAME_SIZE];
-    float   wpeBuf[MAX_FRAME_SIZE];
+    float   fltBuf[MAX_FRAME_SIZE];
     memset(cleanedFrame, 0, sizeof(cleanedFrame));
 
     g_micRing.read(micFrame, fs);
@@ -923,54 +882,28 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     else
         memcpy(cleanedFrame, micFrame, fs * sizeof(int16_t));
 
-    // Speech gate for the post stages: RMS hysteresis + stuck-tone
-    // watchdog on the ENGINE output (never on the stages' own output,
-    // so a notch cut can't flip it back). A sustained howl pins the
-    // voice flag for ever; the watchdog releases the *notch* gate
-    // after ~5 s so feedback suppression can actually latch the tone.
-    {
-        float engSq = 0;
-        for (int i = 0; i < fs; i++) engSq += (float)cleanedFrame[i] * cleanedFrame[i];
-        const float frameDurMs = 1000.0f * (float)fs / (float)g_sampleRate.load();
-        SpeechGateUpdate(&g_speechGate, sqrtf(engSq / fs), frameDurMs);
-    }
 
-    // DTLN noise reduction: runs on the engine output, 16 kHz only
-    // (the DTLN-NR model is 16 kHz; DTLN/AEC3 at other rates skip it).
+
+    // DTLN noise reduction: runs on the engine output of every path,
+    // 16 kHz only (the DTLN-NR model is 16 kHz; other rates skip it).
     // Fail-open: a null or failed stage passes the frame straight
-    // through — it never mutes the near-end voice.
+    // through — it never mutes the near-end voice. Meters below show
+    // post-stage output, i.e. what Discord hears.
     if (g_engine.ns && g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
-            wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+            fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
         // Fail-open: any NS failure (exception, bad tensor, model
         // mismatch) leaves the frame untouched instead of taking the
         // app down mid-call.
-        if (DtlnNsProcess(g_engine.ns, wpeBuf, wpeBuf, fs) != 1) {
+        if (DtlnNsProcess(g_engine.ns, fltBuf, fltBuf, fs) != 1) {
             // NS failed this frame — leave it untouched and keep going.
             // (The diagnostics line under the checkbox will show the
             // last error string from DtnsLastError.)
             for (int i = 0; i < fs; i++)
-                wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+                fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
         }
         for (int i = 0; i < fs; i++)
-            cleanedFrame[i] = clamp_s16((int)lrintf(wpeBuf[i] * 32768.0f));
-    }
-
-    // Post chain: WPE dereverb + adaptive notch are NKF-only — the DTLN
-    // and AEC3 paths use the DTLN-NR noise reduction stage instead
-    // (WebRTC NS is retired). Meters below show post-stage output,
-    // i.e. what Discord hears.
-    if (g_engine.type == ENGINE_NKF && g_engine.wpe) {
-        WpeSetSpeech(g_engine.wpe, SpeechGateForWpe(&g_speechGate));
-        for (int i = 0; i < fs; i++)
-            wpeBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        WpeProcess(g_engine.wpe, wpeBuf, wpeBuf, fs);
-        for (int i = 0; i < fs; i++)
-            cleanedFrame[i] = clamp_s16((int)lrintf(wpeBuf[i] * 32768.0f));
-    }
-    if (g_engine.type == ENGINE_NKF && g_engine.notch) {
-        NotchSetSpeech(g_engine.notch, SpeechGateForNotch(&g_speechGate));
-        NotchProcess(g_engine.notch, cleanedFrame, fs);
+            cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
     }
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
@@ -1154,15 +1087,6 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load DTLN model");
         return;
     }
-    if (g_engine.type == ENGINE_NKF && g_wpeEnabled.load() && !g_engine.wpe) {
-        snprintf(g_statusText, 128, "Failed to init WPE (unsupported rate)");
-        return;
-    }
-    if (g_engine.type == ENGINE_NKF && g_notchEnabled.load() && !g_engine.notch) {
-        snprintf(g_statusText, 128, "Failed to init notch (unsupported rate)");
-        return;
-    }
-
     g_micRing.reset();
     g_refRing.reset();
     g_peakMic.store(0); g_peakRef.store(0); g_peakOut.store(0);
@@ -1219,9 +1143,8 @@ void StartAEC() {
     const char* engineName =
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
-    snprintf(g_statusText, 128, "Running (%d Hz, %s%s%s)%s", sr, engineName,
-             g_engine.wpe ? " + WPE" : "",
-             g_engine.notch ? " + Notch" : "",
+    snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", sr, engineName,
+             g_engine.ns ? " + NS" : "",
              g_listenToSelf ? " [monitor]" : "");
 }
 
@@ -1492,22 +1415,14 @@ void DrawAudioTab() {
     // The label shows the engine itself, plus the chain segments while
     // the post stages are ticked — no hidden state.
 std::string profilePreview = PROFILES[g_profileIndex].name;
-    if (g_wpeEnabled.load() && g_engineIndex == ENGINE_NKF)
-        profilePreview += " -> WPE";
-    if (g_notchEnabled.load() && g_engineIndex == ENGINE_NKF)
-        profilePreview += " -> Notch";
-    if (g_nsEnabled.load() &&
-        (g_engineIndex == ENGINE_DTLN || g_engineIndex == ENGINE_AEC3))
+    if (g_nsEnabled.load())
         profilePreview += " -> NS";
     bool wasRunning = g_isRunning;
     if ( ImGui::BeginCombo("##profile", profilePreview.c_str())) {
         for (int i = 0; i < PROFILE_COUNT; i++) {
             std::string label = PROFILES[i].name;
             EngineType le = (EngineType)PROFILES[i].engine;
-            if (g_wpeEnabled.load() && le == ENGINE_NKF) label += " -> WPE";
-            if (g_notchEnabled.load() && le == ENGINE_NKF) label += " -> Notch";
-            if (g_nsEnabled.load() &&
-                (le == ENGINE_DTLN || le == ENGINE_AEC3)) label += " -> NS";
+            if (g_nsEnabled.load()) label += " -> NS";
             bool sel = (g_profileIndex == i);
             // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden
             // unless the user ticked the Appearance checkbox — the
@@ -1530,98 +1445,40 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
             "DTLN-AEC 128 - default; best echo + reverb handling, no post filter.\n"
             "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
             "NKF-AEC - weak CPUs, still full cleanup.\n"
-            "The ticks below append '-> WPE' / '-> Notch' to the chain shown here.");
+            "The tick below appends '-> NS' to the chain shown here.");
 
-    // Post stages: engine-aware — each toggle only appears for the engine
-    // that actually runs it. Live restart on toggle (same path as
-    // switching profiles mid-call). Global prefs: a profile switch
-    // does not reset them.
+    // Post stage: one NS toggle for every engine. Live restart on
+    // toggle (same path as switching profiles mid-call). Global pref:
+    // a profile switch does not reset it.
     {
-        const bool isNkf = (g_engineIndex == ENGINE_NKF);
-        const bool isDtlnOrAec3 = (g_engineIndex == ENGINE_DTLN ||
-                                   g_engineIndex == ENGINE_AEC3);
-        if (isNkf) {
-            bool wpe = g_wpeEnabled.load();
-            if ( ImGui::Checkbox("Dereverb (WPE)", &wpe)) {
-                g_wpeEnabled.store(wpe);
-                SaveSettings();
-                if (g_isRunning) { StopAEC(); StartAEC(); }
-            }
-            if ( ImGui::IsItemHovered())
-                ImGui::SetTooltip(
-                    "Weighted prediction error dereverberation: eats late room\n"
-                    "echo and tail (~32 ms extra delay). Runs after the engine;\n"
-                    "adaptation tightens while you talk so voice level survives.");
+        bool ns = g_nsEnabled.load();
+        if ( ImGui::Checkbox("Noise suppression (DTLN-NS)", &ns)) {
+            g_nsEnabled.store(ns);
+            SaveSettings();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
         }
-        if (isNkf) {
-            bool nch = g_notchEnabled.load();
-            if ( ImGui::Checkbox("Feedback suppression (notch)", &nch)) {
-                g_notchEnabled.store(nch);
-                SaveSettings();
-                if (g_isRunning) { StopAEC(); StartAEC(); }
-            }
-            if ( ImGui::IsItemHovered()) {
-                std::string tip =
-                    "Two adaptive notch filters that track narrowband howling /\n"
-                    "ringing tones (speaker-mic loops). Exact bypass until a tone\n"
-                    "is actually captured; voice harmonics never latch it.";
-                if (g_engine.notch) {
-                    const double f0 = NotchFreq(g_engine.notch, 0);
-                    const double f1 = NotchFreq(g_engine.notch, 1);
-                    const int e0 = NotchEngaged(g_engine.notch, 0);
-                    const int e1 = NotchEngaged(g_engine.notch, 1);
-                    char live[192];
-                    if (e0 && e1)
-                        snprintf(live, sizeof live, "\nLive: engaged %.0f Hz + %.0f Hz", f0, f1);
-                    else if (e0)
-                        snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (2nd idle)", f0);
-                    else if (e1)
-                        snprintf(live, sizeof live, "\nLive: engaged %.0f Hz (1st idle)", f1);
-                    else
-                        snprintf(live, sizeof live, "\nLive: bypassed (no tone latched)");
-                    tip += live;
-                    const bool frozen = SpeechGateForNotch(&g_speechGate) != 0;
-                    snprintf(live, sizeof live, "\nAdaptation: %s%s",
-                             frozen ? "frozen (voice)" : "running",
-                             g_speechGate.stuck ? " [sustained tone]" : "");
-                    tip += live;
-                } else {
-                    tip += "\nLive: not running";
-                }
-                ImGui::SetTooltip("%s", tip.c_str());
-            }
-        }
-        if (isDtlnOrAec3) {
-            bool ns = g_nsEnabled.load();
-            if ( ImGui::Checkbox("Noise suppression (DTLN-NS)", &ns)) {
-                g_nsEnabled.store(ns);
-                SaveSettings();
-                if (g_isRunning) { StopAEC(); StartAEC(); }
-            }
-            if ( ImGui::IsItemHovered())
-                ImGui::SetTooltip(
-                    "DTLN noise reduction: a second DTLN pair that removes\n"
-                    "background noise from the mic (same DSP as the echo\n"
-                    "canceller, minus the loud-playback feed). Runs after the\n"
-                    "engine on the DTLN and WebRTC AEC3 paths. NKF uses its own\n"
-                    "WPE dereverb + notch instead.");
-            // Live diagnostics — shows whether the stage is actually
-            // running and suppressing (ring fill, dropped samples,
-            // in/out RMS over the last frame).
-            if (g_engine.ns) {
-                DtlnNsStats st;
-                DtlnNsStatsGet(g_engine.ns, &st);
-                const char* be[] = { "off", "TFLite", "ONNX" };
-                char line[256];
-                snprintf(line, sizeof line,
-                         "DTLN-NS: %s  ring=%d  dropped=%d  in=%.4f out=%.4f  %s",
-                         be[st.backend], st.rCount, st.dropped,
-                         st.inRms, st.outRms, DtnsLastError(g_engine.ns));
-                if (st.dropped > 0)
-                    snprintf(line + strlen(line), sizeof line - strlen(line),
-                             "  [ring overflow!]");
-                ImGui::TextDisabled("%s", line);
-            }
+        if ( ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "DTLN noise reduction: a second DTLN pair that removes\n"
+                "background noise from the mic (same DSP as the echo\n"
+                "canceller, minus the loud-playback feed). Runs after the\n"
+                "engine on every path.");
+        // Live diagnostics — shows whether the stage is actually
+        // running and suppressing (ring fill, dropped samples,
+        // in/out RMS over the last frame).
+        if (g_engine.ns) {
+            DtlnNsStats st;
+            DtlnNsStatsGet(g_engine.ns, &st);
+            const char* be[] = { "off", "TFLite", "ONNX" };
+            char line[256];
+            snprintf(line, sizeof line,
+                     "DTLN-NS: %s  ring=%d  dropped=%d  in=%.4f out=%.4f  %s",
+                     be[st.backend], st.rCount, st.dropped,
+                     st.inRms, st.outRms, DtnsLastError(g_engine.ns));
+            if (st.dropped > 0)
+                snprintf(line + strlen(line), sizeof line - strlen(line),
+                         "  [ring overflow!]");
+            ImGui::TextDisabled("%s", line);
         }
     }
 
@@ -1731,7 +1588,7 @@ void DrawAboutTab() {
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
     ImGui::BulletText("Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC)");
-    ImGui::BulletText("Engine-aware post stages: DTLN-NS for DTLN/AEC3, WPE + notch for NKF");
+    ImGui::BulletText("DTLN-NS noise suppression on every engine (on/off)");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -1744,8 +1601,6 @@ void DrawAboutTab() {
     ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
     ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("DTLN-NS       - networkedaudio port of breizhn/DTLN denoise (MIT)");
-    ImGui::BulletText("WPE dereverb - in-tree (weighted prediction error)");
-    ImGui::BulletText("Adaptive notch - Widrow & Hoff LMS (1960)");
     ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
@@ -2035,8 +1890,6 @@ int main(int, char**) {
     if (g_engine.nkf)   NkfDestroy(g_engine.nkf);
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_engine.ns)   DtlnNsDestroy(g_engine.ns);
-    if (g_engine.wpe)   WpeDestroy(g_engine.wpe);
-    if (g_engine.notch) NotchDestroy(g_engine.notch);
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

@@ -40,8 +40,6 @@ add_executable(aec_gui
     src/nkf_wrapper.cpp
     src/dtln_wrapper.cpp
     src/dtln_ns_wrapper.cpp
-    src/wpe.cpp
-    src/notch.cpp
     version.rc
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
     # stale against NKFImpl.h and crashed the app on first ProcessBlock
@@ -78,7 +76,7 @@ endif()
 # ============================================================
 #  nkf_smoke — offline harness for the desktop NKF output path.
 #  Runs WAV (or synthetic) mic/ref pairs through the exact pump the
-#  GUI runs (NkfProcess -> gate -> WPE -> notch) and prints per-second
+#  GUI runs (NkfProcess -> DTLN-NS) and prints per-second
 #  engine telemetry (TDC lock, guard resets, backstop trim dB).
 #  Console app (no window), shares the vendored ONNX Runtime.
 #  Build: cmake --build build --target nkf_smoke
@@ -87,8 +85,7 @@ endif()
 add_executable(nkf_smoke
     tools/nkf_smoke.cpp
     src/nkf_wrapper.cpp
-    src/wpe.cpp
-    src/notch.cpp
+    src/dtln_ns_wrapper.cpp
     ${NKF_DIR}/NKFImpl.cpp
 )
 

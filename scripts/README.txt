@@ -62,21 +62,14 @@ QUICK START
    - WebRTC AEC3         the Chrome canceller — reliable, well-tested
      baseline, strongest canceller + DTLN-NS (16 kHz, 48 kHz optional).
    - NKF-AEC             tiny neural Kalman core — for weak CPUs,
-     with WPE dereverb + adaptive notch (16 kHz).
+     with DTLN-NS noise suppression (16 kHz).
    WebRTC AEC3 and NKF-AEC are experimental: hidden by default.
    Tick "Show experimental engines" on the Appearance tab to reveal
    them; unticking falls back to DTLN-AEC 128.
 
-5. Post stages are engine-aware — only the stages that actually run
-   for the selected engine show as ticks (under the More panel):
-   - DTLN-AEC 128 / WebRTC AEC3: "Noise suppression (DTLN-NS)"
-     — a second DTLN pair that removes background noise.
-   - NKF-AEC: "Dereverb (WPE)" (eats reverb tails, ~32 ms delay) and
-     "Feedback suppression (notch)" (kills howling/ringing tones).
-   While ticked the profile label reads "engine -> NS" (DTLN/AEC3)
-   or "engine -> WPE -> Notch" (NKF). Switching engines resets each
-   stage to its default, so a tick left on for another engine can
-   never leak into a chain that doesn't run it.
+5. One post stage for every engine: "Noise suppression
+   (DTLN-NS)" — a second DTLN pair that removes background noise.
+   While ticked the profile label reads "engine -> NS".
    The sample rate under More is also independent of the profile.
 
 6. Click Start. The status line shows the active chain, e.g.
@@ -110,8 +103,9 @@ TIPS
 - DTLN needs models/dtln_aec_128_1.tflite +
   models/dtln_aec_128_2.tflite (bundled) and tensorflowlite_c.dll
   (bundled). Without them it reports "Failed to load DTLN model".
-- The WPE and notch post stages are model-free (in-tree DSP) —
-  nothing to install; toggle them off if you want the raw engine.
+- DTLN needs models/dtln_ns_128_1.tflite +
+  models/dtln_ns_128_2.tflite (bundled) for noise suppression;
+  without them it reports the NS error and passes audio through.
 
 TROUBLESHOOTING
 ---------------

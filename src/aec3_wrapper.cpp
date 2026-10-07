@@ -34,7 +34,7 @@ Aec3Handle* Aec3New(int sampleRate, int frameSize) {
     if (!h->apm) { delete h; return nullptr; }
 
     // 2. Build the config and apply it. v2.0: noise suppression is
-    // retired (the global WPE/notch post stages handle the rest);
+    // retired (the global DTLN-NS post stage handles the rest);
     // the high-pass filter stays with AEC3 itself.
     webrtc::AudioProcessing::Config config;
     config.echo_canceller.enabled     = true;

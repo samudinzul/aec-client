@@ -8,9 +8,8 @@ extern "C" {
 typedef struct NkfHandle NkfHandle;
 
 // Create NKF-AEC engine. modelPath = path to nkf.onnx.
-// v2.0: the in-engine WebRTC NS/WPE stages are retired — dereverb and
-// feedback suppression run as the global WPE/notch stages stacked
-// after every engine (see wpe.h / notch.h).
+// v2.0: the in-engine WebRTC NS/WPE stages are retired — DTLN-NS
+// runs as the global post stage stacked after every engine.
 NkfHandle* NkfNew(const char* modelPath);
 
 // Process one frame of audio.

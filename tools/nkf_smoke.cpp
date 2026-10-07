@@ -1,15 +1,15 @@
 // nkf_smoke — offline harness for the desktop NKF-AEC output path.
 //
 // Runs WAV (or synthetic) mic/ref pairs through the exact pump the
-// GUI runs (NkfProcess -> speech gate -> WPE -> notch) and prints a
-// per-second table with the engine telemetry that pinpoints output
-// suppression: TDC lock state, guard resets, loop flag, and — most
-// importantly — the howl-backstop trim in dB.
+// GUI runs (NkfProcess -> DTLN-NS) and prints a per-second table with
+// the engine telemetry that pinpoints output suppression: TDC lock
+// state, guard resets, loop flag, and — most importantly — the
+// howl-backstop trim in dB.
 //
 // Usage (build first, from the repo root on the Windows dev machine):
 //   cmake -B build -G Ninja && cmake --build build --target nkf_smoke
-//   build/nkf_smoke.exe mic.wav ref.wav out.wav [--no-wpe] [--no-notch]
-//   build/nkf_smoke.exe --synth 15 out.wav [--no-wpe] [--no-notch]
+//   build/nkf_smoke.exe mic.wav ref.wav out.wav [--no-ns]
+//   build/nkf_smoke.exe --synth 15 out.wav [--no-ns]
 //
 // WAVs must be 16 kHz mono int16. --synth generates a loud sustained
 // speaker-like tone as ref (echoed into mic with delay) plus periodic
@@ -27,10 +27,8 @@
 #include <string>
 #include <vector>
 
+#include "dtln_ns_wrapper.h"
 #include "nkf_wrapper.h"
-#include "notch.h"
-#include "speech_gate.h"
-#include "wpe.h"
 
 namespace {
 
@@ -140,16 +138,14 @@ int main(int argc, char** argv) {
     bool synth = false;
     double synthSecs = 15.0;
     const char *micPath = nullptr, *refPath = nullptr, *outPath = nullptr;
-    bool useWpe = true, useNotch = true;
+    bool useNs = true;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--synth") && i + 2 < argc) {
             synth = true;
             synthSecs = atof(argv[++i]);
             outPath = argv[++i];
-        } else if (!strcmp(argv[i], "--no-wpe")) {
-            useWpe = false;
-        } else if (!strcmp(argv[i], "--no-notch")) {
-            useNotch = false;
+        } else if (!strcmp(argv[i], "--no-ns")) {
+            useNs = false;
         } else if (!micPath) {
             micPath = argv[i];
         } else if (!refPath) {
@@ -165,8 +161,8 @@ int main(int argc, char** argv) {
         printf("synth: %.1f s loud-tonal ref + voice bursts\n", synthSecs);
     } else {
         if (!micPath || !refPath || !outPath) {
-            printf("usage: nkf_smoke mic.wav ref.wav out.wav [--no-wpe] [--no-notch]\n"
-                   "   or: nkf_smoke --synth SECS out.wav [--no-wpe] [--no-notch]\n");
+            printf("usage: nkf_smoke mic.wav ref.wav out.wav [--no-ns]\n"
+                   "   or: nkf_smoke --synth SECS out.wav [--no-ns]\n");
             return 2;
         }
         if (!ReadWav16Mono(micPath, mic) || !ReadWav16Mono(refPath, ref)) return 2;
@@ -178,11 +174,8 @@ int main(int argc, char** argv) {
 
     NkfHandle* nkf = NkfNew("models/nkf.onnx");
     if (!nkf) { printf("NkfNew failed (models/nkf.onnx?)\n"); return 1; }
-    WpeHandle* wpe = useWpe ? WpeNew(kSr) : nullptr;
-    NotchHandle* notch = useNotch ? NotchNew(kSr) : nullptr;
-    if (useWpe && !wpe) printf("note: WpeNew failed -> WPE off\n");
-    if (useNotch && !notch) printf("note: NotchNew failed -> notch off\n");
-    SpeechGate gate = {};
+    DtlnNsHandle* ns = useNs ? DtlnNsNew("models/dtln_ns_128") : nullptr;
+    if (useNs && !ns) printf("note: DtlnNsNew failed -> NS off\n");
     std::vector<int16_t> out;
     out.reserve(n);
 
@@ -199,26 +192,19 @@ int main(int argc, char** argv) {
         for (int i = 0; i < kFrame; i++) em += (double)micF[i] * micF[i];
         accMic += em;
         NkfProcess(nkf, micF, refF, clF, kFrame);
-        // Gate on the engine output, exactly like the GUI pump.
         double e = 0;
         for (int i = 0; i < kFrame; i++) e += (double)clF[i] * clF[i];
         accEng += e;
-        SpeechGateUpdate(&gate, (float)sqrt(e / kFrame), 10.0f);
-        if (wpe) {
-            WpeSetSpeech(wpe, SpeechGateForWpe(&gate));
+        if (ns) {
             for (int i = 0; i < kFrame; i++) wf[i] = (float)clF[i] / 32768.0f;
-            WpeProcess(wpe, wf, wf, kFrame);
-            for (int i = 0; i < kFrame; i++) {
-                int v = (int)lrintf(wf[i] * 32768.0f);
-                clF[i] = ClampS16(v);
+            if (DtlnNsProcess(ns, wf, wf, kFrame) == 1) {
+                for (int i = 0; i < kFrame; i++) {
+                    int v = (int)lrintf(wf[i] * 32768.0f);
+                    clF[i] = ClampS16(v);
+                }
             }
         }
-        if (notch) {
-            NotchSetSpeech(notch, SpeechGateForNotch(&gate));
-            NotchProcess(notch, clF, kFrame);
-        }
         out.insert(out.end(), clF, clF + kFrame);
-        accMic += e;
         double eo = 0;
         for (int i = 0; i < kFrame; i++) eo += (double)clF[i] * clF[i];
         accOut += eo;
@@ -250,5 +236,6 @@ int main(int argc, char** argv) {
     else
         printf("verdict: engine engaged, no trim (output = cancelled signal)\n");
     NkfDestroy(nkf);
+    if (ns) DtlnNsDestroy(ns);
     return 0;
 }
