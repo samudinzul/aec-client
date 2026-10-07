@@ -41,8 +41,10 @@ def _classify_2(sizes):
 class DtlnNs:
     """Streaming DTLN-NS. Mirrors DtlnNsNew/DtlnNsProcess/DtlnNsReset."""
 
-    def __init__(self, model_prefix="models/dtln_ns_128"):
+    def __init__(self, model_prefix="models/dtln_ns_128",
+                 num_threads=None):
         self.model_prefix = model_prefix
+        self.num_threads = num_threads
         self.last_error = ""
         self.backend = 0  # 0=none, 1=tflite
         self.i1 = self.i2 = None
@@ -54,7 +56,7 @@ class DtlnNs:
         self.mic_ring = None
         self.ring = None
         try:
-            self._load(model_prefix)
+            self._load(model_prefix, num_threads)
             self.backend = 1
             self.mic_ring = dsp._Ring(Q_CAP + 512, dtype=np.float32)
             self.ring = dsp._Ring(RING_CAP, dtype=np.float32)
@@ -64,12 +66,14 @@ class DtlnNs:
                 f"dtln_ns model pair not found in models/ (NS stays off): {e}"
             )
 
-    def _load(self, prefix):
+    def _load(self, prefix, num_threads=None):
         if Interpreter is None:
             raise RuntimeError("ai-edge-litert is not installed")
-        self.i1 = Interpreter(model_path=prefix + "_1.tflite")
+        self.i1 = Interpreter(model_path=prefix + "_1.tflite",
+                              num_threads=num_threads)
         self.i1.allocate_tensors()
-        self.i2 = Interpreter(model_path=prefix + "_2.tflite")
+        self.i2 = Interpreter(model_path=prefix + "_2.tflite",
+                              num_threads=num_threads)
         self.i2.allocate_tensors()
         d1 = self.i1.get_input_details()
         s1 = [int(np.prod(d["shape"])) for d in d1]

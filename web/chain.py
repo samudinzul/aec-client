@@ -24,8 +24,12 @@ from .dtln_ns import DtlnNs
 
 
 class Chain:
-    def __init__(self, model_dir="models"):
+    def __init__(self, model_dir="models", num_threads=None):
         self.model_dir = model_dir
+        # Inference thread cap, passed to every LiteRT interpreter.
+        # None keeps the LiteRT default; a small number trims the
+        # XNNPACK pool (and its spin-wait) on weak CPUs.
+        self.num_threads = num_threads
         self.dtln = None
         self.ns = None
         self.ns_enabled = True
@@ -42,8 +46,10 @@ class Chain:
         missing/broken is fail-open, not fatal:
         the stage stays off and the engine output
         passes through."""
-        self.dtln = DtlnAec(f"{self.model_dir}/dtln_aec_128")
-        self.ns = DtlnNs(f"{self.model_dir}/dtln_ns_128")
+        self.dtln = DtlnAec(f"{self.model_dir}/dtln_aec_128",
+                              num_threads=self.num_threads)
+        self.ns = DtlnNs(f"{self.model_dir}/dtln_ns_128",
+                         num_threads=self.num_threads)
 
     def preload(self):
         """Load the models at server startup (background

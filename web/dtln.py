@@ -79,16 +79,19 @@ def _classify_out(c0, c1):
 class _TflitePair:
     """One DTLN stage pair (mask stage or filter stage) via LiteRT."""
 
-    def __init__(self, path_1, path_2, feat_len, n_feats):
+    def __init__(self, path_1, path_2, feat_len, n_feats,
+                 num_threads=None):
         if Interpreter is None:
             raise RuntimeError(
                 "ai-edge-litert is not installed "
                 "(pip install -r requirements.txt)"
             )
         self.feat_len = feat_len
-        self.i1 = Interpreter(model_path=path_1)
+        # num_threads=None keeps the LiteRT default; a number caps
+        # the XNNPACK pool (fewer spinning threads on weak CPUs).
+        self.i1 = Interpreter(model_path=path_1, num_threads=num_threads)
         self.i1.allocate_tensors()
-        self.i2 = Interpreter(model_path=path_2)
+        self.i2 = Interpreter(model_path=path_2, num_threads=num_threads)
         self.i2.allocate_tensors()
         d1 = self.i1.get_input_details()
         d2 = self.i2.get_input_details()
@@ -167,8 +170,10 @@ class _TflitePair:
 class DtlnAec:
     """Streaming DTLN-AEC. Mirrors DtlnNew/DtlnProcess/DtlnReset."""
 
-    def __init__(self, model_prefix="models/dtln_aec_128"):
+    def __init__(self, model_prefix="models/dtln_aec_128",
+                 num_threads=None):
         self.model_prefix = model_prefix
+        self.num_threads = num_threads
         self.last_error = ""
         self.backend = 0  # 0=none, 1=tflite
         self.pair = None
@@ -181,7 +186,7 @@ class DtlnAec:
         try:
             self.pair = _TflitePair(
                 model_prefix + "_1.tflite", model_prefix + "_2.tflite",
-                BINS, 2,
+                BINS, 2, num_threads=self.num_threads,
             )
             self.backend = 1
             self.mic_ring = dsp._Ring(1024, dtype=np.float32)
