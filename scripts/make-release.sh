@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # make-release.sh — assemble a clean AEC Client release bundle + zip.
 #
-# Usage:  scripts/make-release.sh 1.3.0
+# Usage:  scripts/make-release.sh [version]  (default: APP_VERSION)
 #
 # Contract (matches v1.2.x precedent, enforced by asserts below):
 #   release/AEC-Client-vX-win64/
@@ -16,11 +16,12 @@
 # release/ is gitignored; run from the repo root in MSYS2 bash.
 set -euo pipefail
 
-if [ $# -ne 1 ]; then
-    echo "usage: $0 <version>   (e.g. $0 1.3.0)" >&2
+if [ $# -gt 1 ]; then
+    echo "usage: $0 [version]   (default: APP_VERSION from src/main.cpp)" >&2
     exit 1
 fi
-VER="$1"
+VER="${1:-$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)}"
+echo "-- version: $VER"
 test -d src -a -d build -a -f CMakeLists.txt || {
     echo "run from the repo root" >&2; exit 1; }
 

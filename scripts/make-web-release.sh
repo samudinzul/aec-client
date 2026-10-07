@@ -4,7 +4,7 @@
 # desktop AEC-Client-vX-win64.zip (both sit on the
 # same GitHub release page).
 #
-# Usage:  scripts/make-web-release.sh 1.10.1
+# Usage:  scripts/make-web-release.sh [version]  (default: APP_VERSION)
 #
 # Contract:
 #   release/AEC-Web-vX-win64/
@@ -23,11 +23,12 @@
 # release/ is gitignored; run from the repo root.
 set -euo pipefail
 
-if [ $# -ne 1 ]; then
-    echo "usage: $0 <version>   (e.g. $0 1.10.1)" >&2
+if [ $# -gt 1 ]; then
+    echo "usage: $0 [version]   (default: APP_VERSION from src/main.cpp)" >&2
     exit 1
 fi
-VER="$1"
+VER="${1:-$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)}"
+echo "-- version: $VER"
 test -d web -a -d models -a -f web/start.bat || {
     echo "run from the repo root" >&2; exit 1; }
 command -v zip >/dev/null || { echo "zip not found" >&2; exit 1; }
