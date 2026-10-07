@@ -227,12 +227,19 @@ function savePrefs() {
     experimentalEngines: $('expOn').checked});
 }
 function applyEngineAvailability(engines) {
+  if (engines !== undefined) window._enginesCache = engines;
+  const exp = $('expOn').checked;
   const names = ['dtln', 'aec3', 'nkf'];
   const opts = $('profile').options;
   for (let i = 0; i < opts.length && i < names.length; i++) {
-    const ok = !engines || engines[names[i]] !== false;
+    const gated = i !== 0 && !exp;
+    const missing = window._enginesCache && window._enginesCache[names[i]] === false;
+    const ok = !gated && !missing;
     opts[i].disabled = !ok;
-    opts[i].text = opts[i].text.replace(' (unavailable)', '') + (ok ? '' : ' (unavailable)');
+    let label = opts[i].text.replace(' (unavailable)', '').replace(' (experimental)', '');
+    if (gated) label += ' (experimental)';
+    else if (missing) label += ' (unavailable)';
+    opts[i].text = label;
   }
 }
 function showEngineInfo(st) {
@@ -270,6 +277,7 @@ $('expOn').addEventListener('change', () => {
   if (!$('expOn').checked && $('profile').value !== '0')
     $('profile').value = '0';
   savePrefs();
+  applyEngineAvailability();
 });
 // Listen reroutes the output stream: needs Stop -> Start.
 $('listenOn').addEventListener('change', () => {
@@ -290,6 +298,7 @@ api('GET', '/api/prefs').then(p => {
   if (p && 'listenToSelf' in p) $('listenOn').checked = !!p.listenToSelf;
   if (p && 'experimentalEngines' in p) $('expOn').checked = !!p.experimentalEngines;
   if (p && 'profile' in p) $('profile').value = String(p.profile);
+  applyEngineAvailability();
 }).catch(() => {});
 api('GET', '/api/state').then(st => applyEngineAvailability(st && st.engines)).catch(() => {});
 $('trayOn').addEventListener('change', savePrefs);

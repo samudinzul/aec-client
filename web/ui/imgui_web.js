@@ -285,6 +285,7 @@ class WebImGuiUI {
             if (!this.el.exp.checked && this.el.profile.value !== '0')
                 this.el.profile.value = '0';
             this.savePrefs();
+            this.applyEngineAvailability();
         });
         this.el.listen.addEventListener('change', () => {
             this.savePrefs();
@@ -327,15 +328,24 @@ class WebImGuiUI {
     }
 
     applyEngineAvailability(engines) {
-        // Missing backends (pip package absent) disable their
-        // profile options instead of failing at Start.
+        // Two independent gates, same as the desktop: an option is
+        // listed only with the experimental flag ON (index 0 always)
+        // AND its backend present. Missing either disables it
+        // instead of failing at Start.
+        if (engines !== undefined) this._engines = engines;
+        const exp = this.el.exp.checked;
         const names = ['dtln', 'aec3', 'nkf'];
         const opts = this.el.profile.options;
         for (let i = 0; i < opts.length && i < names.length; i++) {
-            const ok = !engines || engines[names[i]] !== false;
+            const gated = i !== 0 && !exp;
+            const missing = this._engines && this._engines[names[i]] === false;
+            const ok = !gated && !missing;
             opts[i].disabled = !ok;
-            opts[i].textContent = opts[i].textContent.replace(' (unavailable)', '') +
-                (ok ? '' : ' (unavailable)');
+            let label = opts[i].textContent.replace(' (unavailable)', '')
+                .replace(' (experimental)', '');
+            if (gated) label += ' (experimental)';
+            else if (missing) label += ' (unavailable)';
+            opts[i].textContent = label;
         }
     }
 
@@ -386,6 +396,7 @@ class WebImGuiUI {
             this.showListen();
             if (p && 'experimentalEngines' in p) this.el.exp.checked = !!p.experimentalEngines;
             if (p && 'profile' in p) this.el.profile.value = String(p.profile);
+            this.applyEngineAvailability();
         }).catch(() => {});
         this.api('GET', '/api/state').then((st) => {
             this.applyEngineAvailability(st && st.engines);
