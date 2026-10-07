@@ -219,8 +219,7 @@ std::vector<int> g_outDisplayIndices;
 
 int  g_micIndex = 0, g_refIndex = 0, g_outIndex = 0;
 bool g_listenToSelf = false;  // self-monitor: route cleaned mic to Speaker Reference instead of Output
-bool g_isFirstRun = false;      // no config file at launch: show the setup card
-bool g_sessionStartedOnce = false;  // setup card retires after first Start
+bool g_isFirstRun = false;      // no config file at launch: newcomers start simple
 bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
 int  g_engineIndex = 4, g_sampleRateIndex = 0, g_filterIndex = 0;  // 4 = ENGINE_DTLN; fresh = profile 0
@@ -1077,7 +1076,6 @@ void StartAEC() {
 
     SaveSettings();
     ReinitEngine();
-    g_sessionStartedOnce = true;  // retire the first-run setup card
 
     if (g_engine.type == ENGINE_NKF && !g_engine.nkf) {
         snprintf(g_statusText, 128, "Failed to load NKF model");
@@ -1396,27 +1394,6 @@ void DrawGainsSection() {
 }
 
 void DrawAudioTab() {
-    // First-run setup card: 3 live checklist steps for newcomers.
-    // Retires after the first Start; returning users never see it.
-    if (g_isFirstRun && !g_sessionStartedOnce && !g_isRunning) {
-        ImGui::SeparatorText("Get started");
-        ImGui::TextWrapped("Three steps, then press Start below. Your choices save automatically.");
-        ImGui::Spacing();
-        auto step = [](bool ok, const char* done, const char* todo) {
-            DrawInlineDot(ok);
-            ImGui::SameLine();
-            if (ok) ImGui::TextUnformatted(done);
-            else ImGui::TextDisabled("%s", todo);
-        };
-        std::string micName = "Pick Your microphone below.";
-        step(!g_micDisplayIndices.empty(), "Microphone selected.", micName.c_str());
-        std::string refName = "Pick Your speakers below.";
-        step(!g_refDisplayIndices.empty(), "Speakers selected.", refName.c_str());
-        step(CableInputPresent(), "Discord output ready (CABLE Input).",
-             "Install VB-CABLE so voice apps can hear you (see warning below).");
-        ImGui::Spacing();
-    }
-
     ImGui::SeparatorText("Profile");
 
     ImGui::TextUnformatted("Profile");
