@@ -5,6 +5,8 @@
 #   scripts/build.sh            # clean-configure + build (MinSizeRel)
 #   scripts/build.sh --clean    # wipe build/ first (stale objects gone)
 #   scripts/build.sh --debug    # debuggable build instead of size build
+#   scripts/build.sh --app-only # build just aec_gui.exe (no nkf_smoke.exe,
+#                               # no diagnostic logs left behind)
 #
 # What "lightweight" means here:
 #   - MinSizeRel (-Os -DNDEBUG) by default, not Release (-O3)
@@ -23,13 +25,15 @@
 set -euo pipefail
 
 CLEAN=0
+APP_ONLY=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
     case "$a" in
         --clean) CLEAN=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
+        --app-only) APP_ONLY=1 ;;
         -h|--help)
-            sed -n '2,22p' "$0"; exit 0 ;;
+            sed -n '2,24p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
@@ -71,7 +75,13 @@ cmake -B build -G Ninja \
 
 echo "-- build"
 NPROC=$(nproc 2>/dev/null || echo 4)
-cmake --build build -j "$NPROC"
+if [ "$APP_ONLY" -ne 0 ]; then
+    cmake --build build -j "$NPROC" --target aec_gui
+    # A clean app build leaves no diagnostic tools or logs behind.
+    rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
+else
+    cmake --build build -j "$NPROC"
+fi
 
 echo ""
 echo "-- size audit (bloat check)"
