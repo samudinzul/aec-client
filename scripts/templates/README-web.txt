@@ -24,7 +24,8 @@ QUICK START
 -----------
 1. Install Python and VB-CABLE (see above), reboot.
 
-2. Extract this ZIP anywhere.
+2. Right-click the ZIP -> Properties -> Unblock, then extract
+   it anywhere (skips first-run prompts from the download mark).
 
 3. Double-click web\start.bat.
    - First run: creates a local Python environment and

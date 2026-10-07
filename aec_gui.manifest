@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Embedded application manifest (MinGW windres embeds this as
+     RT_MANIFEST id 1 — see CMakeLists add_executable sources).
+
+     AV-posture reason (see SECURITY.md): an exe with no declared
+     execution level runs on legacy heuristics. asInvoker states
+     up front that this app never elevates — no UAC prompt, no
+     admin token, nothing for behavior monitors to question.
+     Deliberately minimal: no DPI-awareness declaration (GLFW
+     owns scaling; declaring it here would change rendering),
+     no compatibility GUIDs (no version lies to the OS).
+     Keep version="x.y.z.0" in sync with APP_VERSION
+     (desktop release assert enforces it). -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="1.11.0.0" processorArchitecture="*" name="AEC.Client" type="win32"/>
+  <description>AEC Client - acoustic echo cancellation</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

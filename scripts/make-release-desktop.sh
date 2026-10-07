@@ -79,6 +79,8 @@ rc_ver=$(grep -oP 'VALUE "FileVersion",\s*"\K[^"]+' version.rc | head -1)
 test "$rc_ver" = "$VER" || { echo "version.rc FileVersion ($rc_ver) != $VER" >&2; fail=1; }
 rc_fver=$(grep -oP 'FILEVERSION\s+\K[0-9,]+' version.rc | head -1)
 test "$rc_fver" = "$(printf '%s' "$VER" | tr . ,),0" || { echo "version.rc FILEVERSION ($rc_fver) != $VER" >&2; fail=1; }
+man_ver=$(grep -oP 'assemblyIdentity version="\K[0-9.]+' aec_gui.manifest | head -1)
+test "$man_ver" = "${VER}.0" || { echo "manifest version ($man_ver) != $VER" >&2; fail=1; }
 # Slim-runtime contract: vendored MS onnxruntime (uncompressed) + its
 # VC++ runtime; the old 27.5 MB MSYS2 build / absl cluster must not return.
 test -f "$STAGE/onnxruntime.dll" || { echo "missing onnxruntime.dll" >&2; fail=1; }

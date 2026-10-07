@@ -119,9 +119,9 @@ Full docs: [web/README.md](web/README.md).
 > are for the desktop app.
 
 1. **Install [VB-CABLE](https://vb-audio.com/Cable/)** (free virtual audio cable). Reboot.
-2. **Download** the latest release from [Releases](https://github.com/samudinzul/aec-client/releases/latest) and extract it anywhere.
+2. **Download** the latest release from [Releases](https://github.com/samudinzul/aec-client/releases/latest). Right-click the ZIP → Properties → **Unblock** → extract it anywhere (skips SmartScreen first-run prompts from the download mark).
 3. **Run `aec_gui.exe`**.
-4. **Select your devices** (first run shows a 3-step checklist):
+4. **Select your devices** (the Audio tab opens straight at Profile):
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
