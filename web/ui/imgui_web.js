@@ -122,12 +122,12 @@ class WebImGuiUI {
         rows.innerHTML =
             '<div class="frow"><span class="flabel"><span id="ig-dotMic" class="status-dot inactive"></span>Your microphone</span><select id="ig-mic"></select></div>' +
             '<div class="frow"><span class="flabel"><span id="ig-dotRef" class="status-dot inactive"></span>Your speakers</span><select id="ig-ref"></select></div>' +
-            '<div class="frow"><span class="flabel"><span id="ig-dotOut" class="status-dot inactive"></span>Send cleaned sound to</span><select id="ig-out"></select></div>' +
+            '<div class="frow" id="ig-rowOut"><span class="flabel"><span id="ig-dotOut" class="status-dot inactive"></span>Send cleaned sound to</span><select id="ig-out"></select></div>' +
             '<div id="ig-cablewarn" class="warn" hidden>VB-CABLE not found - install VB-CABLE and enable CABLE Input, then hit Refresh.</div>' +
             '<div id="ig-devhint" class="hint" style="color:#ffd75e"></div>' +
-            '<label class="chkline"><input type="checkbox" disabled>Listen to myself</label>' +
-            '<div class="hint">Hear yourself through your speakers instead of sending to voice apps. ' +
-            '(Needs the native app; the web backend sends cleaned audio to voice apps only.)</div>';
+            '<label class="chkline"><input type="checkbox" id="ig-listen">Listen to myself</label>' +
+            '<div class="hint">Hear yourself through your speakers instead of sending to voice apps — for testing. ' +
+            'Applies after Stop -&gt; Start; the Output row above is hidden while on.</div>';
         p.appendChild(rows);
 
         // --- More (Processing + Levels, like the desktop CollapsingHeader) ---
@@ -243,6 +243,8 @@ class WebImGuiUI {
         this.el.mic = q('ig-mic'); this.el.ref = q('ig-ref'); this.el.out = q('ig-out');
         this.el.gain = q('ig-micGain'); this.el.gainVal = q('ig-gainVal');
         this.el.ns = q('ig-nsOn');
+        this.el.listen = q('ig-listen');
+        this.el.rowOut = q('ig-rowOut');
         this.el.tray = q('ig-trayOn');
         this.el.start = q('ig-startBtn'); this.el.reset = q('ig-resetBtn');
         this.el.status = q('ig-status');
@@ -269,6 +271,11 @@ class WebImGuiUI {
             }));
         this.el.rescan.addEventListener('click', () => this.loadDevices());
         this.el.ns.addEventListener('change', () => this.savePrefs());
+        this.el.listen.addEventListener('change', () => {
+            this.savePrefs();
+            this.showListen();
+            this.el.devhint.textContent = this.running ? 'Stop, then Start to apply the new output.' : '';
+        });
         this.el.gain.addEventListener('input', () => { this.showGain(); this.savePrefs(); });
         this.el.tray.addEventListener('change', () => this.savePrefs());
         this.el.start.addEventListener('click', () => this.toggleStart());
@@ -298,6 +305,12 @@ class WebImGuiUI {
         this.el.gainVal.textContent = this.el.gain.value + '%';
     }
 
+    showListen() {
+        // Desktop parity: the Output row is hidden while
+        // Listen-to-myself reroutes to Your speakers.
+        this.el.rowOut.style.display = this.el.listen.checked ? 'none' : '';
+    }
+
     savePrefs() {
         this.api('POST', '/api/prefs', {
             mic: this.prefVal(this.el.mic), ref: this.prefVal(this.el.ref),
@@ -305,6 +318,7 @@ class WebImGuiUI {
             nsEnabled: this.el.ns.checked,
             micGain: Math.min(4.0, Math.max(0.1, (+this.el.gain.value) / 100)),
             trayEnabled: this.el.tray.checked,
+            listenToSelf: this.el.listen.checked,
         }).catch(() => {});
     }
 
@@ -317,6 +331,8 @@ class WebImGuiUI {
         }).catch(() => this.showGain());
         this.api('GET', '/api/prefs').then((p) => {
             if (p && 'trayEnabled' in p) this.el.tray.checked = !!p.trayEnabled;
+            if (p && 'listenToSelf' in p) this.el.listen.checked = !!p.listenToSelf;
+            this.showListen();
         }).catch(() => {});
     }
 
@@ -425,9 +441,11 @@ class WebImGuiUI {
         this.setDot(this.el.dot, on);
         this.el.runstate.textContent = on ? ('Running  ' + this.uptime()) : 'Idle';
         this.el.runstate.style.color = on ? '#7be294' : '';
-        // Devices can't change mid-stream (desktop BeginDisabled).
+        // Devices (and the output reroute) can't change mid-stream
+        // (desktop BeginDisabled).
         for (const s of [this.el.mic, this.el.ref, this.el.out]) s.disabled = on;
         this.el.rescan.disabled = on;
+        this.el.listen.disabled = on;
         this.el.levels.hidden = !on;
         if (!on) {
             this.el.devhint.textContent = '';
@@ -486,6 +504,10 @@ class WebImGuiUI {
             }
             if (st.nsEnabled !== undefined && !!+st.nsEnabled !== this.el.ns.checked)
                 this.el.ns.checked = !!+st.nsEnabled;
+            if (st.listenToSelf !== undefined && !!st.listenToSelf !== this.el.listen.checked) {
+                this.el.listen.checked = !!st.listenToSelf;
+                this.showListen();
+            }
             if (st.micGain !== undefined) {
                 const pct = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }

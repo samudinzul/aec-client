@@ -176,6 +176,27 @@ def _find_cable_input(entries):
     return fallback
 
 
+def speaker_output_for_ref(ref_name, playback):
+    """Playback index driving the same speakers a loopback ref
+    listens to (desktop Listen-to-myself routing).
+
+    Loopback entries are named "<speakers> [Loopback]"; strip
+    the suffix and match the underlying playback endpoint
+    (prefix-tolerant: MME truncates to 31 chars). Returns the
+    device index, or None when no playback endpoint matches.
+    """
+    if not ref_name:
+        return None
+    base = ref_name
+    if base.endswith(_LOOPBACK_SUFFIX):
+        base = base[:-len(_LOOPBACK_SUFFIX)]
+    for e in playback or []:
+        if e.get("maxOutputChannels", 1) > 0 and _same_device(
+                e.get("name", ""), base):
+            return e["index"]
+    return None
+
+
 def list_devices():
     """Capture + loopback + playback lists with defaults.
 

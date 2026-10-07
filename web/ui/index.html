@@ -86,6 +86,10 @@
     Noise suppression (DTLN-NS) — removes background hiss</label>
   <div class="hint">Applies live: untick to hear the raw echo-cancelled
   voice, tick again to re-apply suppression.</div>
+  <label class="chk"><input type="checkbox" id="listenOn">
+    Listen to myself — hear your cleaned voice through your speakers</label>
+  <div class="hint">For testing: routes the output to your speakers
+  instead of the voice app. Applies after Stop -&gt; Start.</div>
   <button id="startBtn">Start</button>
   <div id="status">Stopped.</div>
   <div id="err"></div>
@@ -206,7 +210,8 @@ function savePrefs() {
     ref: prefVal('ref'), out: prefVal('out'),
     nsEnabled: $('nsOn').checked,
     micGain: pct2gain(+$('micGain').value),
-    trayEnabled: $('trayOn').checked});
+    trayEnabled: $('trayOn').checked,
+    listenToSelf: $('listenOn').checked});
 }
 function showGain() {
   $('gainVal').textContent = $('micGain').value + '%';
@@ -223,6 +228,13 @@ $('rescan').onclick = loadDevices;
 
 // NS toggle applies live (no device reconfigure needed).
 $('nsOn').addEventListener('change', savePrefs);
+// Listen reroutes the output stream: needs Stop -> Start.
+$('listenOn').addEventListener('change', () => {
+  savePrefs();
+  $('devhint').textContent = running
+    ? 'Stop, then Start to apply the new output.'
+    : '';
+});
 $('micGain').addEventListener('input', () => { showGain(); savePrefs(); });
 // Initialize the checkboxes from the server's stored prefs.
 api('GET', '/api/state').then(st => {
@@ -232,6 +244,7 @@ api('GET', '/api/state').then(st => {
 }).catch(() => { showGain(); });
 api('GET', '/api/prefs').then(p => {
   if (p && 'trayEnabled' in p) $('trayOn').checked = !!p.trayEnabled;
+  if (p && 'listenToSelf' in p) $('listenOn').checked = !!p.listenToSelf;
 }).catch(() => {});
 $('trayOn').addEventListener('change', savePrefs);
 // The tray is a native-window feature: in a plain browser
@@ -305,6 +318,8 @@ function connect() {
     if (st.running !== running) setRunning(st.running, st);
     if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
       $('nsOn').checked = !!st.nsEnabled;
+    if (st.listenToSelf !== undefined && !!st.listenToSelf !== $('listenOn').checked)
+      $('listenOn').checked = !!st.listenToSelf;
 
     if (st.micGain !== undefined && gain2pct(+st.micGain) !== +$('micGain').value) {
       $('micGain').value = gain2pct(+st.micGain);

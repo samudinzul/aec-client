@@ -17,7 +17,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .audio import AudioRunner, list_devices
+from .audio import AudioRunner, list_devices, speaker_output_for_ref
 from .chain import Chain
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +30,7 @@ runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
          "nsEnabled": True, "micGain": 1.0,
-         "trayEnabled": True}
+         "trayEnabled": True, "listenToSelf": False}
 
 
 @app.get("/")
@@ -74,6 +74,7 @@ def devices():
 @app.get("/api/state")
 def state():
     st = chain.state()
+    st["listenToSelf"] = bool(prefs.get("listenToSelf"))
     if runner is not None:
         st["inRms"] = runner.in_rms
         st["outRms"] = runner.out_rms
@@ -111,6 +112,10 @@ def set_prefs(body: dict):
         # Read by the native window (gui.py) to hide
         # to the system tray instead of quitting.
         prefs["trayEnabled"] = bool(body["trayEnabled"])
+    if "listenToSelf" in body:
+        # Stored only (like devices): the output stream
+        # opens at Start, so this applies after Stop -> Start.
+        prefs["listenToSelf"] = bool(body["listenToSelf"])
     return prefs
 
 
@@ -130,8 +135,26 @@ def start():
             return {"ok": False,
                     "error": "pick a microphone, speaker reference "
                              "and output device first"}
+        out_idx = prefs["out"]
+        if prefs.get("listenToSelf"):
+            # Route the cleaned mic to the speakers the ref
+            # loopback listens to (desktop Listen-to-myself):
+            # hear yourself for testing instead of feeding
+            # the voice app. Fail closed with a clear error
+            # rather than silently sending it elsewhere.
+            devs = list_devices()
+            ref_name = next((e["name"] for e in devs["loopback"]
+                             if e["index"] == prefs["ref"]), "")
+            out_idx = speaker_output_for_ref(
+                ref_name, devs["playback"])
+            if out_idx is None:
+                chain.stop()
+                return {"ok": False,
+                        "error": "Listen to myself: no speaker output "
+                                 f"matches '{ref_name or '?'}' — untick "
+                                 "it or pick the speakers as Output"}
         try:
-            runner = AudioRunner(chain, prefs["mic"], prefs["ref"], prefs["out"])
+            runner = AudioRunner(chain, prefs["mic"], prefs["ref"], out_idx)
             runner.start()
         except Exception as e:
             chain.stop()
@@ -160,6 +183,7 @@ async def ws_meters(ws: WebSocket):
     while True:
         try:
             st = chain.state()
+            st["listenToSelf"] = bool(prefs.get("listenToSelf"))
             # Snapshot: the stop endpoint nulls `runner`
             # from a worker thread; reading it after the
             # None-check raised and dropped the socket on
