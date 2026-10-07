@@ -63,6 +63,12 @@
 </div>
 <div id="tab-audio" class="tabpanel">
 <div class="card">
+  <label>Profile</label>
+  <select id="profile" title="Echo engine — same profiles as the desktop app">
+    <option value="0">DTLN-AEC 128</option>
+    <option value="1">WebRTC AEC3</option>
+    <option value="2">NKF-AEC</option>
+  </select>
   <div class="devhead"><span>Devices</span>
     <button id="rescan" class="mini">Rescan</button></div>
   <label>Microphone</label>
@@ -86,6 +92,7 @@
     Noise suppression (DTLN-NS) — removes background hiss</label>
   <div class="hint">Applies live: untick to hear the raw echo-cancelled
   voice, tick again to re-apply suppression.</div>
+  <div id="enginfo" class="hint"></div>
   <label class="chk"><input type="checkbox" id="listenOn">
     Listen to myself — hear your cleaned voice through your speakers</label>
   <div class="hint">For testing: routes the output to your speakers
@@ -113,6 +120,10 @@
     instead of quitting — the server keeps running. Click the
     tray icon to bring the window back, or Quit from it to stop.
     (Needs the native window; hidden in a browser tab.)</div>
+    <label class="chk"><input type="checkbox" id="expOn">
+      Show experimental engines (WebRTC AEC3, NKF-AEC)</label>
+    <div class="hint">Off (default): the profile list shows DTLN-AEC 128
+    only. Unchecking falls back to DTLN immediately.</div>
   </div>
 </div>
 <div id="tab-about" class="tabpanel" hidden>
@@ -128,7 +139,7 @@
     installer, nothing for antivirus to flag.</p>
     <div class="devhead"><span>Features</span></div>
     <ul>
-      <li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>
+      <li>Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC) + DTLN-NS noise reduction (16 kHz)</li>
       <li>Real-time processing with low CPU usage</li>
       <li>Works with speakers, earphones, and headsets</li>
       <li>Live level meters</li>
@@ -211,7 +222,33 @@ function savePrefs() {
     nsEnabled: $('nsOn').checked,
     micGain: pct2gain(+$('micGain').value),
     trayEnabled: $('trayOn').checked,
-    listenToSelf: $('listenOn').checked});
+    listenToSelf: $('listenOn').checked,
+    profile: +$('profile').value,
+    experimentalEngines: $('expOn').checked});
+}
+function applyEngineAvailability(engines) {
+  const names = ['dtln', 'aec3', 'nkf'];
+  const opts = $('profile').options;
+  for (let i = 0; i < opts.length && i < names.length; i++) {
+    const ok = !engines || engines[names[i]] !== false;
+    opts[i].disabled = !ok;
+    opts[i].text = opts[i].text.replace(' (unavailable)', '') + (ok ? '' : ' (unavailable)');
+  }
+}
+function showEngineInfo(st) {
+  const box = $('enginfo');
+  if (!st || !st.running || !st.nkf || !/NKF/.test(st.engine || '')) {
+    box.textContent = '';
+    return;
+  }
+  const k = st.nkf;
+  const lock = k.locked ? ('locked d=' + k.lagSamples + (k.confident ? '' : ' (grace)')) : 'seeking';
+  const expo = k.giveUp ? 'FAILED OPEN (mic passthrough)' : (k.exposed ? 'live' : 'warming up');
+  let s = 'NKF: ' + lock + ' · ' + expo +
+    (k.loopActive ? ' · loop!' : '') + ' · resets ' + k.guardResets;
+  if (k.backstopDb < -0.5) s += ' · Backstop trim: ' + k.backstopDb.toFixed(1) + ' dB';
+  box.textContent = s;
+  box.style.color = k.backstopDb < -0.5 ? '#ff9d6b' : '';
 }
 function showGain() {
   $('gainVal').textContent = $('micGain').value + '%';
@@ -228,6 +265,12 @@ $('rescan').onclick = loadDevices;
 
 // NS toggle applies live (no device reconfigure needed).
 $('nsOn').addEventListener('change', savePrefs);
+$('profile').addEventListener('change', savePrefs);
+$('expOn').addEventListener('change', () => {
+  if (!$('expOn').checked && $('profile').value !== '0')
+    $('profile').value = '0';
+  savePrefs();
+});
 // Listen reroutes the output stream: needs Stop -> Start.
 $('listenOn').addEventListener('change', () => {
   savePrefs();
@@ -245,7 +288,10 @@ api('GET', '/api/state').then(st => {
 api('GET', '/api/prefs').then(p => {
   if (p && 'trayEnabled' in p) $('trayOn').checked = !!p.trayEnabled;
   if (p && 'listenToSelf' in p) $('listenOn').checked = !!p.listenToSelf;
+  if (p && 'experimentalEngines' in p) $('expOn').checked = !!p.experimentalEngines;
+  if (p && 'profile' in p) $('profile').value = String(p.profile);
 }).catch(() => {});
+api('GET', '/api/state').then(st => applyEngineAvailability(st && st.engines)).catch(() => {});
 $('trayOn').addEventListener('change', savePrefs);
 // The tray is a native-window feature: in a plain browser
 // tab there is no window to minimize, so hide the tab.
@@ -320,6 +366,12 @@ function connect() {
       $('nsOn').checked = !!st.nsEnabled;
     if (st.listenToSelf !== undefined && !!st.listenToSelf !== $('listenOn').checked)
       $('listenOn').checked = !!st.listenToSelf;
+    if (st.profile !== undefined && String(st.profile) !== $('profile').value)
+      $('profile').value = String(st.profile);
+    if (st.experimentalEngines !== undefined)
+      $('expOn').checked = !!st.experimentalEngines;
+    applyEngineAvailability(st.engines);
+    showEngineInfo(st);
 
     if (st.micGain !== undefined && gain2pct(+st.micGain) !== +$('micGain').value) {
       $('micGain').value = gain2pct(+st.micGain);

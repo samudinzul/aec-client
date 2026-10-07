@@ -3,11 +3,10 @@
 // Mirrors the desktop client (src/main.cpp DrawUI):
 // app header with status dot + Running/Idle, a horizontal
 // Audio / Appearance / About tab bar, and the same sections,
-// labels and footer behavior. Controls the web backend, whose
-// engine is fixed to DTLN-AEC 128 @ 16 kHz, so engine-specific
-// widgets the server has no endpoint for (profile switching,
-// WPE, sample rate, listen-to-myself) are shown the way the
-// desktop shows a forced choice: fixed/disabled with a note.
+// labels and footer behavior. Same PROFILES table (DTLN-AEC 128
+// / WebRTC AEC3 / NKF-AEC) with the same experimental-engines
+// gating; options whose backend is missing are disabled with a
+// note. Fixed at 16 kHz like the desktop's neural engines.
 
 'use strict';
 
@@ -103,15 +102,20 @@ class WebImGuiUI {
         const p = this.mk('div');
         p.style.cssText = 'max-width:640px;margin:0 auto;';
 
-        // --- Profile (fixed engine on the web backend) ---
+        // --- Profile (same PROFILES table as the desktop) ---
         p.appendChild(this.sep('Profile'));
         const prof = this.mk('div', 'frow');
         prof.innerHTML = '<span class="flabel">Profile</span>' +
-            '<select id="ig-profile" disabled><option>DTLN-AEC 128</option></select>';
+            '<select id="ig-profile">' +
+            '<option value="0">DTLN-AEC 128</option>' +
+            '<option value="1">WebRTC AEC3</option>' +
+            '<option value="2">NKF-AEC</option>' +
+            '</select>';
         p.appendChild(prof);
         const stages = this.mk('div');
         stages.innerHTML =
-            '<label class="chkline"><input type="checkbox" id="ig-nsOn" checked>Noise suppression (DTLN-NS)</label>';
+            '<label class="chkline"><input type="checkbox" id="ig-nsOn" checked>Noise suppression (DTLN-NS)</label>' +
+            '<div id="ig-enginfo" class="hint"></div>';
         p.appendChild(stages);
 
         // --- Devices (Refresh top-right, dot + 190px label rows) ---
@@ -195,8 +199,9 @@ class WebImGuiUI {
             '<label class="chkline"><input type="checkbox" id="ig-trayOn">Minimize to system tray (X button hides window)</label>' +
             '<div class="hint">When ON: X hides the window, tray icon stays active. When OFF: X closes the app completely. ' +
             '(Needs the native window; hidden in a browser tab.)</div>' +
-            '<label class="chkline"><input type="checkbox" disabled>Show experimental engines (WebRTC AEC3, NKF-AEC)</label>' +
-            '<div class="hint">The web backend runs DTLN-AEC 128 only; extra engines need the native app.</div>';
+            '<label class="chkline"><input type="checkbox" id="ig-exp">Show experimental engines (WebRTC AEC3, NKF-AEC)</label>' +
+            '<div class="hint">Off (default): the profile list shows DTLN-AEC 128 only. ' +
+            'On: also shows WebRTC AEC3 and NKF-AEC — real engines, less tested than the default.</div>';
         p.appendChild(b);
         return p;
     }
@@ -216,7 +221,7 @@ class WebImGuiUI {
         p.appendChild(this.sep('Features'));
         const f = this.mk('div');
         f.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
-            '<li>DTLN-AEC 128 echo cancellation + DTLN-NS noise reduction (16 kHz)</li>' +
+            '<li>Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC) + DTLN-NS noise reduction (16 kHz)</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
             '<li>Live level meters with peak hold</li>' +
@@ -245,6 +250,9 @@ class WebImGuiUI {
         this.el.ns = q('ig-nsOn');
         this.el.listen = q('ig-listen');
         this.el.rowOut = q('ig-rowOut');
+        this.el.profile = q('ig-profile');
+        this.el.exp = q('ig-exp');
+        this.el.enginfo = q('ig-enginfo');
         this.el.tray = q('ig-trayOn');
         this.el.start = q('ig-startBtn'); this.el.reset = q('ig-resetBtn');
         this.el.status = q('ig-status');
@@ -271,6 +279,14 @@ class WebImGuiUI {
             }));
         this.el.rescan.addEventListener('click', () => this.loadDevices());
         this.el.ns.addEventListener('change', () => this.savePrefs());
+        this.el.profile.addEventListener('change', () => this.savePrefs());
+        this.el.exp.addEventListener('change', () => {
+            // Unchecking hides the extra profiles: fall back to
+            // DTLN immediately (desktop Behavior-tab parity).
+            if (!this.el.exp.checked && this.el.profile.value !== '0')
+                this.el.profile.value = '0';
+            this.savePrefs();
+        });
         this.el.listen.addEventListener('change', () => {
             this.savePrefs();
             this.showListen();
@@ -311,6 +327,40 @@ class WebImGuiUI {
         this.el.rowOut.style.display = this.el.listen.checked ? 'none' : '';
     }
 
+    applyEngineAvailability(engines) {
+        // Missing backends (pip package absent) disable their
+        // profile options instead of failing at Start.
+        const names = ['dtln', 'aec3', 'nkf'];
+        const opts = this.el.profile.options;
+        for (let i = 0; i < opts.length && i < names.length; i++) {
+            const ok = !engines || engines[names[i]] !== false;
+            opts[i].disabled = !ok;
+            opts[i].textContent = opts[i].textContent.replace(' (unavailable)', '') +
+                (ok ? '' : ' (unavailable)');
+        }
+    }
+
+    showEngineInfo(st) {
+        // NKF telemetry mirrors the desktop NkfState lines (delay
+        // lock, exposure, backstop trim, guard resets). Other
+        // engines have no extra telemetry — the field stays empty.
+        const box = this.el.enginfo;
+        if (!st || !st.running || !st.nkf || !/NKF/.test(st.engine || '')) {
+            box.textContent = '';
+            return;
+        }
+        const k = st.nkf;
+        const lock = k.locked ? ('locked d=' + k.lagSamples + (k.confident ? '' : ' (grace)')) : 'seeking';
+        const expo = k.giveUp ? 'FAILED OPEN (mic passthrough)' : (k.exposed ? 'live' : 'warming up');
+        let s = 'NKF: ' + lock + ' · ' + expo +
+            (k.loopActive ? ' · loop!' : '') +
+            ' · resets ' + k.guardResets;
+        if (k.backstopDb < -0.5)
+            s += ' · Backstop trim: ' + k.backstopDb.toFixed(1) + ' dB (tonal wire?)';
+        box.textContent = s;
+        box.style.color = k.backstopDb < -0.5 ? '#ff9d6b' : '';
+    }
+
     savePrefs() {
         this.api('POST', '/api/prefs', {
             mic: this.prefVal(this.el.mic), ref: this.prefVal(this.el.ref),
@@ -319,6 +369,8 @@ class WebImGuiUI {
             micGain: Math.min(4.0, Math.max(0.1, (+this.el.gain.value) / 100)),
             trayEnabled: this.el.tray.checked,
             listenToSelf: this.el.listen.checked,
+            profile: +this.el.profile.value,
+            experimentalEngines: this.el.exp.checked,
         }).catch(() => {});
     }
 
@@ -333,6 +385,11 @@ class WebImGuiUI {
             if (p && 'trayEnabled' in p) this.el.tray.checked = !!p.trayEnabled;
             if (p && 'listenToSelf' in p) this.el.listen.checked = !!p.listenToSelf;
             this.showListen();
+            if (p && 'experimentalEngines' in p) this.el.exp.checked = !!p.experimentalEngines;
+            if (p && 'profile' in p) this.el.profile.value = String(p.profile);
+        }).catch(() => {});
+        this.api('GET', '/api/state').then((st) => {
+            this.applyEngineAvailability(st && st.engines);
         }).catch(() => {});
     }
 
@@ -508,6 +565,12 @@ class WebImGuiUI {
                 this.el.listen.checked = !!st.listenToSelf;
                 this.showListen();
             }
+            if (st.profile !== undefined && String(st.profile) !== this.el.profile.value)
+                this.el.profile.value = String(st.profile);
+            if (st.experimentalEngines !== undefined)
+                this.el.exp.checked = !!st.experimentalEngines;
+            this.applyEngineAvailability(st.engines);
+            this.showEngineInfo(st);
             if (st.micGain !== undefined) {
                 const pct = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }

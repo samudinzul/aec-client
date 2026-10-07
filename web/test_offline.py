@@ -34,14 +34,29 @@ def write_wav16(path, data):
         w.writeframes(np.asarray(data, dtype=np.int16).tobytes())
 
 
+def _synth_pair(seconds=4, seed=3):
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    sr = 16000
+    t = np.arange(sr * seconds) / sr
+    ref = (0.4 * rng.standard_normal(len(t))).astype(np.float32)
+    dly = 800
+    echo = np.concatenate([np.zeros(dly, np.float32),
+                           0.7 * ref[:len(ref) - dly]])
+    burst = (((t % 2.0) < 0.5).astype(np.float32)
+             * (0.25 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))
+    mic = np.clip(echo + burst, -1, 1)
+    return ((mic * 32767).astype(np.int16),
+            (ref * 32767).astype(np.int16))
+
+
 def smoke():
-    from .chain import Chain
+    import numpy as np
+
+    from .chain import PROFILES, Chain, engine_available
     from .dsp import FRAME_SIZE
 
-    sr = 16000
-    t = np.arange(sr * 2) / sr
-    mic = (0.3 * np.sin(2 * np.pi * 440 * t) * 32767).astype(np.int16)
-    ref = (0.2 * np.sin(2 * np.pi * 880 * t) * 32767).astype(np.int16)
+    mic, ref = _synth_pair(2)
     ch = Chain()
     ok = ch.start()
     print(f"chain start: {ok} backend={ch.state()['dtlnBackend']} "
@@ -54,8 +69,47 @@ def smoke():
     assert np.all(np.isfinite(out.astype(np.float32)))
     print(f"frames={ch.state()['frames']} out_rms={np.sqrt(np.mean(out.astype(float)**2)):.1f} "
           f"peak={np.abs(out).max()} ns_dropped={ch.state()['ns']['dropped']}")
-    print("SMOKE OK" if ok else "SMOKE OK (fail-open passthrough, models missing?)")
-    return 0 if ok else 2
+    if not ok:
+        print("SMOKE OK (fail-open passthrough, models missing?)")
+        return 2
+
+    # Every selectable engine: 4 s synth pair, finite output, sane
+    # state. Missing backends SKIP (fail-open design), errors FAIL.
+    mic4, ref4 = _synth_pair(4)
+    for _label, name in PROFILES:
+        if name == "dtln":
+            continue
+        if not engine_available(name):
+            print(f"engine {name}: SKIP (backend missing)")
+            continue
+        ec = Chain()
+        assert ec.set_engine(name), f"{name}: set_engine refused"
+        assert ec.start(), f"{name}: start failed: {ec.last_error}"
+        # Hot-swap mid-run (server swaps live without stream
+        # reconfigure): must not crash or mute.
+        o = []
+        for i in range(0, len(mic4), FRAME_SIZE):
+            if i == len(mic4) // 2:
+                assert ec.set_engine("dtln"), "swap back to dtln failed"
+                assert ec.set_engine(name), f"swap back to {name} failed"
+            o.append(ec.process_frame(mic4[i:i + FRAME_SIZE],
+                                      ref4[i:i + FRAME_SIZE]))
+        o = np.concatenate(o).astype(np.float32)
+        assert np.all(np.isfinite(o)), f"{name}: non-finite output"
+        st = ec.state()
+        extra = ""
+        if name == "nkf" and st["nkf"]:
+            k = st["nkf"]
+            extra = (f" lag={k['lagSamples']} lock={k['locked']} "
+                     f"exposed={k['exposed']} resets={k['guardResets']} "
+                     f"giveup={k['giveUp']} bs={k['backstopDb']:.1f}dB")
+            assert k["giveUp"] == 0, f"{name}: failed open on synth"
+            assert k["guardResets"] == 0, f"{name}: guard tripped on synth"
+            assert abs(k["backstopDb"]) < 0.5, f"{name}: backstop trimmed voice"
+        print(f"engine {name}: PASS frames={st['frames']}{extra}")
+        ec.stop()
+    print("SMOKE OK")
+    return 0
 
 
 def main():

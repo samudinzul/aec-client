@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .audio import AudioRunner, list_devices, speaker_output_for_ref
-from .chain import Chain
+from .chain import PROFILES, Chain
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)  # repo root: models/ lives here
@@ -30,7 +30,8 @@ runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
          "nsEnabled": True, "micGain": 1.0,
-         "trayEnabled": True, "listenToSelf": False}
+         "trayEnabled": True, "listenToSelf": False,
+         "profile": 0, "experimentalEngines": False}
 
 
 @app.get("/")
@@ -75,6 +76,8 @@ def devices():
 def state():
     st = chain.state()
     st["listenToSelf"] = bool(prefs.get("listenToSelf"))
+    st["profile"] = prefs.get("profile", 0)
+    st["experimentalEngines"] = bool(prefs.get("experimentalEngines"))
     if runner is not None:
         st["inRms"] = runner.in_rms
         st["outRms"] = runner.out_rms
@@ -116,6 +119,33 @@ def set_prefs(body: dict):
         # Stored only (like devices): the output stream
         # opens at Start, so this applies after Stop -> Start.
         prefs["listenToSelf"] = bool(body["listenToSelf"])
+    if "experimentalEngines" in body:
+        prefs["experimentalEngines"] = bool(body["experimentalEngines"])
+    if "profile" in body:
+        # Desktop parity: without the experimental flag the extra
+        # profiles are hidden AND the selection falls back to DTLN
+        # (so a stale pref can never strand the chain on a
+        # hidden engine).
+        try:
+            prof = int(body["profile"])
+        except (TypeError, ValueError):
+            prof = 0
+        if prof < 0 or prof >= len(PROFILES):
+            prof = 0
+        if prof != 0 and not prefs["experimentalEngines"]:
+            prof = 0
+        if prof != prefs["profile"]:
+            prefs["profile"] = prof
+            # Hot-swap while running (streams are engine-agnostic;
+            # the new engine starts reset). Fail closed: keep the
+            # old engine when the backend is broken.
+            if chain.running:
+                name = PROFILES[prof][1]
+                prev = chain.engine
+                if not chain.set_engine(name):
+                    prefs["profile"] = next(
+                        (i for i, (_, n) in enumerate(PROFILES)
+                         if n == prev), 0)
     return prefs
 
 
@@ -125,6 +155,13 @@ def start():
     with runner_lock:
         if chain.running:
             return {"ok": True, "state": chain.state()}
+        prof = prefs.get("profile", 0)
+        if prof < 0 or prof >= len(PROFILES):
+            prof = 0
+        name = PROFILES[prof][1]
+        if chain.engine != name and not chain.set_engine(name):
+            return {"ok": False, "error": chain.last_error or
+                    "engine backend unavailable"}
         if not chain.start():
             return {"ok": False, "error": chain.last_error or
                     "Failed to load DTLN model"}
@@ -184,6 +221,9 @@ async def ws_meters(ws: WebSocket):
         try:
             st = chain.state()
             st["listenToSelf"] = bool(prefs.get("listenToSelf"))
+            st["profile"] = prefs.get("profile", 0)
+            st["experimentalEngines"] = bool(
+                prefs.get("experimentalEngines"))
             # Snapshot: the stop endpoint nulls `runner`
             # from a worker thread; reading it after the
             # None-check raised and dropped the socket on

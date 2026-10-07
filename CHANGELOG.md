@@ -53,6 +53,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Web engines: WebRTC AEC3 + NKF-AEC (desktop parity).** The web
+  chain runs the same PROFILES table as the desktop (DTLN-AEC 128
+  / WebRTC AEC3 / NKF-AEC) with the same experimental-engines
+  gating, live hot-swap (streams are engine-agnostic), and DTLN-NS
+  stacked after every engine. AEC3 is `pywebrtc-audio`'s
+  EchoCanceller (the real Chrome code: AEC + HP filter, no NS/AGC
+  — 36.9 dB echo cut on the synth pair). NKF is a faithful NumPy
+  port of `NKFImpl` + the wrapper stages (periodic-Hann core,
+  1/16 level scaling, TDC alignment, shadow/crossfade exposure,
+  divergence guard, loop telemetry, howl backstop with the -24 dB
+  floor) running the same `models/nkf.onnx` — the offline synth
+  shows the healthy fingerprint (TDC locks the true 800-sample
+  delay, exposed, 0 guard resets, 0.0 dB backstop on voice).
+  Missing backends disable their profile options instead of
+  failing at Start; NKF lag/lock/exposure/backstop telemetry
+  mirrors the desktop lines in both web UIs.
+  (`web/aec3.py`, `web/nkf.py`, `pywebrtc-audio` + `onnxruntime`
+  in `web/requirements.txt`.)
+
 - **Web UI optional Rust accelerator (`ext/aec_dsp`).** PyO3
   extension (rustfft + numpy crates, maturin build) replacing the
   hot DSP kernels in `web/dsp.py` — int16/float converts (exact),
