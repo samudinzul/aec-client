@@ -110,6 +110,15 @@ static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> relea
 // repeat); release requires two windows of PROOF the engine is
 // cancelling again (wire-vs-mic depth <= BS_HEAL_D on non-tonal audio)
 // — releasing on mere silence would let the howl regrow and cycle.
+static const int    BS_BIN_RUN  = 40;      // same-bin (±1) run marking a
+                                            // STABLE tone (~1.3 s): a howl
+                                            // sits on one bin for seconds
+                                            // (fixed loop delay); voice pitch
+                                            // moves and consonants break the
+                                            // run. Sustained sung vowels can
+                                            // still trip it — correctly, they
+                                            // ARE sustained tones — and heal
+                                            // the moment phonation changes.
 static const int    BS_FRAMES   = 64;      // frames per window (64x512 = 2.048 s)
 static const int    BS_RUN      = 2;       // held windows -> attack (~4 s)
 static const int    BS_HEAL_RUN = 2;       // clean-cancel windows -> release
@@ -202,6 +211,8 @@ struct NkfHandle {
     float bsGain = 1.0f, bsTarget = 1.0f;
     int   bsHits = 0, bsFrames = 0;
     int   bsRun = 0, bsHeal = 0, bsAttacks = 0;
+    int   bsBinLast = -1000000, bsBinRun = 0;  // tonal-center stability
+    int   bsBinBest = 0, bsBinDom = -1;        // window max run + its bin
     bool  bsActive = false;
     bool  bsEnabled = true;             // NKF_BACKSTOP=0 disables the trim
     // Frame-analysis scratch (512-pt Hann + r2c), built in NkfNew.
@@ -449,7 +460,10 @@ static void NkfDetectLoop(NkfHandle* h) {
 // One 512-sample frame of the wire: is it a single dominant tone?
 // Mean out, Hann, r2c, then best 3-bin power sum vs total — a howl
 // frame lands ~0.45+, a voiced frame spreads over harmonics (<0.33).
-static bool NkfFrameTonal(NkfHandle* h, const float* v) {
+// bestBin receives the center bin of the winning window (-1 on
+// silence) so callers can tell a FIXED tone (howl: same bin for
+// seconds) from a MOVING one (voice pitch wanders bin to bin).
+static bool NkfFrameTonal(NkfHandle* h, const float* v, int* bestBin) {
     double mean = 0.0;
     for (int i = 0; i < NKF_BLOCK_SHIFT; i++) mean += (double)v[i];
     mean /= (double)NKF_BLOCK_SHIFT;
@@ -464,12 +478,14 @@ static bool NkfFrameTonal(NkfHandle* h, const float* v) {
         return std::norm(h->bsSpec[(size_t)k]);
     };
     double tot = 0.0, best3 = 0.0;
+    int bestK = -1;
     for (int k = 1; k <= NKF_BLOCK_SHIFT / 2; k++) tot += powAt(k);
-    if (!(tot > 1e-30)) return false;                 // silence
+    if (!(tot > 1e-30)) { if (bestBin) *bestBin = -1; return false; }
     for (int k = 1; k <= NKF_BLOCK_SHIFT / 2; k++) {
         const double s = powAt(k - 1) + powAt(k) + powAt(k + 1);
-        if (s > best3) best3 = s;
+        if (s > best3) { best3 = s; bestK = k; }
     }
+    if (bestBin) *bestBin = bestK;
     return best3 / tot >= BS_TONAL;
 }
 
@@ -494,10 +510,19 @@ static void NkfBackstopWindow(NkfHandle* h) {
     // engine is amplifying (positive depth).
     const bool floors = micMs >= BS_MIC_MS && depth <= BS_HEAL_D;
     const bool tonal = frames > 0 && h->bsHits >= BS_HITS;
+    // Stable center: the dominant bin held (±1) for BS_BIN_RUN+
+    // blocks this window. A howl parks; voiced speech wanders, so a
+    // tonal-but-moving wire is voice, not feedback.
+    const bool stable = h->bsBinBest >= BS_BIN_RUN;
     if (h->bsHits >= BS_HITS / 2 || h->bsActive)
-        NkfPhase("t=%.2f bs-watch hits=%d/%d micMs=%.2e outMs=%.2e d=%.1f "
-                 "run=%d heal=%d", NKF_T(h), h->bsHits, frames, micMs, outMs,
+        NkfPhase("t=%.2f bs-watch hits=%d/%d dom=%d stable=%d micMs=%.2e outMs=%.2e d=%.1f "
+                 "run=%d heal=%d", NKF_T(h), h->bsHits, frames, h->bsBinDom,
+                 stable ? 1 : 0, micMs, outMs,
                  depth, h->bsRun, h->bsHeal);
+    // Attack stays on plain tonality (fast — catches fixed AND
+    // sweeping howls). Stability gates only the HOLD vs HEAL split
+    // below: a tonal-but-moving wire is voiced speech, which must be
+    // allowed to heal even while it reads tonal.
     if (tonal) {
         h->bsHeal = 0;
         if (h->bsRun < 1000) h->bsRun++;
@@ -514,7 +539,14 @@ static void NkfBackstopWindow(NkfHandle* h) {
                          20.0 * log10((double)want));
             }
         }
-    } else if (!tonal && floors && depth <= BS_HEAL_D) {
+    // Heal accrues on non-tonal windows (classic case) AND on
+    // tonal-but-unstable ones (voiced speech: pitch wanders bin to
+    // bin, so no 40-block run forms). A fixed-center howl keeps
+    // `stable` true and can never heal — the trim holds. Known
+    // trade: a fast-SWEEPING howl also reads unstable and may pump
+    // (release, regrow, re-attack); stable loop tones, the common
+    // case, are unaffected.
+    } else if ((!tonal || !stable) && floors && depth <= BS_HEAL_D) {
         h->bsRun = 0;
         if (h->bsHeal < 1000) h->bsHeal++;
         if (h->bsHeal >= BS_HEAL_RUN && h->bsActive) {
@@ -533,6 +565,8 @@ static void NkfBackstopWindow(NkfHandle* h) {
     h->depMic = h->depOut = 0.0;
     h->depSamples = 0;
     h->bsHits = h->bsFrames = 0;
+    h->bsBinBest = 0;
+    h->bsBinDom = -1;
 }
 
 // Ship finished post-NKF samples (float, ±1) to the wire: outHist
@@ -756,7 +790,28 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             h->depMic += sm;
             h->depOut += so;
             h->depSamples += NKF_BLOCK_SHIFT;
-            if (NkfFrameTonal(h, h->emitBlock)) h->bsHits++;
+            int bb = -1;
+            if (NkfFrameTonal(h, h->emitBlock, &bb)) {
+                h->bsHits++;
+                // Tonal-center stability run: same bin (±1) keeps
+                // counting, a moved center restarts it. Voice pitch
+                // wanders bin to bin; a howl parks on one for seconds.
+                // (Non-tonal blocks take the else branch below, which
+                // also restarts the run.)
+                if (bb >= h->bsBinLast - 1 && bb <= h->bsBinLast + 1) {
+                    h->bsBinRun++;
+                } else {
+                    h->bsBinLast = bb;
+                    h->bsBinRun = 1;
+                }
+                if (h->bsBinRun > h->bsBinBest) {
+                    h->bsBinBest = h->bsBinRun;
+                    h->bsBinDom = h->bsBinLast;
+                }
+            } else {
+                h->bsBinLast = -1000000;
+                h->bsBinRun = 0;
+            }
             if (++h->bsFrames >= BS_FRAMES) NkfBackstopWindow(h);
         }
 

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Desktop NKF backstop release on voiced speech.** The heal
+  path additionally accrues on tonal-but-pitch-moving windows
+  (tracked dominant-bin runs: a howl parks on one bin for 1.3 s+,
+  voice wanders), so a false trigger on voiced speech releases
+  within ~4 s instead of latching forever. Fixed-center howls
+  still hold the trim; known trade is bounded pumping on
+  fast-sweeping howls.
 - **Desktop NKF anti-wander + backstop floor.** TDC no longer
   teleports between periodicity artifacts (coarse pass needs a
   clearly-better peak to displace the delay, near-ties keep the
