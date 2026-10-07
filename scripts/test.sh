@@ -62,6 +62,7 @@ if [ "$NATIVE" -ne 0 ]; then
     fi
     if [ "${native_ok:-0}" -ne 0 ]; then
         OUT_WAV="$(mktemp "${TMPDIR:-/tmp}/nkf_smoke_XXXXXX").wav"
+        rm -f "${OUT_WAV%.wav}"  # mktemp created this empty stub; we use name + .wav
         rm -f nkf-phase.log
         if build/nkf_smoke.exe --synth 10 "$OUT_WAV" > /tmp/nkf_smoke_out.txt 2>&1; then
             VERDICT=$(grep -a "verdict:" /tmp/nkf_smoke_out.txt | tail -1 || true)
