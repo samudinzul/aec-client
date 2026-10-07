@@ -532,10 +532,13 @@ static void NkfBackstopWindow(NkfHandle* h) {
                  "run=%d heal=%d", NKF_T(h), h->bsHits, frames, h->bsBinDom,
                  stable ? 1 : 0, micMs, outMs,
                  depth, h->bsRun, h->bsHeal);
-    // Attack stays on plain tonality (fast — catches fixed AND
-    // sweeping howls). Stability gates only the HOLD vs HEAL split
-    // below: a tonal-but-moving wire is voiced speech, which must be
-    // allowed to heal even while it reads tonal.
+    // Attack needs consecutive tonal windows; every other outcome
+    // below resets the run counter, so in practice the two windows
+    // must ALSO be center-stable (a tonal-but-moving window lands in
+    // a run-resetting branch). Net effect, verified on the synth:
+    // fixed-center howls attack, wandering voices never do. A
+    // fast-SWEEPING howl likewise never attacks — accepted trade
+    // (stable loop tones, the dangerous case, always qualify).
     if (tonal) {
         h->bsHeal = 0;
         if (h->bsRun < 1000) h->bsRun++;
@@ -555,10 +558,7 @@ static void NkfBackstopWindow(NkfHandle* h) {
     // Heal accrues on non-tonal windows (classic case) AND on
     // tonal-but-unstable ones (voiced speech: pitch wanders bin to
     // bin, so no 40-block run forms). A fixed-center howl keeps
-    // `stable` true and can never heal — the trim holds. Known
-    // trade: a fast-SWEEPING howl also reads unstable and may pump
-    // (release, regrow, re-attack); stable loop tones, the common
-    // case, are unaffected.
+    // `stable` true and can never heal — the trim holds.
     } else if ((!tonal || !stable) && floors && depth <= BS_HEAL_D) {
         h->bsRun = 0;
         if (h->bsHeal < 1000) h->bsHeal++;
