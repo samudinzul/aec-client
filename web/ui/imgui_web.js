@@ -280,10 +280,8 @@ class WebImGuiUI {
         this.el.ns.addEventListener('change', () => this.savePrefs());
         this.el.profile.addEventListener('change', () => this.savePrefs());
         this.el.exp.addEventListener('change', () => {
-            // Unchecking hides the extra profiles: fall back to
-            // DTLN immediately (desktop Behavior-tab parity).
-            if (!this.el.exp.checked && this.el.profile.value !== '0')
-                this.el.profile.value = '0';
+            // The list rebuild (applyEngineAvailability) drops the
+            // hidden options and falls back to DTLN by itself.
             this.savePrefs();
             this.applyEngineAvailability();
         });
@@ -328,25 +326,27 @@ class WebImGuiUI {
     }
 
     applyEngineAvailability(engines) {
-        // Two independent gates, same as the desktop: an option is
-        // listed only with the experimental flag ON (index 0 always)
-        // AND its backend present. Missing either disables it
-        // instead of failing at Start.
+        // Desktop parity: extra profiles are HIDDEN until the
+        // experimental flag is ticked (not greyed — the desktop
+        // skips them in the combo entirely). A ticked-but-missing
+        // backend stays visible yet disabled ("(unavailable)")
+        // instead of failing at Start. Rebuilds only on change,
+        // so the 10 Hz state ticks never disturb an open list.
         if (engines !== undefined) this._engines = engines;
         const exp = this.el.exp.checked;
         const names = ['dtln', 'aec3', 'nkf'];
-        const opts = this.el.profile.options;
-        for (let i = 0; i < opts.length && i < names.length; i++) {
-            const gated = i !== 0 && !exp;
+        const labels = ['DTLN-AEC 128', 'WebRTC AEC3', 'NKF-AEC'];
+        let html = '';
+        for (let i = 0; i < 3; i++) {
+            if (i !== 0 && !exp) continue;
             const missing = this._engines && this._engines[names[i]] === false;
-            const ok = !gated && !missing;
-            opts[i].disabled = !ok;
-            let label = opts[i].textContent.replace(' (unavailable)', '')
-                .replace(' (experimental)', '');
-            if (gated) label += ' (experimental)';
-            else if (missing) label += ' (unavailable)';
-            opts[i].textContent = label;
+            html += '<option value="' + i + '"' + (missing ? ' disabled=""' : '') + '>' +
+                labels[i] + (missing ? ' (unavailable)' : '') + '</option>';
         }
+        const sel = this.el.profile.value;
+        if (this.el.profile.innerHTML !== html) this.el.profile.innerHTML = html;
+        const stillThere = [...this.el.profile.options].some((o) => o.value === sel);
+        this.el.profile.value = stillThere ? sel : '0';
     }
 
     showEngineInfo(st) {

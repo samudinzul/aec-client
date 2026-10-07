@@ -230,17 +230,18 @@ function applyEngineAvailability(engines) {
   if (engines !== undefined) window._enginesCache = engines;
   const exp = $('expOn').checked;
   const names = ['dtln', 'aec3', 'nkf'];
-  const opts = $('profile').options;
-  for (let i = 0; i < opts.length && i < names.length; i++) {
-    const gated = i !== 0 && !exp;
+  const labels = ['DTLN-AEC 128', 'WebRTC AEC3', 'NKF-AEC'];
+  let html = '';
+  for (let i = 0; i < 3; i++) {
+    if (i !== 0 && !exp) continue;
     const missing = window._enginesCache && window._enginesCache[names[i]] === false;
-    const ok = !gated && !missing;
-    opts[i].disabled = !ok;
-    let label = opts[i].text.replace(' (unavailable)', '').replace(' (experimental)', '');
-    if (gated) label += ' (experimental)';
-    else if (missing) label += ' (unavailable)';
-    opts[i].text = label;
+    html += '<option value="' + i + '"' + (missing ? ' disabled=""' : '') + '>' +
+      labels[i] + (missing ? ' (unavailable)' : '') + '</option>';
   }
+  const sel = $('profile').value;
+  if ($('profile').innerHTML !== html) $('profile').innerHTML = html;
+  const stillThere = [...$('profile').options].some(o => o.value === sel);
+  $('profile').value = stillThere ? sel : '0';
 }
 function showEngineInfo(st) {
   const box = $('enginfo');
@@ -274,8 +275,6 @@ $('rescan').onclick = loadDevices;
 $('nsOn').addEventListener('change', savePrefs);
 $('profile').addEventListener('change', savePrefs);
 $('expOn').addEventListener('change', () => {
-  if (!$('expOn').checked && $('profile').value !== '0')
-    $('profile').value = '0';
   savePrefs();
   applyEngineAvailability();
 });
