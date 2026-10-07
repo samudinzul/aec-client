@@ -5,12 +5,16 @@
 # console shows only progress, failures, and the size audit.
 # Pass --verbose (-v) to stream the full tool output live.
 #
-# Builds ONLY the app (aec_gui.exe) by default — no diagnostic tools,
-# no stray logs left behind: a clean build directory.
+# Two different kinds of "clean", kept apart on purpose:
+#   - CLEAN OUTPUT (always, no flag): builds ONLY the app
+#     (aec_gui.exe) — no nkf_smoke, no stray logs left in build/.
+#   - FRESH CONFIGURE (--fresh): wipe build/ first, then configure
+#     from scratch. Use after CMakeLists changes or when the cache
+#     looks stale. (The old --clean flag means this too.)
 #
 # Usage (MSYS2 UCRT64 bash, from the repo root):
-#   scripts/build.sh              # clean-configure + build app (MinSizeRel)
-#   scripts/build.sh --clean      # wipe build/ first (stale objects gone)
+#   scripts/build.sh              # build app (MinSizeRel)
+#   scripts/build.sh --fresh      # wipe build/, then build app
 #   scripts/build.sh --debug      # debuggable build instead of size build
 #   scripts/build.sh --with-smoke # also build nkf_smoke.exe (needed by
 #                                 # scripts/test.sh --native-only)
@@ -32,19 +36,20 @@
 # to ship.
 set -euo pipefail
 
-CLEAN=0
+FRESH=0
 WITH_SMOKE=0
 VERBOSE=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
     case "$a" in
-        --clean) CLEAN=1 ;;
+        --fresh) FRESH=1 ;;
+        --clean) echo "(--clean renamed to --fresh; treating as --fresh)" >&2; FRESH=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
         --with-smoke) WITH_SMOKE=1 ;;
         --app-only) echo "(--app-only is now the default; flag ignored)" >&2 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,31p' "$0"; exit 0 ;;
+            sed -n '2,35p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
@@ -54,7 +59,7 @@ test -f CMakeLists.txt -a -d src || {
 command -v cmake >/dev/null || { echo "cmake not found" >&2; exit 1; }
 command -v ninja >/dev/null || { echo "ninja not found" >&2; exit 1; }
 
-if [ "$CLEAN" -ne 0 ]; then
+if [ "$FRESH" -ne 0 ]; then
     echo "-- removing build/ (fresh configure)"
     rm -rf build
 fi
