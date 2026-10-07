@@ -47,24 +47,22 @@ reintroduces the exact problem.
 ## Setup
 
 **One click:** double-click `web\start.bat`. It creates
-the local environment, installs the base + window
-packages (first run only, ~1 min, needs internet), then
-opens the GUI in a native app window (Edge WebView2 —
-built into Windows 10/11, so no browser is needed) once
-the models are loaded. The experimental engines
-(WebRTC AEC3, NKF-AEC) stay opt-in:
-`pip install -r web\requirements-engines.txt` inside the
-venv — until then their profiles show "(unavailable)".
-Click it again any time to open another window against
-the running server. Stop: close the window — the server
-stops with it — or press Ctrl+C in the console. The
-Appearance tab minimizes to the system tray instead (on
-by default — the server keeps running; the console
-hides once the UI loads (no taskbar button), so
-only the window is visible, and only the tray
-icon is visible while the window is closed; Show
-restores both, Quit from the tray icon stops
-it).
+the local environment, installs the full package set
+(first run only, ~1 min, needs internet — base server,
+native window, and all 3 engines), then opens the GUI
+in a native app window (Edge WebView2 — built into
+Windows 10/11, so no browser is needed) once the models
+are loaded. The WebRTC AEC3 / NKF-AEC profiles appear
+once you tick "Show experimental engines" in Appearance
+-> Behavior. Click it again any time to open another
+window against the running server. Stop: close the
+window — the server stops with it — or press Ctrl+C in
+the console. The Appearance tab minimizes to the system
+tray instead (on by default — the server keeps running;
+the console hides once the UI loads (no taskbar button),
+so only the window is visible, and only the tray icon
+is visible while the window is closed; Show restores
+both, Quit from the tray icon stops it).
 
 **Leaner (less RAM, no extra processes):** double-click
 `web\server.bat` instead. Same setup, but it installs only
@@ -74,11 +72,11 @@ browser — no WebView2 window, no extra renderer processes.
 Close the `aec-web server` window to stop. Either launcher
 is pure script: no `.exe`, no installer, nothing for
 antivirus to flag. To slim an existing full install, delete
-the `.venv` folder once and let `server.bat` recreate it;
-to get the experimental engines back later,
-`pip install -r web\requirements-engines.txt` (or run
-`start.bat` once — the UI marks missing backends
-"(unavailable)" instead of failing).
+the `.venv` folder once and let `server.bat` recreate it
+(DTLN profiles keep working; the extra profiles show
+"(unavailable)" until their packages exist — get them back
+any time with `pip install -r web\requirements-engines.txt`
+inside the venv, or by running `start.bat` once).
 
 Running start.bat inside Windows Terminal?
 The terminal window itself stays (it holds your

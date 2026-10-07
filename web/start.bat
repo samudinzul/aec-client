@@ -62,11 +62,9 @@ if not exist ".venv\Scripts\python.exe" (
 
 call .venv\Scripts\activate
 echo [-] installing packages - skipped if up to date.
-echo [-] (base + native window; experimental engines stay opt-in:
-echo [-]  pip install -r web\requirements-engines.txt - or pick a
-echo [-]  DTLN-only profile, which is the default anyway.)
-python -m pip install -q --disable-pip-version-check -r web\requirements-base.txt && ^
-  python -m pip install -q --disable-pip-version-check -r web\requirements-window.txt
+echo [-] (full set: base + native window + all 3 engines. For the
+echo [-]  lean install instead, use server.bat.)
+python -m pip install -q --disable-pip-version-check -r web\requirements.txt
 if errorlevel 1 (
   echo [-] ERROR - pip install failed - check your internet connection.
   echo %DATE% %TIME% pip-failed >> web\start.log

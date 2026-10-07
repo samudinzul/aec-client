@@ -29,7 +29,10 @@ QUICK START
 3. Double-click web\start.bat.
    - First run: creates a local Python environment and
      installs packages (~1 minute), then starts the
-     server and opens the GUI automatically.
+     server and opens the GUI automatically. All 3
+     engines included (DTLN-AEC 128, WebRTC AEC3,
+     NKF-AEC - the last two unlock by ticking "Show
+     experimental engines" in Appearance).
    - The console window IS the server log - close it or
      press Ctrl+C to stop.
    - Click start.bat again any time to reopen the GUI
@@ -38,9 +41,6 @@ QUICK START
      packages (smaller environment, DTLN profiles only)
      and opens the GUI in your own browser instead of
      a separate window.
-   - The experimental engines (WebRTC AEC3, NKF-AEC)
-     need one extra install inside the environment:
-     pip install -r web\requirements-engines.txt
 
 4. In the GUI, pick your devices:
    - Microphone:        your physical microphone
