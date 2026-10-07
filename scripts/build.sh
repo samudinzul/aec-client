@@ -5,13 +5,16 @@
 # console shows only progress, failures, and the size audit.
 # Pass --verbose (-v) to stream the full tool output live.
 #
+# Builds ONLY the app (aec_gui.exe) by default — no diagnostic tools,
+# no stray logs left behind: a clean build directory.
+#
 # Usage (MSYS2 UCRT64 bash, from the repo root):
-#   scripts/build.sh            # clean-configure + build (MinSizeRel)
-#   scripts/build.sh --clean    # wipe build/ first (stale objects gone)
-#   scripts/build.sh --debug    # debuggable build instead of size build
-#   scripts/build.sh --app-only # build just aec_gui.exe (no nkf_smoke.exe,
-#                               # no diagnostic logs left behind)
-#   scripts/build.sh -v         # verbose: full cmake/ninja output
+#   scripts/build.sh              # clean-configure + build app (MinSizeRel)
+#   scripts/build.sh --clean      # wipe build/ first (stale objects gone)
+#   scripts/build.sh --debug      # debuggable build instead of size build
+#   scripts/build.sh --with-smoke # also build nkf_smoke.exe (needed by
+#                                 # scripts/test.sh --native-only)
+#   scripts/build.sh -v           # verbose: full cmake/ninja output
 #
 # What "lightweight" means here:
 #   - MinSizeRel (-Os -DNDEBUG) by default, not Release (-O3)
@@ -30,17 +33,18 @@
 set -euo pipefail
 
 CLEAN=0
-APP_ONLY=0
+WITH_SMOKE=0
 VERBOSE=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
     case "$a" in
         --clean) CLEAN=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
-        --app-only) APP_ONLY=1 ;;
+        --with-smoke) WITH_SMOKE=1 ;;
+        --app-only) echo "(--app-only is now the default; flag ignored)" >&2 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,28p' "$0"; exit 0 ;;
+            sed -n '2,31p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
@@ -104,19 +108,23 @@ run_step "configure (${BUILD_TYPE})" \
     "${CC_LAUNCHER[@]:-}"
 
 NPROC=$(nproc 2>/dev/null || echo 4)
-if [ "$APP_ONLY" -ne 0 ]; then
-    run_step "build aec_gui (-j${NPROC})" \
-        cmake --build build -j "$NPROC" --target aec_gui
-    # A clean app build leaves no diagnostic tools or logs behind.
-    rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
-else
+if [ "$WITH_SMOKE" -ne 0 ]; then
     run_step "build all (-j${NPROC})" \
         cmake --build build -j "$NPROC"
+else
+    run_step "build aec_gui (-j${NPROC})" \
+        cmake --build build -j "$NPROC" --target aec_gui
+    # A clean build leaves no diagnostic tools or logs behind.
+    rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
 fi
 
 echo ""
 echo "-- size audit (bloat check)"
-ls -la build/aec_gui.exe build/nkf_smoke.exe 2>/dev/null || true
+if [ "$WITH_SMOKE" -ne 0 ]; then
+    ls -la build/aec_gui.exe build/nkf_smoke.exe 2>/dev/null || true
+else
+    ls -la build/aec_gui.exe 2>/dev/null || true
+fi
 echo ""
 echo "DLLs next to the exe:"
 du -h build/*.dll 2>/dev/null || echo "(no DLLs staged)"
@@ -124,5 +132,10 @@ echo ""
 echo "Models (bundled, unchanged by build flags):"
 du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflite 2>/dev/null || true
 echo ""
-echo "BUILD OK: build/aec_gui.exe + build/nkf_smoke.exe"
-echo "Next: run ./build/nkf_smoke.exe --synth 15 out.wav, or ship with scripts/make-release.sh <ver>"
+if [ "$WITH_SMOKE" -ne 0 ]; then
+    echo "BUILD OK: build/aec_gui.exe + build/nkf_smoke.exe"
+    echo "Next: scripts/test.sh --native-only, or ship with scripts/make-release.sh"
+else
+    echo "BUILD OK: build/aec_gui.exe"
+    echo "Next: ship with scripts/make-release.sh (needs --with-smoke for scripts/test.sh --native-only)"
+fi

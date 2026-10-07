@@ -17,7 +17,7 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 ## Daily loop
 
 ```bash
-scripts/build.sh --clean --app-only   # build aec_gui.exe, lean, no test tools
+scripts/build.sh --clean              # build aec_gui.exe only (smoke tools need --with-smoke)
 scripts/test.sh                        # offline tests (native + web)
 ```
 
@@ -25,7 +25,7 @@ scripts/test.sh                        # offline tests (native + web)
 
 | Script | Purpose | Typical use |
 |--------|---------|-------------|
-| `build.sh` | Configure + build (MinSizeRel, stripped, `--gc-sections`, ccache, size audit) | `scripts/build.sh --clean` · `--app-only` skips `nkf_smoke.exe` · `--debug` for a debuggable build |
+| `build.sh` | Configure + build the app only (MinSizeRel, stripped, `--gc-sections`, ccache, size audit) | `scripts/build.sh --clean` · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `--debug` for a debuggable build |
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
 | `make-release.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release.sh` (version defaults to `APP_VERSION`) |
 | `make-web-release.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-web-release.sh` |
