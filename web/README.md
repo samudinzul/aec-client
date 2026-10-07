@@ -61,7 +61,17 @@ hides once the UI loads (no taskbar button), so
 only the window is visible, and only the tray
 icon is visible while the window is closed; Show
 restores both, Quit from the tray icon stops
-it). Running start.bat inside Windows Terminal?
+it).
+
+**Leaner (less RAM, no extra processes):** double-click
+`web\server.bat` instead. Same setup, but the server runs
+minimized in the background and the GUI opens in your
+already-running browser — no WebView2 window, no extra
+renderer processes. Close the `aec-web server` window
+to stop. Either launcher is pure script: no `.exe`, no
+installer, nothing for antivirus to flag.
+
+Running start.bat inside Windows Terminal?
 The terminal window itself stays (it holds your
 own tabs) — double-click start.bat instead for
 the fully hidden experience, or minimize the
