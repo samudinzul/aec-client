@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # build.sh — configure + build the desktop app, lean and bloat-free.
 #
+# Quiet by default: cmake/ninja chatter goes to build/build.log, the
+# console shows only progress, failures, and the size audit.
+# Pass --verbose (-v) to stream the full tool output live.
+#
 # Usage (MSYS2 UCRT64 bash, from the repo root):
 #   scripts/build.sh            # clean-configure + build (MinSizeRel)
 #   scripts/build.sh --clean    # wipe build/ first (stale objects gone)
 #   scripts/build.sh --debug    # debuggable build instead of size build
 #   scripts/build.sh --app-only # build just aec_gui.exe (no nkf_smoke.exe,
 #                               # no diagnostic logs left behind)
+#   scripts/build.sh -v         # verbose: full cmake/ninja output
 #
 # What "lightweight" means here:
 #   - MinSizeRel (-Os -DNDEBUG) by default, not Release (-O3)
@@ -26,14 +31,16 @@ set -euo pipefail
 
 CLEAN=0
 APP_ONLY=0
+VERBOSE=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
     case "$a" in
         --clean) CLEAN=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
         --app-only) APP_ONLY=1 ;;
+        -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,24p' "$0"; exit 0 ;;
+            sed -n '2,28p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
@@ -47,6 +54,26 @@ if [ "$CLEAN" -ne 0 ]; then
     echo "-- removing build/ (fresh configure)"
     rm -rf build
 fi
+mkdir -p build
+
+LOG="build/build.log"
+# run_step <label> <cmd...>: stream output live under -v, else capture
+# to $LOG and print only OK/FAILED (+ tail on failure).
+run_step() {
+    local label="$1"; shift
+    if [ "$VERBOSE" -ne 0 ]; then
+        "$@"
+        return
+    fi
+    echo "-- ${label} (log: ${LOG})"
+    if "$@" >>"$LOG" 2>&1; then
+        echo "   ${label} OK"
+    else
+        echo "${label} FAILED — last 30 lines of ${LOG}:" >&2
+        tail -n 30 "$LOG" >&2 || true
+        exit 1
+    fi
+}
 
 # Size-first flags. Passed on the command line (not baked into
 # CMakeLists) so a plain `cmake -B build` still gives a normal build.
@@ -65,22 +92,26 @@ else
     echo "-- ccache: not installed (pacman -S ccache for faster rebuilds)"
 fi
 
-echo "-- configure (${BUILD_TYPE})"
+# Fresh log per run (build/ itself is gitignored).
+: > "$LOG"
+
 # shellcheck disable=SC2086
-cmake -B build -G Ninja \
+run_step "configure (${BUILD_TYPE})" \
+    cmake -B build -G Ninja \
     -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
     -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
     -DCMAKE_EXE_LINKER_FLAGS="${LINK_FLAGS}" \
     "${CC_LAUNCHER[@]:-}"
 
-echo "-- build"
 NPROC=$(nproc 2>/dev/null || echo 4)
 if [ "$APP_ONLY" -ne 0 ]; then
-    cmake --build build -j "$NPROC" --target aec_gui
+    run_step "build aec_gui (-j${NPROC})" \
+        cmake --build build -j "$NPROC" --target aec_gui
     # A clean app build leaves no diagnostic tools or logs behind.
     rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
 else
-    cmake --build build -j "$NPROC"
+    run_step "build all (-j${NPROC})" \
+        cmake --build build -j "$NPROC"
 fi
 
 echo ""
