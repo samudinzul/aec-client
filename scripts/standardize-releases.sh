@@ -33,13 +33,15 @@ if [ -n "$VERSION" ]; then
 fi
 
 echo "== titles: standardize all releases =="
-# Every tag that exists on the remote (sorted)
+# Every tag that exists on the remote (sorted). Tag names come from
+# --json (column positions in the human table are version-dependent —
+# an awk-$NF read once silently matched zero releases).
 while IFS= read -r t; do
     [ -n "$t" ] || continue
     gh release edit "$t" --repo "$REPO" --title "AEC Client $t" >/dev/null
     echo "   AEC Client $t"
 done < <(gh release list --repo "$REPO" --limit 100 \
-            | awk -F'\t' '{print $NF}' \
+            --json tagName --jq '.[].tagName' \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             | sort -V)
 

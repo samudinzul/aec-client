@@ -34,7 +34,7 @@ for a in "$@"; do
         --lean) LEAN=1 ;;
         --run) RUN=1 ;;
         -h|--help)
-            sed -n '2,17p' "$0"; exit 0 ;;
+            sed -n '2,25p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done

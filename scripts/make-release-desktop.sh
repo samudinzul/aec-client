@@ -93,6 +93,31 @@ for d in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
 done
 [ $fail -ne 0 ] && exit 1
 
+# ============================================================
+#  Code signing (optional, off by default) — runs BEFORE zipping
+#  so the signature ships inside the zip (signing after would only
+#  sign the staging copy nobody downloads).
+#
+#  The unsigned build trips Microsoft's Wacatac.B!ml heuristic
+#  (unsigned PE + bundled ML runtimes). A code-signing certificate
+#  is the only fix. Set AEC_SIGN=1 to enable; you must also have
+#  the cert installed in your cert store and signtool on PATH.
+#
+#  Two routes:
+#    Paid — DigiCert / Sectigo EV code-signing cert (~$200-400/yr).
+#    Free — Microsoft Trusted Signing (Azure account, no cost):
+#          signtool sign /f <cert.pfx> /p <password> ...
+#          or the az signtool flow. See README.md.
+# ============================================================
+if [ "${AEC_SIGN:-0}" = "1" ]; then
+    command -v signtool >/dev/null || { echo "AEC_SIGN=1 but signtool not found" >&2; exit 1; }
+    [ -n "${AEC_CERT_SHA1:-}" ] || { echo "AEC_SIGN=1 but AEC_CERT_SHA1 unset" >&2; exit 1; }
+    signtool sign /v /sha1 "${AEC_CERT_SHA1}" \
+        /t "${AEC_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
+        "$STAGE/aec_gui.exe"
+    echo "signed aec_gui.exe"
+fi
+
 rm -f "release/AEC-Client-v${VER}-win64.zip"
 (cd release && zip -qr "AEC-Client-v${VER}-win64.zip" "AEC-Client-v${VER}-win64")
 
@@ -108,31 +133,6 @@ bad = [n for n in names if pat.search(n)]
 assert not bad, f'forbidden files in zip: {bad}'
 print(f'zip entries: {len(names)}, single root OK, no strays')
 "
-
-# ============================================================
-#  Code signing (optional, off by default).
-#
-#  The unsigned build trips Microsoft's Wacatac.B!ml heuristic
-#  (unsigned PE + bundled ML runtimes). A code-signing certificate
-#  is the only fix. Set AEC_SIGN=1 to enable; you must also have
-#  the cert installed in your cert store and signtool on PATH.
-#
-#  Two routes:
-#    Paid — DigiCert / Sectigo EV code-signing cert (~$200-400/yr).
-#    Free — Microsoft Trusted Signing (Azure account, no cost):
-#          signtool sign /f <cert.pfx> /p <password> ...
-#          or the az signtool flow. See README.md.
-# ============================================================
-if [ "${AEC_SIGN:-0}" = "1" ]; then
-    if ! command -v signtool >/dev/null; then
-        echo "AEC_SIGN=1 but signotool not found; skipping signing" >&2
-    else
-        signtool sign /v /sha1 "${AEC_CERT_SHA1:-}" \
-            /t "${AEC_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
-            "$STAGE/aec_gui.exe"
-        echo "signed aec_gui.exe"
-    fi
-fi
 
 echo "----"
 du -h "release/AEC-Client-v${VER}-win64.zip"

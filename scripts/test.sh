@@ -4,7 +4,7 @@
 # Usage (MSYS2 UCRT64 bash, from the repo root):
 #   scripts/test.sh                # every available suite
 #   scripts/test.sh --native-only  # desktop NKF engine only
-#   scripts/test.sh --web-only     # web DTLN chain only
+#   scripts/test.sh --web-only     # web engines only (all available)
 #
 # Suites:
 #   native — build/nkf_smoke.exe --synth 10: 10 s of loud-tonal ref
@@ -13,8 +13,9 @@
 #     ATTACK lines in a fresh nkf-phase.log. (A real howl WOULD
 #     attack — these expectations are specific to the synth.)
 #   web    — python -m web.test_offline --smoke: synthetic pair
-#     through the web chain. Expects SMOKE OK. Skipped (not failed)
-#     when models or ai-edge-litert are missing.
+#     through every available web engine (DTLN + AEC3 + NKF).
+#     Expects SMOKE OK. Skipped (not failed) when models or
+#     ai-edge-litert are missing.
 #
 # Exit code: 0 = all ran suites passed, 1 = a failure.
 set -euo pipefail
