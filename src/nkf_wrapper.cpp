@@ -121,7 +121,20 @@ static const int    BS_BIN_RUN  = 40;      // same-bin (±1) run marking a
                                             // the moment phonation changes.
 static const int    BS_FRAMES   = 64;      // frames per window (64x512 = 2.048 s)
 static const int    BS_RUN      = 2;       // held windows -> attack (~4 s)
-static const int    BS_HEAL_RUN = 2;       // clean-cancel windows -> release
+static const int    BS_HEAL_RUN = 1;       // qualifying windows -> release.
+                                            // Deliberately asymmetric with
+                                            // BS_RUN: field logs showed heal
+                                            // alternating with run forever
+                                            // (tonal-stable-ish wire), so 2
+                                            // consecutive never arrived and
+                                            // voiced speech stayed trimmed.
+                                            // A single window still has to
+                                            // qualify (loud mic + proven
+                                            // cancellation), and a true
+                                            // stable howl never qualifies —
+                                            // it holds. Worst case on a
+                                            // wobbly howl is bounded pumping
+                                            // under the -24 dB floor.
 static const float  BS_MIN_TARGET = 0.0625f; // deepest trim: -24.1 dB.
                                             // A sustained howl is still
                                             // clearly suppressed, but a
