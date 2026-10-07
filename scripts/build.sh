@@ -18,7 +18,13 @@
 #   scripts/build.sh --debug      # debuggable build instead of size build
 #   scripts/build.sh --with-smoke # also build nkf_smoke.exe (needed by
 #                                 # scripts/test.sh --native-only)
+#   scripts/build.sh --run        # build, then launch aec_gui.exe
 #   scripts/build.sh -v           # verbose: full cmake/ninja output
+#
+# --run launches build/aec_gui.exe detached (terminal stays free).
+# DLLs + models are staged next to the exe by CMake, and the app
+# anchors itself to the exe directory, so it runs from build/ as-is.
+# Harmless if already running: the app focuses the existing window.
 #
 # What "lightweight" means here:
 #   - MinSizeRel (-Os -DNDEBUG) by default, not Release (-O3)
@@ -38,6 +44,7 @@ set -euo pipefail
 
 FRESH=0
 WITH_SMOKE=0
+RUN=0
 VERBOSE=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
@@ -45,9 +52,10 @@ for a in "$@"; do
         --fresh) FRESH=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
         --with-smoke) WITH_SMOKE=1 ;;
+        --run) RUN=1 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,35p' "$0"; exit 0 ;;
+            sed -n '2,42p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
@@ -141,4 +149,13 @@ if [ "$WITH_SMOKE" -ne 0 ]; then
 else
     echo "BUILD OK: build/aec_gui.exe"
     echo "Next: ship with scripts/make-release.sh (needs --with-smoke for scripts/test.sh --native-only)"
+fi
+
+if [ "$RUN" -ne 0 ]; then
+    echo ""
+    if [ ! -x build/aec_gui.exe ]; then
+        echo "cannot --run: build/aec_gui.exe missing" >&2; exit 1
+    fi
+    ./build/aec_gui.exe & disown
+    echo "launched aec_gui.exe (pid $!)"
 fi

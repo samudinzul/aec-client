@@ -25,7 +25,7 @@ scripts/test.sh                        # offline tests (native + web)
 
 | Script | Purpose | Typical use |
 |--------|---------|-------------|
-| `build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/build.sh --fresh` · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
+| `build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/build.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
 | `make-release.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release.sh` (version defaults to `APP_VERSION`) |
 | `make-web-release.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-web-release.sh` |
