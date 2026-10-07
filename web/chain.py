@@ -56,11 +56,13 @@ def engine_available(name):
 
 
 class Chain:
-    def __init__(self, model_dir="models", num_threads=None):
+    def __init__(self, model_dir="models", num_threads=2):
         self.model_dir = model_dir
         # Inference thread cap, passed to every LiteRT interpreter.
-        # None keeps the LiteRT default; a small number trims the
-        # XNNPACK pool (and its spin-wait) on weak CPUs.
+        # 2, not None: measured invoke latency is identical-or-better
+        # than the default (0.044 vs 0.065 ms on DTLN stage 1 — the
+        # tiny models don't scale past 2 threads) while the XNNPACK
+        # pool holds 2 spinning threads instead of core-count.
         self.num_threads = num_threads
         self.dtln = None
         self.ns = None

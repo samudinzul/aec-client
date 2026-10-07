@@ -255,7 +255,7 @@ def main():
     # Single worker, always: extra workers would duplicate the
     # preloaded models in RAM and fight over the one audio pump.
     uvicorn.run(app, host="127.0.0.1", port=8000,
-                workers=1, log_level="info")
+                workers=1, log_level="warning")
 
 
 if __name__ == "__main__":
