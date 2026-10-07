@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# make-release.sh — assemble a clean AEC Client release bundle + zip.
+# make-release-desktop.sh — assemble a clean AEC Client release bundle + zip.
 #
-# Usage:  scripts/make-release.sh [version]  (default: APP_VERSION)
+# Usage:  scripts/make-release-desktop.sh [version]  (default: APP_VERSION)
 #
 # Contract (matches v1.2.x precedent, enforced by asserts below):
 #   release/AEC-Client-vX-win64/

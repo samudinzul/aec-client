@@ -2,7 +2,7 @@
 
 All neural-engine model files live in `models/` (required at **build and run time**:
 the CMake post-build step copies them next to `aec_gui.exe`, and
-`scripts/make-release.sh` bundles them into the release ZIP).
+`scripts/make-release-desktop.sh` bundles them into the release ZIP).
 `tensorflowlite_c.dll` lives in `libs/`.
 
 Sizes and SHA-256 hashes below were verified for the files currently in the tree.
@@ -72,5 +72,5 @@ Check with: `sha256sum models/*`
 
 - Without the DTLN pair, the DTLN profile (Voice Isolation) reports
   `Failed to load DTLN model` on Start; the other profiles are unaffected.
-- The release script (`scripts/make-release.sh`) hard-requires the model files
+- The release script (`scripts/make-release-desktop.sh`) hard-requires the model files
   in its allowlist — a missing file aborts the release with `missing model: ...`.

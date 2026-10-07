@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build.sh — configure + build the desktop app, lean and bloat-free.
+# make-build-desktop.sh — configure + build the desktop app, lean and bloat-free.
 #
 # Quiet by default: cmake/ninja chatter goes to build/build.log, the
 # console shows only progress, failures, and the size audit.
@@ -13,13 +13,13 @@
 #     looks stale.
 #
 # Usage (MSYS2 UCRT64 bash, from the repo root):
-#   scripts/build.sh              # build app (MinSizeRel)
-#   scripts/build.sh --fresh      # wipe build/, then build app
-#   scripts/build.sh --debug      # debuggable build instead of size build
-#   scripts/build.sh --with-smoke # also build nkf_smoke.exe (needed by
-#                                 # scripts/test.sh --native-only)
-#   scripts/build.sh --run        # build, then launch aec_gui.exe
-#   scripts/build.sh -v           # verbose: full cmake/ninja output
+#   scripts/make-build-desktop.sh              # build app (MinSizeRel)
+#   scripts/make-build-desktop.sh --fresh      # wipe build/, then build app
+#   scripts/make-build-desktop.sh --debug      # debuggable build instead of size build
+#   scripts/make-build-desktop.sh --with-smoke # also build nkf_smoke.exe (needed by
+#                                              # scripts/test.sh --native-only)
+#   scripts/make-build-desktop.sh --run        # build, then launch aec_gui.exe
+#   scripts/make-build-desktop.sh -v           # verbose: full cmake/ninja output
 #
 # --run launches build/aec_gui.exe detached (terminal stays free).
 # DLLs + models are staged next to the exe by CMake, and the app
@@ -38,7 +38,7 @@
 #   - nkf_smoke stays a console app (no -mwindows on it)
 #
 # After the build it prints a size audit (exe + DLLs + models) so
-# bloat is visible immediately. Pair with scripts/make-release.sh
+# bloat is visible immediately. Pair with scripts/make-release-desktop.sh
 # to ship.
 set -euo pipefail
 
@@ -145,10 +145,10 @@ du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflit
 echo ""
 if [ "$WITH_SMOKE" -ne 0 ]; then
     echo "BUILD OK: build/aec_gui.exe + build/nkf_smoke.exe"
-    echo "Next: scripts/test.sh --native-only, or ship with scripts/make-release.sh"
+    echo "Next: scripts/test.sh --native-only, or ship with scripts/make-release-desktop.sh"
 else
     echo "BUILD OK: build/aec_gui.exe"
-    echo "Next: ship with scripts/make-release.sh (needs --with-smoke for scripts/test.sh --native-only)"
+    echo "Next: ship with scripts/make-release-desktop.sh (needs --with-smoke for scripts/test.sh --native-only)"
 fi
 
 if [ "$RUN" -ne 0 ]; then

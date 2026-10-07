@@ -4,8 +4,8 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 
 ## Layout
 
-- **Tools** (this folder): `build.sh`, `test.sh`,
-  `make-release.sh`, `make-web-release.sh`,
+- **Tools** (this folder): `make-build-desktop.sh`, `test.sh`,
+  `make-release-desktop.sh`, `make-release-web.sh`,
   `standardize-releases.sh` — plus this file, the only `.md`
   here, which documents them.
 - **`templates/`**: release *inputs*, not docs — end-user README
@@ -17,7 +17,7 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 ## Daily loop
 
 ```bash
-scripts/build.sh --fresh             # wipe + rebuild aec_gui.exe only (smoke tools need --with-smoke)
+scripts/make-build-desktop.sh --fresh   # wipe + rebuild aec_gui.exe only (smoke tools need --with-smoke)
 scripts/test.sh                        # offline tests (native + web)
 ```
 
@@ -25,10 +25,10 @@ scripts/test.sh                        # offline tests (native + web)
 
 | Script | Purpose | Typical use |
 |--------|---------|-------------|
-| `build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/build.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
+| `make-build-desktop.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/make-build-desktop.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
-| `make-release.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release.sh` (version defaults to `APP_VERSION`) |
-| `make-web-release.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-web-release.sh` |
+| `make-release-desktop.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release-desktop.sh` (version defaults to `APP_VERSION`) |
+| `make-release-web.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-release-web.sh` |
 | `standardize-releases.sh` | Align GitHub release titles/notes (needs `gh auth login`) | `scripts/standardize-releases.sh` |
 
 `release-template.md`, `README.txt`, `README-web.txt` are inputs:

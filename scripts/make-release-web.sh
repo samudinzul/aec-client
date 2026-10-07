@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# make-web-release.sh — assemble the pure-Python web UI
+# make-release-web.sh — assemble the pure-Python web UI
 # release bundle + zip. A SEPARATE asset from the
 # desktop AEC-Client-vX-win64.zip (both sit on the
 # same GitHub release page).
 #
-# Usage:  scripts/make-web-release.sh [version]  (default: APP_VERSION)
+# Usage:  scripts/make-release-web.sh [version]  (default: APP_VERSION)
 #
 # Contract:
 #   release/AEC-Web-vX-win64/

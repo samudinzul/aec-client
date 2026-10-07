@@ -202,7 +202,7 @@ To sign a release, rebuild and re-zip with signing enabled:
 AEC_SIGN=1 \
 AEC_CERT_SHA1="<your cert thumbprint>" \
 AEC_TIMESTAMP_URL="http://timestamp.digicert.com" \
-scripts/make-release.sh 1.10.1
+scripts/make-release-desktop.sh 1.10.1
 ```
 
 The `AEC_SIGN` flag is off by default — releases stay unsigned until you
@@ -565,9 +565,12 @@ aec-client/
 │
 ├── CMakeLists.txt                  Build configuration
 ├── scripts/
-│   ├── make-release.sh             Release bundle + zip builder
+│   ├── make-build-desktop.sh       Desktop app build (quiet, app-only, --run to launch)
+│   ├── test.sh                     Offline test suite (native + web)
+│   ├── make-release-desktop.sh     Desktop release bundle + zip builder
+│   ├── make-release-web.sh         Web release bundle + zip builder
 │   ├── standardize-releases.sh     Version-keyed release notes writer
-│   └── README.txt                  End-user doc template (%%VERSION%%)
+│   └── templates/                  End-user doc templates (%%VERSION%%)
 ├── README.md                       This file
 ├── LICENSE                         MIT
 ├── CHANGELOG.md                    Version history
