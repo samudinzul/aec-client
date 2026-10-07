@@ -1,8 +1,44 @@
-// version.rc — app icon for aec_gui.exe
+// version.rc — app icon + version metadata for aec_gui.exe
 //
-// Embedding a custom icon changes the resource entropy of the PE header,
-// which is sometimes enough to break the Wacatac.B!ml static pattern
-// match on VirusTotal. It is a heuristic bypass, not a substitute for
-// code signing — signing is still the only reliable fix.
+// Two AV-posture reasons this file exists (see SECURITY.md):
+// - A custom icon changes the resource entropy of the PE header,
+//   which is sometimes enough to break the Wacatac.B!ml static
+//   pattern match on VirusTotal. Heuristic bypass, not a fix.
+// - VERSIONINFO publisher metadata: an anonymous exe (no Company /
+//   Product / FileVersion) is the worst reputation profile for
+//   SmartScreen and ML heuristics. Metadata does not replace code
+//   signing — signing is still the only reliable fix — but a fully
+//   attributed binary beats an anonymous one every scan.
+// Keep FILEVERSION/ProductVersion/FileVersion in sync with
+// APP_VERSION in src/main.cpp (enforced by the desktop release
+// script's asserts: a mismatch fails the build, not the upload).
 
 IDR_ICON1 ICON DISCARDABLE "resources/app.ico"
+
+1 VERSIONINFO
+FILEVERSION     1,11,0,0
+PRODUCTVERSION  1,11,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          0x40004L
+FILETYPE        0x1L
+FILESUBTYPE     0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName",      "AEC Client"
+            VALUE "FileDescription",  "AEC Client - acoustic echo cancellation"
+            VALUE "FileVersion",      "1.11.0"
+            VALUE "InternalName",     "aec_gui"
+            VALUE "OriginalFilename", "aec_gui.exe"
+            VALUE "ProductName",      "AEC Client"
+            VALUE "ProductVersion",   "1.11.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

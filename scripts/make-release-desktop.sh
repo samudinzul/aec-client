@@ -72,6 +72,13 @@ if ls "$STAGE"/models/dtln_aec_512_* >/dev/null 2>&1; then
 fi
 test -f "$STAGE/README.txt" || { echo "missing README.txt" >&2; fail=1; }
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
+# AV-posture lock: version.rc metadata must match APP_VERSION, so the
+# shipped exe is never anonymous or version-lying (both worsen the
+# SmartScreen/ML-heuristic reputation profile — see SECURITY.md).
+rc_ver=$(grep -oP 'VALUE "FileVersion",\s*"\K[^"]+' version.rc | head -1)
+test "$rc_ver" = "$VER" || { echo "version.rc FileVersion ($rc_ver) != $VER" >&2; fail=1; }
+rc_fver=$(grep -oP 'FILEVERSION\s+\K[0-9,]+' version.rc | head -1)
+test "$rc_fver" = "$(printf '%s' "$VER" | tr . ,),0" || { echo "version.rc FILEVERSION ($rc_fver) != $VER" >&2; fail=1; }
 # Slim-runtime contract: vendored MS onnxruntime (uncompressed) + its
 # VC++ runtime; the old 27.5 MB MSYS2 build / absl cluster must not return.
 test -f "$STAGE/onnxruntime.dll" || { echo "missing onnxruntime.dll" >&2; fail=1; }
