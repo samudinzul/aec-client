@@ -66,6 +66,13 @@ command -v cmake >/dev/null || { echo "cmake not found" >&2; exit 1; }
 command -v ninja >/dev/null || { echo "ninja not found" >&2; exit 1; }
 
 if [ "$FRESH" -ne 0 ]; then
+    # Windows locks a running program's file AND its folder: wiping
+    # build/ while the app is open dies with "Device or resource busy"
+    # (possibly after half-deleting the contents). Fail upfront.
+    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|nkf_smoke.exe"; then
+        echo "close aec_gui.exe (and nkf_smoke.exe) first — running programs lock build/" >&2
+        exit 1
+    fi
     echo "-- removing build/ (fresh configure)"
     rm -rf build
 fi
