@@ -207,9 +207,6 @@ std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
 std::atomic<float> g_last_mic_rms(0.0f), g_last_ref_rms(0.0f), g_last_out_rms(0.0f);
 
-std::atomic<float> g_peakMic(0.0f), g_peakRef(0.0f), g_peakOut(0.0f);
-Clock::time_point g_peakMicTime, g_peakRefTime, g_peakOutTime;
-
 std::vector<ma_device_info> g_captureDevices, g_playbackDevices;
 
 // Display filter lists (indices into the full arrays above)
@@ -919,11 +916,6 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     g_last_ref_rms = rms_ref;
     g_last_out_rms = rms_out;
 
-    auto now = Clock::now();
-    if (rms_mic > g_peakMic.load()) { g_peakMic = rms_mic; g_peakMicTime = now; }
-    if (rms_ref > g_peakRef.load()) { g_peakRef = rms_ref; g_peakRefTime = now; }
-    if (rms_out > g_peakOut.load()) { g_peakOut = rms_out; g_peakOutTime = now; }
-
     if (rms_mic > 30.0f && rms_ref > 100.0f) {
         float ratio = (rms_out + 1.0f) / (rms_mic + 1.0f);
         if (ratio < 1.0f) g_last_reduction_db = 20.0f * log10f(ratio);
@@ -1087,7 +1079,6 @@ void StartAEC() {
     }
     g_micRing.reset();
     g_refRing.reset();
-    g_peakMic.store(0); g_peakRef.store(0); g_peakOut.store(0);
 
     int sr = g_sampleRate.load();
     int fs = frameSizeForRate(sr);
@@ -1178,7 +1169,7 @@ void DrawInlineDot(bool ok) {
     ImGui::Dummy(ImVec2(r * 2 + 6, r * 2 + 4));
 }
 
-void DrawLevelMeter(const char* label, float rms, float peak, float maxValue) {
+void DrawLevelMeter(const char* label, float rms, float maxValue) {
     ImGui::TextUnformatted(label);
     ImGui::SameLine(60);
     ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -1191,18 +1182,9 @@ void DrawLevelMeter(const char* label, float rms, float peak, float maxValue) {
     if (frac > 1.0f) frac = 1.0f;
     float barW = width * frac;
     if (barW > 1.0f) {
-        ImU32 col;
-        if (frac < 0.6f)       col = IM_COL32(80, 200, 100, 255);
-        else if (frac < 0.85f) col = IM_COL32(230, 200, 60, 255);
-        else                   col = IM_COL32(230, 80, 80, 255);
-        dl->AddRectFilled(pos, ImVec2(pos.x + barW, pos.y + height), col, 4.0f);
+        dl->AddRectFilled(pos, ImVec2(pos.x + barW, pos.y + height),
+                          IM_COL32(80, 200, 100, 255), 4.0f);
     }
-    float peakFrac = peak / maxValue;
-    if (peakFrac > 1.0f) peakFrac = 1.0f;
-    float peakX = pos.x + width * peakFrac;
-    if (peakX > pos.x)
-        dl->AddLine(ImVec2(peakX - 1, pos.y), ImVec2(peakX - 1, pos.y + height),
-                    IM_COL32(255, 255, 255, 220), 2.0f);
     dl->AddRect(pos, ImVec2(pos.x + width, pos.y + height),
                 IM_COL32(60, 60, 70, 255), 4.0f);
     ImGui::Dummy(ImVec2(width, height));
@@ -1579,7 +1561,7 @@ void DrawAboutTab() {
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
-    ImGui::BulletText("Live level meters with peak hold");
+    ImGui::BulletText("Live level meters");
     ImGui::BulletText("Optional minimize to system tray");
 
     ImGui::Spacing();
@@ -1694,9 +1676,9 @@ void DrawUI() {
         float outRms = g_last_out_rms.load();
         float db     = g_last_reduction_db.load();
 
-        DrawLevelMeter("Mic", micRms, g_peakMic.load(), 3000.0f);
-        DrawLevelMeter("Ref", refRms, g_peakRef.load(), 3000.0f);
-        DrawLevelMeter("Out", outRms, g_peakOut.load(), 3000.0f);
+        DrawLevelMeter("Mic", micRms, 3000.0f);
+        DrawLevelMeter("Ref", refRms, 3000.0f);
+        DrawLevelMeter("Out", outRms, 3000.0f);
 
         // Self-diagnosis aid: a permanently silent reference means the
         // wrong speakers are selected — but silence is also normal when
@@ -1716,14 +1698,6 @@ void DrawUI() {
         else
             ImGui::TextDisabled("Echo reduction: -- dB (silent)");
 
-        auto now = Clock::now();
-        auto decayMs = [&](std::atomic<float>& peak, Clock::time_point& tp) {
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - tp).count();
-            if (ms > 1500) peak.store(peak.load() * 0.92f);
-        };
-        decayMs(g_peakMic, g_peakMicTime);
-        decayMs(g_peakRef, g_peakRefTime);
-        decayMs(g_peakOut, g_peakOutTime);
     }
     } // end footer block
 

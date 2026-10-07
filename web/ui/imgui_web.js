@@ -23,7 +23,6 @@ class WebImGuiUI {
         this.inited = false;
         this.el = {};
         this.lastDevices = null;
-        this.peak = { in: 0, out: 0 };
     }
 
     init() {
@@ -224,7 +223,7 @@ class WebImGuiUI {
             '<li>Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC) + DTLN-NS noise reduction (16 kHz)</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
-            '<li>Live level meters with peak hold</li>' +
+            '<li>Live level meters</li>' +
             '<li>Native app window (Edge WebView2) with browser fallback</li>' +
             '</ul>';
         p.appendChild(f);
@@ -512,18 +511,14 @@ class WebImGuiUI {
         }
     }
 
-    meter(canvas, v, key) {
+    meter(canvas, v) {
         const g = canvas.getContext('2d');
         const w = canvas.width, h = canvas.height;
         const lvl = Math.min(1, Math.max(0, v * 4));
-        this.peak[key] = Math.max(this.peak[key] * 0.92, lvl);
         g.clearRect(0, 0, w, h);
         const bw = Math.floor(lvl * w);
-        g.fillStyle = lvl > 0.8 ? '#c04545' : (lvl > 0.6 ? '#e09a3c' : '#2a9d5c');
+        g.fillStyle = '#2a9d5c';
         if (bw > 0) g.fillRect(0, 0, bw, h);
-        const px = Math.floor(this.peak[key] * w);
-        g.fillStyle = 'rgba(255,255,255,0.7)';
-        g.fillRect(Math.min(px, w - 2), 0, 2, h);
     }
 
     applyWallpaper(save) {
@@ -576,8 +571,8 @@ class WebImGuiUI {
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }
             }
             if (!st.running) return;
-            this.meter(this.el.mIn, st.inRms || 0, 'in');
-            this.meter(this.el.mOut, st.outRms || 0, 'out');
+            this.meter(this.el.mIn, st.inRms || 0);
+            this.meter(this.el.mOut, st.outRms || 0);
             this.el.status.textContent =
                 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ') · NS ' + ((st.ns && st.ns.backend) || '?') +
                 (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '');
