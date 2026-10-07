@@ -1360,6 +1360,16 @@ void DrawEngineSection() {
                      ns.loopActive ? " (loop, adapting)" : "",
                      ns.confident ? " (locked)" : " (estimated)");
         ImGui::TextDisabled("%s", nkfLine);
+        // Suppressor telemetry: when the Output meter collapses, one
+        // of these lines names the stage doing it. (NS has its own
+        // diagnostics under its checkbox.)
+        if (ns.backstopDb < -0.5)
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                               "Backstop trim: %.1f dB (tonal wire?)",
+                               ns.backstopDb);
+        if (ns.guardResets > 0)
+            ImGui::TextDisabled("Guard resets: %d%s", ns.guardResets,
+                                ns.giveUp ? " (failed open = mic passthrough)" : "");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Delay lock: how far the speaker reference lags the mic\n"
