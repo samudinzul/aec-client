@@ -48,10 +48,16 @@ def engine_available(name):
     a clear error at set_engine."""
     if name == "dtln":
         return True  # LiteRT import failure surfaces at load, not here
-    if name == "aec3":
-        return importlib.util.find_spec("pywebrtc_audio") is not None
-    if name == "nkf":
-        return importlib.util.find_spec("onnxruntime") is not None
+    try:
+        if name == "aec3":
+            return importlib.util.find_spec("pywebrtc_audio") is not None
+        if name == "nkf":
+            return importlib.util.find_spec("onnxruntime") is not None
+    except Exception:
+        # A hostile sys.path entry can make the probe itself raise;
+        # a probe that can't answer means "unavailable", never a crash
+        # (the 10 Hz meter loop calls this constantly).
+        return False
     return False
 
 

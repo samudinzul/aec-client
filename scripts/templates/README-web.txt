@@ -38,6 +38,9 @@ QUICK START
      packages (smaller environment, DTLN profiles only)
      and opens the GUI in your own browser instead of
      a separate window.
+   - The experimental engines (WebRTC AEC3, NKF-AEC)
+     need one extra install inside the environment:
+     pip install -r web\requirements-engines.txt
 
 4. In the GUI, pick your devices:
    - Microphone:        your physical microphone
