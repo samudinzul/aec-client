@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Desktop NKF backstop release on voiced speech.** The heal
-  path additionally accrues on tonal-but-pitch-moving windows
-  (tracked dominant-bin runs: a howl parks on one bin for 1.3 s+,
-  voice wanders), and a single qualifying window now releases
-  (BS_HEAL_RUN 1 vs attack's 2 — field logs showed heal alternating
-  with run forever, so consecutive windows never arrived). A false
-  trigger on voice releases within ~2 s instead of latching
-  forever; fixed-center howls still hold the trim. Known trade is
-  bounded pumping on fast-sweeping howls under the −24 dB floor.
+- **Desktop NKF backstop release on voiced speech.** Attack now
+  needs two consecutive center-stable tonal windows (tracked
+  dominant-bin runs: a howl parks on one bin for 1.3 s+, voice
+  wanders), and a single qualifying heal window releases
+  (BS_HEAL_RUN 1 — field logs showed heal alternating with run
+  forever, so consecutive windows never arrived). A false trigger
+  on voice releases within ~2 s instead of latching forever;
+  fixed-center howls still attack and hold. Known trade:
+  fast-sweeping howls never hold one bin long enough to attack
+  (accepted: stable loop tones, the dangerous case, always do).
 - **Desktop NKF anti-wander + backstop floor.** TDC no longer
   teleports between periodicity artifacts (coarse pass needs a
   clearly-better peak to displace the delay, near-ties keep the
