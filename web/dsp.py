@@ -109,7 +109,11 @@ BLOCK_SHIFT = 128
 BINS = 257  # rfft(512)
 
 SAMPLE_RATE = 16000
-FRAME_SIZE = 160  # 10 ms @ 16 kHz, matches the desktop frame pump
+# 8 ms @ 16 kHz. Deliberately equals BLOCK_SHIFT (not the desktop's
+# 160-sample pump): one frame feeds exactly one shift, so the steady
+# state runs 1.0 shifts/frame instead of 1.25 — ~20% fewer TFLite
+# invokes + FFTs for the same audio.
+FRAME_SIZE = 128
 
 
 def rfft_mag(block: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

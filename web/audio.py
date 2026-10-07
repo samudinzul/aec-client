@@ -19,7 +19,7 @@ with silence — so the same model is ported here:
   cable's native rate, delivers exactly frame_count frames;
   starved -> silence. Never blocks.
 
-The chain stays 16 kHz. One worker thread assembles 160-sample
+The chain stays 16 kHz. One worker thread assembles 128-sample
 frames from the two input queues (resampling native -> 16 kHz at
 the edge) and feeds the chain; its output lands in the queue the
 output callback drains. Queues never block: input overflow drops

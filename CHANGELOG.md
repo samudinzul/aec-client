@@ -13,9 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension (rustfft + numpy crates, maturin build) replacing the
   hot DSP kernels in `web/dsp.py` — int16/float converts (exact),
   rFFT/masked-iFFT (≤5e-6 vs pocketfft), RMS, FIR + linear
-  resamplers (exact). `dsp.py` falls back to NumPy when the
+  resamplers (exact).   `dsp.py` falls back to NumPy when the
   extension is absent; end-to-end smoke output is identical
-  (`frames=200 out_rms=938.7 peak=9733`). Measured ~8% chain-CPU
+  (`frames=250 out_rms=902.3 peak=8385`). Measured ~8% chain-CPU
   reduction on the test machine; TFLite `invoke()` is unchanged
   (moving inference itself to Rust needs the TF Lite C toolchain
   — tracked as follow-up in `ext/README.md`). Single worker now
@@ -48,8 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memmove slices, `rms()` in float32, one `astype` per frame in the
   chain, no redundant `lpb_buf.copy()` into the second model, cached
   second-model output classify, and a batched int16 write in the
-  no-scipy notch fallback loop. Smoke output is bit-identical
-  (`frames=200 out_rms=938.7 peak=9733`).
+  no-scipy notch fallback loop. Smoke output was bit-identical
+  at the time (`frames=200 out_rms=938.7 peak=9733`); the numbers
+  below supersede it after the 128-sample pump change.
+
+### Fixed
+
+- **Web UI pump-frame starvation corrupting NS output.** The pump
+  assembled 160-sample frames while every stage shifts 128 samples,
+  so the AEC output ring starved on the first frames (32 zero
+  samples injected per frame) and the NS output ring fell back to
+  raw mic input for short reads. The zeros fed the NS LSTM, whose
+  states then diverged for the whole stream (smoke: `rms=938.7
+  peak=9733` with mixed-in raw signal vs `rms=902.3 peak=8385`
+  fully denoised). The pump now uses 128-sample frames
+  (`FRAME_SIZE == BLOCK_SHIFT`): production meets consumption
+  exactly, the fallbacks never fire past priming, and output is
+  the clean trajectory. Note this is a correctness fix, not a CPU
+  win — invokes per second of audio are unchanged.
 
 ### Removed
 

@@ -11,7 +11,7 @@ pure NumPy when it is absent — the extension is never required.
 - **DSP kernels: done** (`ext/aec_dsp/src/lib.rs`). Parity: integer
   paths bit-exact, FIR paths bit-exact, FFT paths ≤5e-6
   (`python3 /tmp/opencode/parity_dsp.py` pattern), end-to-end smoke
-  output identical (`frames=200 out_rms=938.7 peak=9733`).
+  output identical (`frames=250 out_rms=902.3 peak=8385`).
 - **TFLite-in-Rust: not started.** Blocked on the TF Lite C library
   toolchain (no prebuilt `tensorflowlite_c` in this environment;
   building TF from source was judged out of scope here). Recipe:

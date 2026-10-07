@@ -36,6 +36,7 @@ def write_wav16(path, data):
 
 def smoke():
     from .chain import Chain
+    from .dsp import FRAME_SIZE
 
     sr = 16000
     t = np.arange(sr * 2) / sr
@@ -46,8 +47,9 @@ def smoke():
     print(f"chain start: {ok} backend={ch.state()['dtlnBackend']} "
           f"ns={ch.state()['ns']['backend']} err={ch.state()['error']!r}")
     out = []
-    for i in range(0, len(mic), 160):
-        out.append(ch.process_frame(mic[i:i + 160], ref[i:i + 160]))
+    for i in range(0, len(mic), FRAME_SIZE):
+        out.append(ch.process_frame(mic[i:i + FRAME_SIZE],
+                                    ref[i:i + FRAME_SIZE]))
     out = np.concatenate(out)
     assert np.all(np.isfinite(out.astype(np.float32)))
     print(f"frames={ch.state()['frames']} out_rms={np.sqrt(np.mean(out.astype(float)**2)):.1f} "
@@ -71,12 +73,13 @@ def main():
     if not ch.start():
         print(f"chain failed to start: {ch.last_error}")
         return 2
+    from .dsp import FRAME_SIZE
     out = []
-    for i in range(0, n, 160):
-        m, r = mic[i:i + 160], ref[i:i + 160]
-        if len(m) < 160:  # zero-pad the tail like a final pump frame
-            m = np.pad(m, (0, 160 - len(m)))
-            r = np.pad(r, (0, 160 - len(r)))
+    for i in range(0, n, FRAME_SIZE):
+        m, r = mic[i:i + FRAME_SIZE], ref[i:i + FRAME_SIZE]
+        if len(m) < FRAME_SIZE:  # zero-pad the tail like a final pump frame
+            m = np.pad(m, (0, FRAME_SIZE - len(m)))
+            r = np.pad(r, (0, FRAME_SIZE - len(r)))
         out.append(ch.process_frame(m, r))
     out = np.concatenate(out)[:n]
     write_wav16(outp, out)
