@@ -76,6 +76,41 @@ if(WIN32)
 endif()
 
 # ============================================================
+#  nkf_smoke — offline harness for the desktop NKF output path.
+#  Runs WAV (or synthetic) mic/ref pairs through the exact pump the
+#  GUI runs (NkfProcess -> gate -> WPE -> notch) and prints per-second
+#  engine telemetry (TDC lock, guard resets, backstop trim dB).
+#  Console app (no window), shares the vendored ONNX Runtime.
+#  Build: cmake --build build --target nkf_smoke
+#  Run:   build/nkf_smoke.exe mic.wav ref.wav out.wav
+# ============================================================
+add_executable(nkf_smoke
+    tools/nkf_smoke.cpp
+    src/nkf_wrapper.cpp
+    src/wpe.cpp
+    src/notch.cpp
+    ${NKF_DIR}/NKFImpl.cpp
+)
+
+target_include_directories(nkf_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${NKF_DIR}
+    ${MSYS2_ROOT}/include/onnxruntime
+)
+
+target_link_libraries(nkf_smoke PRIVATE onnxruntime)
+
+if(WIN32)
+    target_link_libraries(nkf_smoke PRIVATE ole32 uuid winmm)
+endif()
+
+add_custom_command(TARGET nkf_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
+        $<TARGET_FILE_DIR:nkf_smoke>)
+
+# ============================================================
 #  ONNX Runtime — official Microsoft build (v1.29.0), vendored
 #  uncompressed (~16 MB). Replaces the MSYS2 build (27.5 MB) and
 #  its 97-DLL absl/onnx/protobuf/re2 dependency cluster.
