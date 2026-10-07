@@ -188,17 +188,21 @@ int main(int argc, char** argv) {
 
     int16_t micF[kFrame], refF[kFrame], clF[kFrame];
     float wf[kFrame];
-    printf("sec  micRMS  outRMS  lag  lock conf exp loop rst give bsDb\n");
-    double accMic = 0, accOut = 0;
+    printf("sec  micRMS  engRMS  outRMS  lag  lock conf exp loop rst give bsDb\n");
+    double accMic = 0, accEng = 0, accOut = 0;
     size_t accN = 0;
     int sec = 0;
     for (size_t pos = 0; pos + kFrame <= n; pos += kFrame) {
         memcpy(micF, mic.samples.data() + pos, sizeof(micF));
         memcpy(refF, ref.samples.data() + pos, sizeof(refF));
+        double em = 0;
+        for (int i = 0; i < kFrame; i++) em += (double)micF[i] * micF[i];
+        accMic += em;
         NkfProcess(nkf, micF, refF, clF, kFrame);
         // Gate on the engine output, exactly like the GUI pump.
         double e = 0;
         for (int i = 0; i < kFrame; i++) e += (double)clF[i] * clF[i];
+        accEng += e;
         SpeechGateUpdate(&gate, (float)sqrt(e / kFrame), 10.0f);
         if (wpe) {
             WpeSetSpeech(wpe, SpeechGateForWpe(&gate));
@@ -222,11 +226,12 @@ int main(int argc, char** argv) {
         if (accN >= (size_t)kSr) {
             NkfState st = {};
             NkfGetState(nkf, &st);
-            printf("%3d  %6.0f  %6.0f  %4d  %d    %d    %d   %d    %d   %d    %+.1f\n",
-                   ++sec, sqrt(accMic / accN), sqrt(accOut / accN), st.lagSamples,
+            printf("%3d  %6.0f  %6.0f  %6.0f  %5d  %d    %d    %d   %d    %d   %d    %+.1f\n",
+                   ++sec, sqrt(accMic / accN), sqrt(accEng / accN),
+                   sqrt(accOut / accN), st.lagSamples,
                    st.locked, st.confident, st.exposed, st.loopActive,
                    st.guardResets, st.giveUp, st.backstopDb);
-            accMic = accOut = 0;
+            accMic = accEng = accOut = 0;
             accN = 0;
         }
     }

@@ -45,6 +45,23 @@ static const int   TDC_LOCK_GRACE = 48000;  // 3 s: engage with best guess if no
 static const float TDC_MIN_PEAK   = 0.35f;  // NCC needed to accept a small lag step
 static const float TDC_JUMP_PEAK  = 0.55f;  // NCC needed to accept a jump (> 5 ms)
 static const int   TDC_JUMP       = 80;     // lag steps beyond this count as a jump
+static const int   TDC_SLEW       = 512;    // max applied delay change per
+                                            // re-estimate (32 ms): a real
+                                            // acoustic path drifts slowly —
+                                            // teleporting thousands of
+                                            // samples between 0.5 s updates
+                                            // is always a periodicity
+                                            // artifact (tonal ref). The 800 ms
+                                            // range stays available for
+                                            // genuine long round trips,
+                                            // reached over a few updates.
+static const double TDC_TIE_EPS   = 0.02;   // coarse-pass near-tie margin:
+                                            // only a CLEARLY better peak
+                                            // displaces the current delay.
+                                            // The sweep ascends, so near-ties
+                                            // keep the smaller lag — the true
+                                            // path is the first strong peak,
+                                            // its multiples are echoes of it.
 static const int   TDC_FINE       = 8;      // raw-sample refine range around coarse peak
 static const float TDC_MIN_MEAN_E = 1e-5f;  // mean-square floor (don't chase silence)
 // The stock model is level-sensitive: fed float signals at ~0.15 rms it
@@ -96,7 +113,13 @@ static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> relea
 static const int    BS_FRAMES   = 64;      // frames per window (64x512 = 2.048 s)
 static const int    BS_RUN      = 2;       // held windows -> attack (~4 s)
 static const int    BS_HEAL_RUN = 2;       // clean-cancel windows -> release
-static const double BS_TONAL    = 0.33;    // per-frame 3-bin power fraction
+static const float  BS_MIN_TARGET = 0.0625f; // deepest trim: -24.1 dB.
+                                            // A sustained howl is still
+                                            // clearly suppressed, but a
+                                            // false trigger attenuates
+                                            // instead of muting (the old
+                                            // floor was 0.25^7 ≈ -84 dB).
+static const double BS_TONAL    = 0.33;  // per-frame 3-bin power fraction
 static const int    BS_HITS     = 38;      // >=~60% of 64 frames tonal
 static const double BS_MIC_MS   = 8.4e-5;  // mic mean-square floor (RMS ~300)
 static const double BS_OUT_MS   = 9.3e-6;  // wire mean-square floor (RMS ~100)
@@ -257,7 +280,7 @@ static void NkfEstimateDelay(NkfHandle* h) {
         const double refEd = dpref[off + WD] - dpref[off];
         if (refEd <= 0.0) continue;
         const double sc = num / std::sqrt(micEd * refEd);
-        if (sc > cBest) { cBest = sc; cBestDb = db; }
+        if (sc > cBest + TDC_TIE_EPS) { cBest = sc; cBestDb = db; }
     }
 
     // ---- Fine pass: full-rate NCC around the coarse peak ---------------
@@ -301,14 +324,21 @@ static void NkfEstimateDelay(NkfHandle* h) {
     if (best >= (jump ? (double)TDC_JUMP_PEAK : (double)TDC_MIN_PEAK)) {
         const bool wasLocked = h->tdcLocked;
         const int prevD = h->alignDelay;
-        h->alignDelay = bestD;
+        // Slew-rate limit (see TDC_SLEW): walk toward far estimates
+        // instead of teleporting. The jump-peak gate above still judges
+        // the true candidate; only the applied motion is limited.
+        int target = bestD;
+        const int step = target - prevD;
+        if (step > TDC_SLEW) target = prevD + TDC_SLEW;
+        else if (step < -TDC_SLEW) target = prevD - TDC_SLEW;
+        h->alignDelay = target;
         h->tdcLocked = true;
         if (!h->tdcConfident)
             NkfPhase("t=%.2f TDC lock%s d=%d sc=%.3f", NKF_T(h),
-                     wasLocked ? " (update)" : "", bestD, best);
-        else if (bestD - prevD >= 32 || prevD - bestD >= 32)
+                     wasLocked ? " (update)" : "", target, best);
+        else if (target - prevD >= 32 || prevD - target >= 32)
             NkfPhase("t=%.2f TDC drift d=%d->%d sc=%.3f", NKF_T(h),
-                     prevD, bestD, best);
+                     prevD, target, best);
         h->tdcConfident = true;   // real peak — safe to stay live in a loop
     }
 }
@@ -472,7 +502,8 @@ static void NkfBackstopWindow(NkfHandle* h) {
         h->bsHeal = 0;
         if (h->bsRun < 1000) h->bsRun++;
         if (h->bsRun >= BS_RUN && h->bsEnabled) {
-            const float want = powf(0.25f, h->bsAttacks + 1);
+            float want = powf(0.25f, h->bsAttacks + 1);
+            if (want < BS_MIN_TARGET) want = BS_MIN_TARGET;
             if (want < h->bsTarget) {
                 h->bsTarget = want;
                 h->bsActive = true;
