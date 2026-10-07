@@ -10,7 +10,7 @@
 #     (aec_gui.exe) — no nkf_smoke, no stray logs left in build/.
 #   - FRESH CONFIGURE (--fresh): wipe build/ first, then configure
 #     from scratch. Use after CMakeLists changes or when the cache
-#     looks stale. (The old --clean flag means this too.)
+#     looks stale.
 #
 # Usage (MSYS2 UCRT64 bash, from the repo root):
 #   scripts/build.sh              # build app (MinSizeRel)
@@ -43,10 +43,8 @@ BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
     case "$a" in
         --fresh) FRESH=1 ;;
-        --clean) echo "(--clean renamed to --fresh; treating as --fresh)" >&2; FRESH=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
         --with-smoke) WITH_SMOKE=1 ;;
-        --app-only) echo "(--app-only is now the default; flag ignored)" >&2 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
             sed -n '2,35p' "$0"; exit 0 ;;
