@@ -19,6 +19,7 @@ Notes on fidelity vs the desktop app:
   devices): the pump keeps running, the new engine starts reset.
 """
 
+import importlib.util
 import threading
 
 import numpy as np
@@ -38,15 +39,19 @@ PROFILES = (
 
 
 def engine_available(name):
-    """Backend import probe — no models loaded, no side effects."""
+    """Backend presence probe — finds the module spec WITHOUT
+    importing it, so probing never pulls the native libraries
+    (onnxruntime, WebRTC) into the process. They load only when
+    the engine is actually selected (set_engine), i.e. DTLN-only
+    sessions never pay for backends they don't use. A stale/broken
+    install (spec present, import fails) still fails closed with
+    a clear error at set_engine."""
     if name == "dtln":
         return True  # LiteRT import failure surfaces at load, not here
     if name == "aec3":
-        from . import aec3
-        return aec3.available()
+        return importlib.util.find_spec("pywebrtc_audio") is not None
     if name == "nkf":
-        from . import nkf
-        return nkf.available()
+        return importlib.util.find_spec("onnxruntime") is not None
     return False
 
 
