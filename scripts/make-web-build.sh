@@ -8,6 +8,9 @@
 #   scripts/make-web-build.sh --fresh  # wipe .venv first, rebuild it
 #   scripts/make-web-build.sh --lean   # base packages only (DTLN;
 #                                      # mirrors server.bat, ~140 MB)
+#   scripts/make-web-build.sh --run    # build, then launch the GUI
+#                                      # (native window via web.gui,
+#                                      # attaches if a server runs)
 #
 # Steps:
 #   1. Find a Python (py launcher preferred, PATH fallback;
@@ -24,10 +27,12 @@ set -euo pipefail
 
 FRESH=0
 LEAN=0
+RUN=0
 for a in "$@"; do
     case "$a" in
         --fresh) FRESH=1 ;;
         --lean) LEAN=1 ;;
+        --run) RUN=1 ;;
         -h|--help)
             sed -n '2,17p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
@@ -100,4 +105,18 @@ if "$VPY" -m web.test_offline --smoke; then
     echo "WEB BUILD OK (.venv + packages + smoke)"
 else
     echo "engine smoke FAILED" >&2; exit 1
+fi
+
+# ---- 6. launch (opt-in --run, like make-build-desktop.sh) ----
+if [ "$RUN" -ne 0 ]; then
+    echo ""
+    # Detached, terminal stays free (pywebview window owns its
+    # message loop; closing the shell won't kill it). gui.py
+    # attaches to a running server instead of starting a second
+    # one, so re-running is harmless. Needs a GUI session —
+    # headless/SSH shells fail here with a clear message from
+    # pywebview, not silently.
+    "$VPY" -m web.gui & disown
+    echo "launched web GUI (pid $!) — http://localhost:8000/ in the window"
+    echo "(if no window appears, run \"$VPY -m web.gui\" in the foreground for the error)"
 fi
