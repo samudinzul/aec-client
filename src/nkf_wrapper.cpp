@@ -98,6 +98,25 @@ static const float LOOP_MIN_PEAK = 0.45f;   // NCC: delayed copy, not coincidenc
 static const int   LOOP_ON       = 2;       // hits needed to engage (hysteresis)
 static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> release
 
+// ---- Aggressive-on-loop policy (mirrors web/nkf.py, proven there) ----
+// A confirmed loop leans on everything downstream of the Kalman core —
+// never the core itself (no freeze, no un-expose: field-verified howl
+// fuel). Wire trim (-6 dB, multiplicative with the backstop) that
+// ESCALATES to -12/-18 dB on gapless loud sustain (marginal stability
+// at high coupling howls forever at -6; bursty voice resets the run,
+// so mic tests never escalate). Single-window backstop attack while
+// looped, eager TDC cadence, and a no-cancel watchdog (loud both legs
+// with wire-as-loud-as-mic past grace + ~5 s trims like a loop — keyed
+// on cancellation evidence, skipped failed-open). All self-release.
+static const float LOOP_TRIM      = 0.5f;
+static const float LOOP_TRIM_DEEP = 0.25f;    // -12 dB after ~3 s sustained loud
+static const float LOOP_TRIM_FLOOR = 0.125f;   // -18 dB after ~6 s; never deeper
+static const double LOOP_TAU_ATK  = 0.35;
+static const double LOOP_TAU_REL  = 0.15;
+static const int   LOOP_LOUD_BLOCKS = 96;     // ~3 s continuous per step
+static const size_t NOCANCEL_HOT_AFTER = 80000;  // ~5 s loud, uncancelled
+static const double NOCANCEL_ECHO_RATIO = 0.25;  // ref within 6 dB of mic
+
 // ---- Howl backstop: sustained tonal hold -> output trim ----------------
 // A feedback howl is ONE tone owning the wire for seconds; voice and
 // music spread across the spectrum. Measure per-frame spectral
@@ -227,6 +246,12 @@ struct NkfHandle {
     int   bsBinLast = -1000000, bsBinRun = 0;  // tonal-center stability
     int   bsBinBest = 0, bsBinDom = -1;        // window max run + its bin
     bool  bsActive = false;
+    // Aggressive-on-loop brakes (mirror web/nkf.py).
+    float loopGain = 1.0f;
+    int   loopLoudRun = 0;
+    size_t nocancelHotSamples = 0;
+    bool  nocancelHot = false;
+    bool  lastWindowCancelled = false;
     bool  bsEnabled = true;             // NKF_BACKSTOP=0 disables the trim
     // Frame-analysis scratch (512-pt Hann + r2c), built in NkfNew.
     std::vector<double> bsIn, bsHann;
@@ -377,8 +402,8 @@ static bool NkfGuard(NkfHandle* h, const float* micB,
         o += (double)outB[i] * outB[i];
     }
     m /= NKF_BLOCK_SHIFT; r /= NKF_BLOCK_SHIFT; o /= NKF_BLOCK_SHIFT;
-    h->micEnv += GUARD_EMA * ((float)m - h->micEnv);
-    h->refEnv += GUARD_EMA * ((float)r - h->refEnv);
+    // mic/ref legs are followed by the block loop (live even when the
+    // engine is skipped); only the out leg updates here with the trip.
     h->outEnv += GUARD_EMA * ((float)o - h->outEnv);
 
     // Output loud and far above BOTH inputs: energy the inputs never
@@ -509,6 +534,9 @@ static void NkfBackstopWindow(NkfHandle* h) {
     const double outMs = h->depOut / (double)h->depSamples;
     const double depth =
         10.0 * log10((h->depOut + 1e-12) / (h->depMic + 1e-12));
+    // Cancellation evidence for the no-cancel watchdog (pure
+    // measurement — independent of the tonal logic below).
+    h->lastWindowCancelled = depth <= BS_HEAL_D;
 
     if (h->loopConf >= LOOP_ON && h->depMic > 0.0)
         NkfPhase("t=%.2f loop depth=%.1f dB", NKF_T(h), depth);
@@ -543,7 +571,12 @@ static void NkfBackstopWindow(NkfHandle* h) {
     if (tonal && stable) {
         h->bsHeal = 0;
         if (h->bsRun < 1000) h->bsRun++;
-        if (h->bsRun >= BS_RUN && h->bsEnabled) {
+        // Looped howls attack after ONE window: a tonal-stable wire
+        // while the loop detector is engaged is the howl signature —
+        // waiting costs howl seconds. Heal still demands proof.
+        const int needRun =
+            (h->loopConf >= LOOP_ON) ? 1 : BS_RUN;
+        if (h->bsRun >= needRun && h->bsEnabled) {
             float want = powf(0.25f, h->bsAttacks + 1);
             if (want < BS_MIN_TARGET) want = BS_MIN_TARGET;
             if (want < h->bsTarget) {
@@ -678,9 +711,13 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         h->samplesSinceTdc += frameSize;
         // Eager cadence until the lag is a *confident* peak — a grace
         // lock (or no lock) keeps searching fast so a loop can exit
-        // shadow as soon as the delay is trustworthy.
+        // shadow as soon as the delay is trustworthy. Eager too while
+        // looped: loop delay may be shifting, and alignment is the
+        // cheapest stabilization available.
+        const bool loopedNow = h->loopConf >= LOOP_ON;
         const int tdcNeed =
-            (h->tdcLocked && h->tdcConfident) ? TDC_PERIOD : TDC_EAGER;
+            (!loopedNow && h->tdcLocked && h->tdcConfident) ? TDC_PERIOD
+                                                           : TDC_EAGER;
         if (h->samplesSinceTdc >= tdcNeed) NkfEstimateDelay(h);
         if (!h->tdcLocked && h->total >= (size_t)TDC_LOCK_GRACE) {
             h->tdcLocked = true;  // engage anyway; TDC keeps correcting
@@ -710,6 +747,32 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
                 h->refBlock[i] = h->refHist[(size_t)(p - front)];
             else
                 h->refBlock[i] = 0.0f;
+        }
+
+        // Level followers run on EVERY block (engine or not) so the
+        // no-cancel watchdog sees live audio even failed-open. (The
+        // guard keeps only its out-leg update; trip logic unchanged.)
+        {
+            double m = 0, r = 0;
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                m += (double)h->micBlock[i] * h->micBlock[i];
+                r += (double)h->refBlock[i] * h->refBlock[i];
+            }
+            m /= NKF_BLOCK_SHIFT; r /= NKF_BLOCK_SHIFT;
+            h->micEnv += GUARD_EMA * ((float)m - h->micEnv);
+            h->refEnv += GUARD_EMA * ((float)r - h->refEnv);
+            // No-cancel watchdog: loud both legs, echo-significant
+            // (ref within 6 dB of mic — loud talk over quiet music has
+            // nothing to fix), no proven cancellation lately.
+            const bool echoBig =
+                h->refEnv >= BS_MIC_MS
+                && h->refEnv >= (float)(NOCANCEL_ECHO_RATIO * h->micEnv);
+            if (h->micEnv < BS_MIC_MS || !echoBig
+                    || h->lastWindowCancelled) {
+                h->nocancelHotSamples = 0;
+            } else {
+                h->nocancelHotSamples += NKF_BLOCK_SHIFT;
+            }
         }
 
         // Engine runs only once locked and before fail-open; its output
@@ -784,6 +847,33 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             h->emitBlock[i] = v;
         }
 
+        // Aggressive-on-loop brakes (mirror web/nkf.py). Escalation
+        // run on pre-gain wire energy — post-trim energy would
+        // sawtooth against its own trim. Any quiet-ish block
+        // restarts it: bursty voice never climbs, gapless sustain
+        // (howls don't pause; speech does) does.
+        const bool looped = h->loopConf >= LOOP_ON;
+        const bool nocancel =
+            h->total > (size_t)TDC_LOCK_GRACE && !h->giveUp
+            && h->nocancelHotSamples >= NOCANCEL_HOT_AFTER;
+        h->nocancelHot = nocancel;
+        {
+            double ms = 0;
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                ms += (double)h->emitBlock[i] * h->emitBlock[i];
+            ms /= NKF_BLOCK_SHIFT;
+            if ((looped || nocancel) && ms >= BS_MIC_MS)
+                h->loopLoudRun++;
+            else
+                h->loopLoudRun = 0;
+        }
+        float loopTarget = 1.0f;
+        if (looped || nocancel) {
+            const int step = h->loopLoudRun / LOOP_LOUD_BLOCKS;
+            loopTarget = (step >= 2) ? LOOP_TRIM_FLOOR
+                       : (step >= 1) ? LOOP_TRIM_DEEP : LOOP_TRIM;
+        }
+
         // Howl backstop: smooth toward the target gain, trim the wire.
         h->bsGain += (float)((h->bsTarget - h->bsGain) *
                              ((h->bsTarget < h->bsGain) ? BS_TAU_ATK
@@ -791,6 +881,14 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
         if (h->bsGain != 1.0f)
             for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
                 h->emitBlock[i] *= h->bsGain;
+        // Loop trim: multiplicative with the backstop, own smoothing.
+        // Starves the loop of gain; the engine keeps adapting under it.
+        h->loopGain += (float)((loopTarget - h->loopGain) *
+                               ((loopTarget < h->loopGain) ? LOOP_TAU_ATK
+                                                           : LOOP_TAU_REL));
+        if (h->loopGain != 1.0f)
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                h->emitBlock[i] *= h->loopGain;
 
         // Window accumulators on the WIRE vs mic: the howl fuel check
         // now sees what the loop actually carries (shadow and fail-open
@@ -914,6 +1012,11 @@ void NkfReset(NkfHandle* h) {
     h->depSamples = 0;
     h->bsGain = 1.0f;
     h->bsTarget = 1.0f;
+    h->loopGain = 1.0f;
+    h->loopLoudRun = 0;
+    h->nocancelHotSamples = 0;
+    h->nocancelHot = false;
+    h->lastWindowCancelled = false;
     h->bsHits = h->bsFrames = 0;
     h->bsRun = h->bsHeal = h->bsAttacks = 0;
     h->bsActive = false;
@@ -937,6 +1040,9 @@ void NkfGetState(NkfHandle* h, NkfState* s) {
     s->guardResets = 0;
     s->giveUp = 0;
     s->backstopDb = 0.0f;
+    s->loopDb = 0.0f;
+    s->resDb = 0.0f;
+    s->nocancelHot = 0;
     if (!h) return;
     s->lagSamples = h->alignDelay;
     s->confident = h->tdcConfident ? 1 : 0;
@@ -947,6 +1053,9 @@ void NkfGetState(NkfHandle* h, NkfState* s) {
     s->guardResets = h->resets;
     s->giveUp = h->giveUp ? 1 : 0;
     s->backstopDb = (float)(20.0 * log10((double)h->bsGain + 1e-9));
+    s->loopDb = (float)(20.0 * log10((double)h->loopGain + 1e-9));
+    s->resDb = h->engine ? (float)h->engine->ResDb() : 0.0f;
+    s->nocancelHot = h->nocancelHot ? 1 : 0;
 }
 
 } // extern "C"

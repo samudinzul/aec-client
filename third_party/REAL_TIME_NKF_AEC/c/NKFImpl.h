@@ -26,6 +26,14 @@
 #define BLOCK_SHIFT  (512)
 #define FFT_OUT_SIZE (513)
 #define NKF_LEN (4)
+// Intrinsic residual echo suppressor (Wiener post-filter — mirrors
+// web/nkf.py RES_*, proven there first): per-bin gain from the core's
+// own echohat. Echo-minority bins pass at unity (double-talk safety
+// structural); echo-majority bins trim toward the floor.
+#define RES_EMA     (0.15)
+#define RES_THRESH  (0.5)
+#define RES_FLOOR   (0.1)
+#define RES_RELEASE (0.25)
 typedef std::complex<double> cpx_type;
 
 struct nkf_engine {
@@ -100,7 +108,13 @@ private:
         memset(m_pEngine.h_posterior_imag, 0, FFT_OUT_SIZE * NKF_LEN * sizeof(double));
         memset(m_pEngine.h_prior_real, 0, FFT_OUT_SIZE * NKF_LEN * sizeof(double));
         memset(m_pEngine.h_prior_imag, 0, FFT_OUT_SIZE * NKF_LEN * sizeof(double));
+        memset(m_resPe, 0, FFT_OUT_SIZE * sizeof(double));
+        memset(m_resPm, 0, FFT_OUT_SIZE * sizeof(double));
+        m_resDb = 0.0;
     };
+
+    // Current RES attenuation estimate, dB (telemetry for NkfGetState).
+    double ResDb() const { return m_resDb; }
 
     void ExportWAV(const std::string& Filename,
                    const std::vector<float>& Data, unsigned SampleRate);
@@ -161,4 +175,9 @@ private:
 
     // Newest member — must stay LAST (see append-only rule above).
     bool m_frozen = false;
+
+    // Intrinsic RES state — appended, never inserted (same rule).
+    double m_resPe[FFT_OUT_SIZE] = { 0 };
+    double m_resPm[FFT_OUT_SIZE] = { 0 };
+    double m_resDb = 0.0;
 };

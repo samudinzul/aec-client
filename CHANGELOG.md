@@ -72,6 +72,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   braked too. Telemetry gains `loopDb`/`nocancelHot`; both web
   UIs show them. (`web/nkf.py`, `web/test_nkf_loop.py` L1–L7.)
 
+- **Desktop NKF parity: intrinsic RES + aggressive-on-loop brakes.**
+  Port of the web-proven stages back into the C++ they came from
+  (same constants, same order): the periodic-Hann Kalman core
+  gains a Wiener residual suppressor (per-bin gain from its own
+  echohat, echo-minority bins pass at unity); the wrapper gains
+  the -6 dB loop trim with -12/-18 dB escalation on gapless loud
+  sustain, single-window backstop attack while looped, eager TDC
+  cadence while looped, and the no-cancel watchdog (cancellation
+  evidence, echo-significance gated, skipped failed-open).
+  `NkfState` grows `loopDb`/`resDb`/`nocancelHot` (appended);
+  the UI shows loop-trim and RES lines next to Backstop trim;
+  the smoke table prints `loopDb`/`resDb` columns (verdict logic
+  untouched). (`NKFImpl.h/.cpp`, `src/nkf_wrapper.{h,cpp}`,
+  `src/main.cpp`, `tools/nkf_smoke.cpp`. Needs a desktop
+  `--fresh` rebuild to verify (no Windows toolchain here).
+
 - **Web NKF intrinsic residual suppressor (Wiener post-filter).**
   The linear Kalman core passes nonlinear distortion, loud
   residue and late tails, and DTLN-NS is noise (not echo)

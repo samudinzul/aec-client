@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
 
     int16_t micF[kFrame], refF[kFrame], clF[kFrame];
     float wf[kFrame];
-    printf("sec  micRMS  engRMS  outRMS  lag  lock conf exp loop rst give bsDb\n");
+    printf("sec  micRMS  engRMS  outRMS  lag  lock conf exp loop rst give bsDb loopDb resDb\n");
     double accMic = 0, accEng = 0, accOut = 0;
     size_t accN = 0;
     int sec = 0;
@@ -212,11 +212,12 @@ int main(int argc, char** argv) {
         if (accN >= (size_t)kSr) {
             NkfState st = {};
             NkfGetState(nkf, &st);
-            printf("%3d  %6.0f  %6.0f  %6.0f  %5d  %d    %d    %d   %d    %d   %d    %+.1f\n",
+            printf("%3d  %6.0f  %6.0f  %6.0f  %5d  %d    %d    %d   %d    %d   %d    %+.1f %+.1f %+.1f\n",
                    ++sec, sqrt(accMic / accN), sqrt(accEng / accN),
                    sqrt(accOut / accN), st.lagSamples,
                    st.locked, st.confident, st.exposed, st.loopActive,
-                   st.guardResets, st.giveUp, st.backstopDb);
+                   st.guardResets, st.giveUp, st.backstopDb,
+                   st.loopDb, st.resDb);
             accMic = accEng = accOut = 0;
             accN = 0;
         }

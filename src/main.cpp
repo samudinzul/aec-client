@@ -1347,6 +1347,13 @@ void DrawEngineSection() {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                                "Backstop trim: %.1f dB (tonal wire?)",
                                ns.backstopDb);
+        if (ns.loopDb < -0.5)
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                               "Loop trim: %.1f dB%s",
+                               ns.loopDb,
+                               ns.nocancelHot ? " (no-cancel)" : "");
+        if (ns.resDb < -0.5)
+            ImGui::TextDisabled("RES suppression: %.1f dB", ns.resDb);
         if (ns.guardResets > 0)
             ImGui::TextDisabled("Guard resets: %d%s", ns.guardResets,
                                 ns.giveUp ? " (failed open = mic passthrough)" : "");

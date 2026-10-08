@@ -216,6 +216,43 @@ void NKFImpl::OnnxInfer() {
     }
     }
 
+    // Intrinsic residual echo suppressor (Wiener post-filter —
+    // same math as web/nkf.py _res_apply, proven there first).
+    // Per-bin gain from the core's own echo estimate: bins where
+    // echo is the minority of mic energy pass at unity, so
+    // double-talk is safe by construction, not by tuning.
+    // Output-only — h states never see it.
+    {
+        double gainSum = 0.0;
+        for (int i = 0; i < FFT_OUT_SIZE; i++) {
+            double g = 1.0;
+            if (farActive) {
+                const double pe = echohat_real[i] * echohat_real[i]
+                                + echohat_imag[i] * echohat_imag[i];
+                const double pm = (double)mic_real[i] * mic_real[i]
+                                + (double)mic_imag[i] * mic_imag[i];
+                m_resPe[i] += RES_EMA * (pe - m_resPe[i]);
+                m_resPm[i] += RES_EMA * (pm - m_resPm[i]);
+                double dom = m_resPe[i] / (m_resPm[i] + 1e-12);
+                if (dom < 0.0) dom = 0.0;
+                if (dom > 1.0) dom = 1.0;
+                double over = (dom - RES_THRESH) / (1.0 - RES_THRESH);
+                if (over < 0.0) over = 0.0;
+                if (over > 1.0) over = 1.0;
+                g = 1.0 - (1.0 - RES_FLOOR) * over;
+                mic_res[i] *= g;
+            } else {
+                // Far-end silence: release fast so a voice onset is
+                // untouched, and pass through (echohat is zero).
+                m_resPe[i] *= RES_RELEASE;
+            }
+            gainSum += g;
+        }
+        const double instDb =
+            20.0 * log10(gainSum / (double)FFT_OUT_SIZE + 1e-9);
+        m_resDb += 0.25 * (instDb - m_resDb);
+    }
+
     pocketfft::c2r(fft_shape, fft_stride_out, fft_stride_in, fft_axes,
                    pocketfft::BACKWARD, mic_res.data(), mic_in, 1.0);
 

@@ -48,6 +48,9 @@ typedef struct NkfState {
     int guardResets;   // divergence resets this session
     int giveUp;        // 1 = failed open (permanent mic passthrough)
     float backstopDb;  // howl-backstop output trim, dB (0 = full level)
+    float loopDb;      // loop/nocancel wire trim, dB (0 = full level)
+    float resDb;       // intrinsic RES attenuation estimate, dB
+    int nocancelHot;   // 1 = loud both legs, nothing cancelling
 } NkfState;
 void NkfGetState(NkfHandle* h, NkfState* s);
 
