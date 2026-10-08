@@ -363,6 +363,7 @@ class WebImGuiUI {
         const expo = k.giveUp ? 'FAILED OPEN (mic passthrough)' : (k.exposed ? 'live' : 'warming up');
         let s = 'NKF: ' + lock + ' · ' + expo +
             (k.loopActive ? ' · loop!' : '') +
+            (k.nocancelHot ? ' · no-cancel trim' : '') +
             ((k.loopDb !== undefined && k.loopDb < -0.5) ? ' · loop trim ' + k.loopDb.toFixed(1) + ' dB' : '') +
             ' · resets ' + k.guardResets +
             ((k.resDb !== undefined && k.resDb < -0.5) ? ' · RES ' + k.resDb.toFixed(1) + ' dB' : '');

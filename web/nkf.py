@@ -28,9 +28,13 @@ pip package, same models/nkf.onnx file):
   reset + re-shadow, 6 resets -> fail-open mic), self-monitor
   loop detector (drives downstream brakes only — the engine
   itself keeps adapting: -6 dB wire trim, single-window
-  backstop attack, eager TDC; all self-release), howl backstop
-  (tonal-hold trim to a -24 dB floor, single-window release on
-  proven cancellation).
+  backstop attack, eager TDC; all self-release), no-cancel
+  watchdog (loud on both legs with wire-as-loud-as-mic past
+  grace + ~5 s trims like a loop — covers clipped-ADC,
+  beyond-range, jitter-chaotic AND false-confident locks by
+  keying on cancellation evidence, not lock flags; skipped
+  failed-open), howl backstop (tonal-hold trim to a -24 dB
+  floor, single-window release on proven cancellation).
 
 Deliberate omissions (desktop-only plumbing, not DSP):
 - NkfPhase transition log (desktop crash diagnostics; the
@@ -99,6 +103,28 @@ LOOP_QUIET = 16
 LOOP_TRIM = 0.5       # wire multiplier while looped
 LOOP_TAU_ATK = 0.35   # trim engages within a few 512-blocks
 LOOP_TAU_REL = 0.15   # ...and lets go over ~0.5 s once clear
+# Escalation: a braked loop that stays LOUD is not under control
+# (marginal stability: coupling x trim ~= 1 sustains full-scale
+# mush forever). Every 3 continuous loud seconds deepen the trim
+# one step, floored. Any quiet-ish block resets the run, so bursty
+# voice in a mic test never escalates — only gapless sustain does
+# (howls don't pause; speech does). Bounded, fast-releasing, and
+# the backstop/heal logic is untouched above it.
+LOOP_TRIM_DEEP = 0.25   # -12 dB after ~3 s sustained loud
+LOOP_TRIM_FLOOR = 0.125  # -18 dB after ~6 s; never deeper
+LOOP_LOUD_BLOCKS = 96   # 96 x 512-sample blocks ~= 3 s per step
+
+# ---- No-cancel watchdog ---------------------------------------------------
+# Clipped ADC, beyond-range or jitter-chaotic delay, or a confident
+# but WRONG lock (clipped correlation peaks anywhere): the Kalman
+# runs misaligned and the loop detector may be blind too. The robust
+# signal isn't lock confidence — it's CANCELLATION EVIDENCE: loud on
+# both legs with wire-as-loud-as-mic (depth above the proven-
+# cancellation bar) for this long means nothing is being cancelled,
+# whatever the cause — trim it like a loop. Releases the moment
+# cancellation resumes or either leg goes quiet. Skipped failed-open
+# (passthrough is the documented give-up contract, not a failure).
+NOCANCEL_HOT_AFTER = 80000  # ~5 s of loud, uncancelled audio
 
 # ---- Howl backstop -----------------------------------------------------
 BS_BIN_RUN = 40
@@ -336,6 +362,10 @@ class NkfEngine:
         self.since_loop = 0
         self.loop_conf = 0
         self.loop_quiet = 0
+        self.nocancel_hot_samples = 0
+        self.nocancel_hot = False
+        self.loop_loud_run = 0
+        self.last_window_cancelled = False
         self.last_tdc_sc = -2.0
         self.last_tdc_d = 0
         self.dep_mic = self.dep_out = 0.0
@@ -374,6 +404,7 @@ class NkfEngine:
             "locked": 1 if self.tdc_locked else 0,
             "exposed": 1 if exposed else 0,
             "loopActive": 1 if self.loop_conf >= LOOP_ON else 0,
+            "nocancelHot": 1 if self.nocancel_hot else 0,
             "guardResets": int(self.resets),
             "giveUp": 1 if self.give_up else 0,
             "backstopDb": float(20.0 * np.log10(self.bs_gain + 1e-9)),
@@ -470,11 +501,12 @@ class NkfEngine:
 
     # -- Divergence guard (per 512-block, real domain) --------------------
     def _guard_trip(self, mic_b, ref_b, out_b):
+        # NOTE: mic/ref EMAs are maintained by the block loop (they
+        # must track live audio even when the engine is skipped, e.g.
+        # failed-open); only the out EMA lives here with the trip.
         m = float(np.mean(np.asarray(mic_b) ** 2))
         r = float(np.mean(np.asarray(ref_b) ** 2))
         o = float(np.mean(np.asarray(out_b) ** 2))
-        self.mic_env += GUARD_EMA * (m - self.mic_env)
-        self.ref_env += GUARD_EMA * (r - self.ref_env)
         self.out_env += GUARD_EMA * (o - self.out_env)
         hot = (self.out_env > GUARD_HOT_MEAN_E
                and self.out_env > GUARD_RATIO * self.mic_env
@@ -551,6 +583,9 @@ class NkfEngine:
         mic_ms = self.dep_mic / max(1, self.dep_samples)
         depth = 10.0 * np.log10(
             (self.dep_out + 1e-12) / (self.dep_mic + 1e-12))
+        # Cancellation evidence for the no-cancel watchdog (pure
+        # measurement — independent of the tonal logic below).
+        self.last_window_cancelled = depth <= BS_HEAL_D
         floors = mic_ms >= BS_MIC_MS and depth <= BS_HEAL_D
         tonal = frames > 0 and self.bs_hits >= BS_HITS
         stable = self.bs_bin_best >= BS_BIN_RUN
@@ -646,6 +681,26 @@ class NkfEngine:
                 p = need_start + i
                 if front <= p < front + len(self.ref_hist):
                     ref_b[i] = self.ref_hist[p - front]
+            # Level followers run on EVERY block (engine or not), so
+            # the no-lock watchdog sees live audio even failed-open.
+            self.mic_env += GUARD_EMA * (
+                float(np.mean(mic_b.astype(np.float64) ** 2))
+                - self.mic_env)
+            self.ref_env += GUARD_EMA * (
+                float(np.mean(ref_b.astype(np.float64) ** 2))
+                - self.ref_env)
+            # No-cancel watchdog: count blocks that are loud on
+            # both legs, echo-significant (ref within 6 dB of mic —
+            # a loud talker over quiet music has nothing to fix and
+            # must never trip this), with no proven cancellation
+            # lately (see _backstop_window). Anything else resets it.
+            echo_big = (self.ref_env >= BS_MIC_MS
+                        and self.ref_env >= 0.25 * self.mic_env)
+            if (self.mic_env < BS_MIC_MS or not echo_big
+                    or self.last_window_cancelled):
+                self.nocancel_hot_samples = 0
+            else:
+                self.nocancel_hot_samples += shift
             processed = False
             if self.tdc_locked and not self.give_up:
                 try:
@@ -688,13 +743,30 @@ class NkfEngine:
             if self.bs_gain != 1.0:
                 emit = emit * np.float32(self.bs_gain)
 
-            # Loop-active trim: multiplicative with the backstop, own
-            # smoothing toward LOOP_TRIM while engaged, slow release
-            # after. The engine keeps adapting underneath the whole
-            # time — the trim starves the loop of gain, never the
-            # canceller of signal.
+            # Escalation run: pre-gain wire energy (stable measure —
+            # post-trim energy would sawtooth against its own trim).
+            # Any quiet-ish block restarts it: bursty voice never
+            # climbs, gapless sustain does.
             looped = self.loop_conf >= LOOP_ON
-            loop_target = LOOP_TRIM if looped else 1.0
+            nocancel = (self.total > TDC_LOCK_GRACE
+                        and not self.give_up
+                        and self.nocancel_hot_samples >= NOCANCEL_HOT_AFTER)
+            self.nocancel_hot = nocancel
+            ms_pre = float(np.mean(emit.astype(np.float64) ** 2))
+            if (looped or nocancel) and ms_pre >= BS_MIC_MS:
+                self.loop_loud_run += 1
+            else:
+                self.loop_loud_run = 0
+            if looped or nocancel:
+                step = self.loop_loud_run // LOOP_LOUD_BLOCKS
+                loop_target = LOOP_TRIM * (0.5 ** min(step, 2))
+                if loop_target < LOOP_TRIM_FLOOR:
+                    loop_target = LOOP_TRIM_FLOOR
+            else:
+                loop_target = 1.0
+            # Loop-active trim: multiplicative with the backstop, own
+            # smoothing. Cuts loop gain below 1 while engaged; the
+            # engine keeps adapting underneath (never frozen).
             self.loop_gain += (loop_target - self.loop_gain) * (
                 LOOP_TAU_ATK if loop_target < self.loop_gain
                 else LOOP_TAU_REL)

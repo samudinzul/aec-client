@@ -56,14 +56,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Web NKF aggressive-on-loop brakes.** A confirmed loop now
   leans on everything downstream of the Kalman core — never the
   core itself (no freeze, no un-expose: both sustain howls per
-  desktop field tests). Three self-releasing brakes: a -6 dB wire
-  trim while engaged (multiplicative with the backstop, ~0.5 s
-  release), single-window backstop attack on tonal-stable wire
-  (heal still demands proof), eager TDC cadence. Closed-loop
-  synth at coupling 1.3: no blowout (peak 0.20), trim engaged
-  with the engine still exposed, clean release after. Telemetry
-  gains `loopDb`; both web UIs show it next to the loop flag.
-  (`web/nkf.py` LOOP_TRIM/TAU_*, `web/test_nkf_loop.py` L1–L4.)
+  desktop field tests). Self-releasing brakes: a -6 dB wire trim
+  while engaged (~0.5 s release) that ESCALATES to -12/-18 dB on
+  gapless loud sustain (marginal stability at high coupling
+  howls forever at -6; bursty voice resets the run so mic tests
+  never escalate), single-window backstop attack on tonal-stable
+  wire (heal still demands proof), eager TDC cadence, plus a
+  no-cancel watchdog (loud on both legs with wire-as-loud-as-mic
+  past grace + ~5 s trims like a loop — covers clipped-ADC,
+  beyond-range, jitter-chaotic AND false-confident locks by
+  keying on cancellation evidence; skipped failed-open; gated on
+  echo-significance so loud voice over quiet music never trips
+  it). Closed-loop synth at coupling 1.3–2.0, clipped and
+  long-delay: bounded, trimmed, released; failed-open stays
+  braked too. Telemetry gains `loopDb`/`nocancelHot`; both web
+  UIs show them. (`web/nkf.py`, `web/test_nkf_loop.py` L1–L7.)
 
 - **Web NKF intrinsic residual suppressor (Wiener post-filter).**
   The linear Kalman core passes nonlinear distortion, loud

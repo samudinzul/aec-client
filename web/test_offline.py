@@ -106,6 +106,8 @@ def smoke():
             assert k["giveUp"] == 0, f"{name}: failed open on synth"
             assert k["guardResets"] == 0, f"{name}: guard tripped on synth"
             assert abs(k["backstopDb"]) < 0.5, f"{name}: backstop trimmed voice"
+            assert abs(k.get("loopDb", 0.0)) < 0.5, f"{name}: loop trim fired without a loop"
+            assert k.get("nocancelHot", 0) == 0, f"{name}: watchdog fired on healthy audio"
         print(f"engine {name}: PASS frames={st['frames']}{extra}")
         ec.stop()
     print("SMOKE OK")

@@ -34,9 +34,11 @@ SR = 16000
 FRAME = 128
 
 
-def _run_closed_loop(coupling=1.3, d_mic=800, d_ref=800):
+def _run_closed_loop(coupling=1.3, d_mic=800, d_ref=800, hot=False):
     """Returns (wire_out, snapshots). Snapshots are get_state() dicts
-    taken at 4 s (mid-loop) and at the end (post-release)."""
+    taken at 4 s (mid-loop), 9 s (late-loop) and at the end
+    (post-release). hot=True drives the mic 3x into ADC clipping,
+    like loud speakers + high mic gain in a real monitor loop."""
     eng = NkfEngine()
     assert eng.ready, f"NKF backend unavailable: {eng.last_error}"
     n = SR * 12
@@ -60,11 +62,16 @@ def _run_closed_loop(coupling=1.3, d_mic=800, d_ref=800):
             # what a mic test feeds back).
             t_ref = i + j - d_ref
             r[j] = 0.0 if (live_ref or t_ref < 0) else wire[t_ref]
-        o = eng.process((np.clip(m, -1, 1) * 32767).astype(np.int16),
+        mi = m * 32767.0
+        if hot:
+            mi = mi * 3.0
+        o = eng.process(np.clip(mi, -32768, 32767).astype(np.int16),
                         (np.clip(r, -1, 1) * 32767).astype(np.int16))
         wire[i:i + FRAME] = o.astype(np.float32) / 32768.0
         if i == 4 * SR:
             snaps["mid"] = eng.get_state()
+        if i == 9 * SR:
+            snaps["late"] = eng.get_state()
     snaps["end"] = eng.get_state()
     return wire, snaps
 
@@ -145,6 +152,51 @@ def l5_giveup_still_braked():
     return ok
 
 
+def l6_escalation_kills_it():
+    """V6 howl conditions (clipped, beyond-range delay, coupling 2):
+    the trim must ESCALATE past -6 dB (marginal stability at -6
+    sustains full-scale mush), stay finite, and release after."""
+    wire, snaps = _run_closed_loop(coupling=2.0, d_mic=20000,
+                                   d_ref=20000, hot=True)
+    late = snaps["late"]
+    ok = (late["loopDb"] < -9.0
+          and bool(np.all(np.isfinite(wire)))
+          and abs(snaps["end"]["loopDb"]) < 0.5)
+    print(f"L6 escalation: loopDb={late['loopDb']:.1f}dB "
+          f"peak={float(np.abs(wire).max()):.3f} "
+          f"released={abs(snaps['end']['loopDb']) < 0.5} "
+          f"({'PASS' if ok else 'FAIL: want escalated past -6dB'})")
+    return bool(ok)
+
+
+def l7_loud_voice_broadband_music():
+    """False-positive guard: loud voice over broadband background
+    (crowd-like, no loop) must NEVER trim — gaps and decorrelation
+    keep every brake disengaged. (Pure-tone music + pure-tone voice
+    can correlate and trim; same on desktop, accepted edge.)"""
+    eng = NkfEngine()
+    assert eng.ready
+    sr, dur = 16000, 12
+    t = np.arange(sr * dur) / sr
+    voice = (((t % 2.0) < 0.5).astype(np.float32)
+             * (0.35 * np.sin(2 * np.pi * 180 * t)).astype(np.float32))
+    rng = np.random.default_rng(23)
+    music = (0.09 * rng.standard_normal(len(t))).astype(np.float32)
+    for i in range(0, len(t), 128):
+        m = (np.clip(voice[i:i + 128], -1, 1) * 32767).astype(np.int16)
+        r = (np.clip(music[i:i + 128], -1, 1) * 32767).astype(np.int16)
+        eng.process(m, r)
+    st = eng.get_state()
+    # NOTE: loopDb is 20*log10(1.0 + 1e-9) ~= 8.7e-09 when the trim
+    # never engages — compare with a band, never =="0.0".
+    ok = (st["loopActive"] == 0 and st["nocancelHot"] == 0
+          and abs(st["loopDb"]) < 0.5 and st["guardResets"] == 0)
+    print(f"L7 no-false-trim: loop={st['loopActive']} "
+          f"nocancel={st['nocancelHot']} loopDb={st['loopDb']:.2f} "
+          f"({'PASS' if ok else 'FAIL'})")
+    return bool(ok)
+
+
 def main():
     if not NkfEngine().ready:
         print("SKIP (NKF backend unavailable)")
@@ -154,7 +206,9 @@ def main():
                l2_brakes_engage(snaps),
                l3_release(snaps),
                l4_single_window_attack(),
-               l5_giveup_still_braked()]
+               l5_giveup_still_braked(),
+               l6_escalation_kills_it(),
+               l7_loud_voice_broadband_music()]
     print("LOOP TESTS: " + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
     return 0 if all(results) else 1
 
