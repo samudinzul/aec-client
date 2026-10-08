@@ -363,7 +363,8 @@ class WebImGuiUI {
         const expo = k.giveUp ? 'FAILED OPEN (mic passthrough)' : (k.exposed ? 'live' : 'warming up');
         let s = 'NKF: ' + lock + ' · ' + expo +
             (k.loopActive ? ' · loop!' : '') +
-            ' · resets ' + k.guardResets;
+            ' · resets ' + k.guardResets +
+            ((k.resDb !== undefined && k.resDb < -0.5) ? ' · RES ' + k.resDb.toFixed(1) + ' dB' : '');
         if (k.backstopDb < -0.5)
             s += ' · Backstop trim: ' + k.backstopDb.toFixed(1) + ' dB (tonal wire?)';
         box.textContent = s;

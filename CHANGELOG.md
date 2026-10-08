@@ -53,6 +53,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Web NKF intrinsic residual suppressor (Wiener post-filter).**
+  The linear Kalman core passes nonlinear distortion, loud
+  residue and late tails, and DTLN-NS is noise (not echo)
+  suppression — so the NKF engine now carries its own
+  suppressor, like AEC3's built-in one: per-bin gain from the
+  core's internal `echohat` (echo-majority bins trim toward
+  -20 dB, the rest pass at unity, floored so nothing gates).
+  Double-talk safety is structural (minority-echo bins never
+  attenuate); silent far-end releases fast and passes through.
+  Part of the engine, not a chain stage — the NS toggle still
+  governs DTLN-NS only. Measured: +18 dB on echo-only synth,
+  bit-identical output with no far-end energy, healthy
+  fingerprint intact on doubletalk (locked, exposed, 0 resets,
+  0.0 dB backstop). Gated by `enable_res` (default on) for A/B;
+  `resDb` telemetry mirrors in both web UIs.
+  (`web/nkf.py` RES_* constants, `web/test_nkf_res.py` T1–T3.)
+
 - **Web engines: WebRTC AEC3 + NKF-AEC (desktop parity).** The web
   chain runs the same PROFILES table as the desktop (DTLN-AEC 128
   / WebRTC AEC3 / NKF-AEC) with the same experimental-engines

@@ -254,6 +254,7 @@ function showEngineInfo(st) {
   const expo = k.giveUp ? 'FAILED OPEN (mic passthrough)' : (k.exposed ? 'live' : 'warming up');
   let s = 'NKF: ' + lock + ' · ' + expo +
     (k.loopActive ? ' · loop!' : '') + ' · resets ' + k.guardResets;
+  if (k.resDb !== undefined && k.resDb < -0.5) s += ' · RES ' + k.resDb.toFixed(1) + ' dB';
   if (k.backstopDb < -0.5) s += ' · Backstop trim: ' + k.backstopDb.toFixed(1) + ' dB';
   box.textContent = s;
   box.style.color = k.backstopDb < -0.5 ? '#ff9d6b' : '';

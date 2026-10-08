@@ -109,6 +109,17 @@ if [ "$WEB" -ne 0 ]; then
             report "web" FAIL "(see /tmp/web_smoke_out.txt)"
         fi
     fi
+    # NKF residual-suppressor regressions (skip cleanly without the
+    # backend; fail on measured regressions when it is present).
+    if "$PY" -m web.test_nkf_res > /tmp/web_res_out.txt 2>&1; then
+        report "web-res" PASS "($(grep -a -o 'ALL PASS' /tmp/web_res_out.txt | head -1))"
+    else
+        if grep -aq "SKIP" /tmp/web_res_out.txt 2>/dev/null; then
+            report "web-res" SKIP "(NKF backend unavailable)"
+        else
+            report "web-res" FAIL "(see /tmp/web_res_out.txt)"
+        fi
+    fi
 fi
 
 echo ""

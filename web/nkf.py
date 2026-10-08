@@ -9,8 +9,12 @@ pip package, same models/nkf.onnx file):
   shift @16 kHz, periodic Hann (sin^2(pi*i/1024) — NOT symmetric),
   double-precision rFFT, 4-frame loopback history, silence skip
   (history mean < 1e-5 freezes states and emits mic), Kalman
-  predict/update around the ONNX invoke, echo subtraction,
-  inverse FFT + weighted overlap-add.
+  predict/update around the ONNX invoke, echo subtraction, an
+  intrinsic Wiener residual suppressor (per-bin gain from the
+  core's own echohat — echo-majority bins trim toward -20 dB,
+  the rest pass at unity; part of the engine like AEC3's own
+  suppressor, independent of the NS toggle), inverse FFT +
+  weighted overlap-add.
 - Level scaling (mirrors ENG_IN_SCALE/OUT_SCALE): the stock model
   is level-sensitive — int16/32768 audio (~0.1-0.2 rms) scales
   DOWN by 16 into the engine and back UP after. Guard, mix and
@@ -105,6 +109,21 @@ GUARD_RATIO = 4.0
 GUARD_CLIP_MEAN_E = 0.5
 GUARD_MAX_RESETS = 6
 
+# ---- Intrinsic residual echo suppressor (Wiener post-filter) -----------
+# The Kalman core is a *linear* canceller: nonlinear distortion, loud
+# residue and late tails pass through it. Like AEC3's built-in
+# suppressor (part of the engine, not a chain stage), a per-bin Wiener
+# gain from the core's own echohat cleans up, with the NS toggle's
+# meaning untouched (it still governs DTLN-NS only).
+# Double-talk safety is structural, not tuned: bins where echo is the
+# minority of mic energy pass at unity; only echo-majority bins are
+# trimmed, floored so nothing fully gates (no musical gating).
+RES_EMA = 0.15      # power smoothing per 512-block (~150 ms tail)
+RES_THRESH = 0.5    # suppress only echo-majority bins
+RES_FLOOR = 0.1     # deepest per-bin trim (-20 dB)
+RES_RELEASE = 0.25  # echo-power decay per silent block (fast release
+                    # so a voice onset after far-end silence is untouched)
+
 
 def available() -> bool:
     return ort is not None
@@ -119,7 +138,8 @@ class _NkfCore:
     """Kalman core (NKFImpl): 512-sample blocks in/out, float audio
     in the engine domain (caller scales). NOT thread-safe."""
 
-    def __init__(self, model_path):
+    def __init__(self, model_path, enable_res=True):
+        self.enable_res = enable_res
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
@@ -144,6 +164,36 @@ class _NkfCore:
         self.h_post = np.zeros((FFT_OUT_SIZE, NKF_LEN), np.complex128)
         self.states = [np.zeros((1, FFT_OUT_SIZE, 18), np.float32)
                        for _ in range(4)]
+        self.res_pe = np.zeros(FFT_OUT_SIZE, np.float64)
+        self.res_pm = np.zeros(FFT_OUT_SIZE, np.float64)
+        self.res_db = 0.0
+
+    def _res_apply(self, enh, mic_spec, echohat, far_active):
+        """Intrinsic residual echo suppressor (Wiener post-filter).
+
+        Per-bin gain from the core's own echo estimate: bins where
+        echo is the minority of mic energy pass at unity (double-talk
+        safety by construction); echo-majority bins trim toward
+        RES_FLOOR. Output-only — Kalman states never see it.
+        """
+        if not self.enable_res:
+            return enh
+        if far_active:
+            pe_inst = np.abs(echohat.astype(np.complex128)) ** 2
+            pm_inst = np.abs(mic_spec.astype(np.complex128)) ** 2
+            self.res_pe += RES_EMA * (pe_inst - self.res_pe)
+            self.res_pm += RES_EMA * (pm_inst - self.res_pm)
+            dom = np.clip(self.res_pe / (self.res_pm + 1e-12), 0.0, 1.0)
+            gain = 1.0 - (1.0 - RES_FLOOR) * np.clip(
+                (dom - RES_THRESH) / (1.0 - RES_THRESH), 0.0, 1.0)
+        else:
+            # Far-end silence: release fast so a voice onset is
+            # untouched, and pass through (echohat is zero anyway).
+            self.res_pe *= RES_RELEASE
+            gain = np.ones(FFT_OUT_SIZE, np.float64)
+        inst_db = float(20.0 * np.log10(gain.mean() + 1e-9))
+        self.res_db += 0.25 * (inst_db - self.res_db)
+        return enh * gain
 
     def process_block(self, mic_new, lpb_new):
         """One 512-sample engine-domain block in -> 512 float out."""
@@ -211,7 +261,9 @@ class _NkfCore:
                 axis=0)
             enh = mic_spec - echohat
         else:
+            echohat = np.zeros(FFT_OUT_SIZE, np.complex128)
             enh = mic_spec
+        enh = self._res_apply(enh, mic_spec, echohat, far_active)
         est = np.fft.irfft(enh).astype(np.float32)
         self.out_buf = np.concatenate(
             [self.out_buf[BLOCK_SHIFT:], np.zeros(BLOCK_SHIFT,
@@ -224,17 +276,20 @@ class NkfEngine:
     """Full staged engine (NkfHandle): int16 in/out at 16 kHz, any
     pump frame size (128 on the web pump; 512-block internals)."""
 
-    def __init__(self, model_dir="models", num_threads=None):
+    def __init__(self, model_dir="models", num_threads=None,
+                 enable_res=True):
         self.ready = False
         self.last_error = ""
         self._core = None
+        self._enable_res = enable_res
         if ort is None:
             self.last_error = ("onnxruntime is not installed "
                                "(pip install onnxruntime)")
             self._reset_state()
             return
         try:
-            self._core = _NkfCore(f"{model_dir}/nkf.onnx")
+            self._core = _NkfCore(f"{model_dir}/nkf.onnx",
+                                  enable_res=enable_res)
             self.ready = True
         except Exception as e:
             self.last_error = f"NKF model load failed: {e}"
@@ -308,6 +363,8 @@ class NkfEngine:
             "guardResets": int(self.resets),
             "giveUp": 1 if self.give_up else 0,
             "backstopDb": float(20.0 * np.log10(self.bs_gain + 1e-9)),
+            "resDb": float(self._core.res_db)
+            if self._core is not None else 0.0,
         }
 
     # -- TDC -------------------------------------------------------------
