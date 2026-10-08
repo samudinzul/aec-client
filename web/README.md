@@ -1,4 +1,4 @@
-# aec-web — local web UI wrapper for AEC Client (DTLN-only v1)
+# aec-web — local web UI for AEC Client
 
 Real-time echo cancellation + noise suppression in a
 native app window (or your browser), powered
@@ -11,17 +11,13 @@ nothing for antivirus heuristics to flag.
 2. **Python 3.10 or newer** — must be installed *before*
    the first run (the starter script uses it to create a local
    environment), any one of:
-   - **cmd.exe or PowerShell:**
-     ```powershell
-     winget install -e --id Python.Python.3.12
-     ```
-   - **PowerShell silent install (no winget needed):**
-     ```powershell
-     Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" -OutFile "$env:TEMP\python-installer.exe"; Start-Process -Wait -FilePath "$env:TEMP\python-installer.exe" -ArgumentList "/quiet", "PrependPath=1"
-     ```
-     Downloads the official installer and runs it silently, adding Python to PATH (no admin needed).
-   - **python.org installer (manual):** https://www.python.org/downloads/ —
-     run it and tick **"Add python.exe to PATH"** on the first screen.
+   - **winget (recommended):** open a terminal and run
+     `winget install -e --id Python.Python.3.12`, then continue below.
+   - **Manual:** download the installer from the official site
+     (python.org/downloads), run it yourself, and tick
+     **"Add python.exe to PATH"** on the first screen.
+   - Either way, no silent or scripted installs: you download
+     and run the installer yourself, like any normal program.
    Close and reopen your terminal afterwards so `python` is on PATH.
    Check with `python --version` (3.12 recommended; 3.14 works too —
    every package below ships wheels for it). Python from the
