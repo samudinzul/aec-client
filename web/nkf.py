@@ -125,6 +125,7 @@ LOOP_LOUD_BLOCKS = 96   # 96 x 512-sample blocks ~= 3 s per step
 # cancellation resumes or either leg goes quiet. Skipped failed-open
 # (passthrough is the documented give-up contract, not a failure).
 NOCANCEL_HOT_AFTER = 80000  # ~5 s of loud, uncancelled audio
+NOCANCEL_ECHO_RATIO = 0.25  # ref within 6 dB of mic = worth fixing
 
 # ---- Howl backstop -----------------------------------------------------
 BS_BIN_RUN = 40
@@ -695,7 +696,7 @@ class NkfEngine:
             # must never trip this), with no proven cancellation
             # lately (see _backstop_window). Anything else resets it.
             echo_big = (self.ref_env >= BS_MIC_MS
-                        and self.ref_env >= 0.25 * self.mic_env)
+                        and self.ref_env >= NOCANCEL_ECHO_RATIO * self.mic_env)
             if (self.mic_env < BS_MIC_MS or not echo_big
                     or self.last_window_cancelled):
                 self.nocancel_hot_samples = 0
