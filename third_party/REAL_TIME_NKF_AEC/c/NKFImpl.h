@@ -64,6 +64,11 @@ public:
 
     void ProcessBlock(const float* mic_new, const float* lpb_new, float* out);
 
+    // Current RES attenuation estimate, dB (telemetry for NkfGetState).
+    // NOTE: must stay in this public block — everything below the
+    // first `private:` label is inaccessible to the wrapper.
+    double ResDb() const { return m_resDb; }
+
     // Freeze adaptation: keep applying the current filter (echohat
     // synthesis still runs) but skip the ONNX inference and the
     // Kalman/state updates. Used when the engine sits inside a
@@ -112,9 +117,6 @@ private:
         memset(m_resPm, 0, FFT_OUT_SIZE * sizeof(double));
         m_resDb = 0.0;
     };
-
-    // Current RES attenuation estimate, dB (telemetry for NkfGetState).
-    double ResDb() const { return m_resDb; }
 
     void ExportWAV(const std::string& Filename,
                    const std::vector<float>& Data, unsigned SampleRate);
