@@ -145,21 +145,27 @@ Done. Talk normally with speakers on.
 > Every release is built straight from the public source in this repo
 > — audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
 >
-> **VirusTotal false positive.** Two heuristics flag this build:
-> Microsoft `Wacatac.B!ml` and MaxSecure `Trojan.Malware.300983.susgen`.
-> Both are false positives: they key on unsigned PE binaries that
-> bundle ML runtimes (ONNX Runtime + TFLite), and this app legitimately
-> uses both for echo cancellation and noise suppression. Only 2 of 71
-> vendors flagged it; the other 69 did not. Click
-> **More info → Run anyway** and it runs normally.
+> **VirusTotal record (v1.11.0, pre-publish scans).** Both release
+> ZIPs scan **0 detections**. The standalone `aec_gui.exe` draws one
+> flag — SecureAge only (unsigned-file reputation); Defender,
+> Bitdefender, Kaspersky and ESET are clean, and its behavior tab is
+> empty of anything real (8 LOW + 10 INFO, zero dropped files, zero
+> C2, zero persistence — sandbox noise like the OS trust-checking
+> our file and the sandbox renaming it). The older
+> `Wacatac.B!ml` / `susgen` pair no longer fires on current builds
+> (publisher metadata + execution manifest + accumulated reputation).
+> Any residual flag is disputed per release (see `SECURITY.md`) —
+> never "fixed" with packers or obfuscation.
 >
-> **Why it's flagged.** The app is unsigned, and signing is the only
-> fix. A code-signing certificate costs ~$200–400/yr, and the free
-> Microsoft route (Azure Artifact Signing) requires US/Canada residency
-> for individual developers — neither is available for this personal
-> build. Signing instructions are in [Signing releases](#signing-releases)
-> if that ever changes. The build otherwise uses the stock MSYS2 UCRT64
-> MinGW-w64 toolchain, unchanged.
+> **Why anything flags it at all.** The app is unsigned, and signing
+> is the only full fix. A code-signing certificate costs ~$200–400/yr,
+> and the free Microsoft route (Azure Artifact Signing) requires
+> US/Canada residency for individual developers — neither is
+> available for this personal build. Signing instructions are in
+> [Signing releases](#signing-releases) if that ever changes. The
+> build otherwise uses the stock MSYS2 UCRT64 MinGW-w64 toolchain,
+> unchanged — no packers, full version metadata, declared
+> no-elevation manifest.
 >
 > **If Windows Defender deletes the file.** On some machines Defender
 > quarantines or deletes the exe outright instead of showing the
@@ -174,9 +180,9 @@ Done. Talk normally with speakers on.
 > (Windows Security → Virus & threat protection → Manage settings →
 > Exclusions → Add/remove).
 >
-> **Zero-false-positive alternative.** The [web UI](#web-ui-python-no-installer)
-> is pure Python — no PE binary, so `Wacatac.B!ml` and `susgen`
-> never apply. Same engines, same models, one click.
+> **Zero-flag alternative.** The [web UI](#web-ui-python-no-installer)
+> is pure Python + data (release asserts ban all binaries), and its
+> ZIP scans 0 detections. Same engines, same models, one click.
 
 ---
 
