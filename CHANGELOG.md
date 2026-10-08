@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Web NKF aggressive-on-loop brakes.** A confirmed loop now
+  leans on everything downstream of the Kalman core — never the
+  core itself (no freeze, no un-expose: both sustain howls per
+  desktop field tests). Three self-releasing brakes: a -6 dB wire
+  trim while engaged (multiplicative with the backstop, ~0.5 s
+  release), single-window backstop attack on tonal-stable wire
+  (heal still demands proof), eager TDC cadence. Closed-loop
+  synth at coupling 1.3: no blowout (peak 0.20), trim engaged
+  with the engine still exposed, clean release after. Telemetry
+  gains `loopDb`; both web UIs show it next to the loop flag.
+  (`web/nkf.py` LOOP_TRIM/TAU_*, `web/test_nkf_loop.py` L1–L4.)
+
 - **Web NKF intrinsic residual suppressor (Wiener post-filter).**
   The linear Kalman core passes nonlinear distortion, loud
   residue and late tails, and DTLN-NS is noise (not echo)

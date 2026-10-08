@@ -120,6 +120,16 @@ if [ "$WEB" -ne 0 ]; then
             report "web-res" FAIL "(see /tmp/web_res_out.txt)"
         fi
     fi
+    # NKF closed-loop regressions (same skip/fail contract).
+    if "$PY" -m web.test_nkf_loop > /tmp/web_loop_out.txt 2>&1; then
+        report "web-loop" PASS "($(grep -a -o 'ALL PASS' /tmp/web_loop_out.txt | head -1))"
+    else
+        if grep -aq "SKIP" /tmp/web_loop_out.txt 2>/dev/null; then
+            report "web-loop" SKIP "(NKF backend unavailable)"
+        else
+            report "web-loop" FAIL "(see /tmp/web_loop_out.txt)"
+        fi
+    fi
 fi
 
 echo ""

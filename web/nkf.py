@@ -26,9 +26,11 @@ pip package, same models/nkf.onnx file):
   grace lock), shadow (16 blocks mic on wire) + 256 ms
   crossfade exposure, divergence guard (3 hot blocks -> filter
   reset + re-shadow, 6 resets -> fail-open mic), self-monitor
-  loop detector (telemetry only — the engine adapts straight
-  through loops), howl backstop (tonal-hold trim to a -24 dB
-  floor, single-window release on proven cancellation).
+  loop detector (drives downstream brakes only — the engine
+  itself keeps adapting: -6 dB wire trim, single-window
+  backstop attack, eager TDC; all self-release), howl backstop
+  (tonal-hold trim to a -24 dB floor, single-window release on
+  proven cancellation).
 
 Deliberate omissions (desktop-only plumbing, not DSP):
 - NkfPhase transition log (desktop crash diagnostics; the
@@ -86,6 +88,17 @@ LOOP_PERIOD = 2048
 LOOP_MIN_PEAK = 0.45
 LOOP_ON = 2
 LOOP_QUIET = 16
+
+# ---- Aggressive-on-loop policy ------------------------------------------
+# A confirmed loop leans on everything downstream of the Kalman core —
+# never on the core itself (no freeze, no un-expose: field-verified
+# howl fuel). Three independent, self-releasing brakes:
+#   1. wire trim (-6 dB loop-gain cut while engaged),
+#   2. single-window backstop attack on tonal-stable wire,
+#   3. eager TDC cadence (loop delay may be shifting).
+LOOP_TRIM = 0.5       # wire multiplier while looped
+LOOP_TAU_ATK = 0.35   # trim engages within a few 512-blocks
+LOOP_TAU_REL = 0.15   # ...and lets go over ~0.5 s once clear
 
 # ---- Howl backstop -----------------------------------------------------
 BS_BIN_RUN = 40
@@ -329,6 +342,7 @@ class NkfEngine:
         self.dep_samples = 0
         self.bs_gain = 1.0
         self.bs_target = 1.0
+        self.loop_gain = 1.0
         self.bs_hits = self.bs_frames = 0
         self.bs_run = self.bs_heal = self.bs_attacks = 0
         self.bs_active = False
@@ -365,6 +379,7 @@ class NkfEngine:
             "backstopDb": float(20.0 * np.log10(self.bs_gain + 1e-9)),
             "resDb": float(self._core.res_db)
             if self._core is not None else 0.0,
+            "loopDb": float(20.0 * np.log10(self.loop_gain + 1e-9)),
         }
 
     # -- TDC -------------------------------------------------------------
@@ -543,7 +558,12 @@ class NkfEngine:
             self.bs_heal = 0
             if self.bs_run < 1000:
                 self.bs_run += 1
-            if self.bs_run >= BS_RUN and self.bs_enabled:
+            # Looped howls attack after ONE window: a tonal-stable
+            # wire while the loop detector is engaged is the howl
+            # signature itself — waiting costs howl seconds. Heal
+            # still demands proof (unchanged below).
+            need_run = 1 if self.loop_conf >= LOOP_ON else BS_RUN
+            if self.bs_run >= need_run and self.bs_enabled:
                 want = 0.25 ** (self.bs_attacks + 1)
                 if want < BS_MIN_TARGET:
                     want = BS_MIN_TARGET
@@ -600,9 +620,12 @@ class NkfEngine:
 
         if not self.give_up:
             self.since_tdc += n
-            need = (TDC_PERIOD if (self.tdc_locked
-                                   and self.tdc_confident)
-                    else TDC_EAGER)
+            # Eager while looped: loop delay may be shifting, and
+            # alignment is the cheapest stabilization available.
+            looped = self.loop_conf >= LOOP_ON
+            need = (TDC_EAGER if (looped or not (self.tdc_locked
+                                                 and self.tdc_confident))
+                    else TDC_PERIOD)
             if self.since_tdc >= need:
                 self._estimate_delay()
             if not self.tdc_locked and self.total >= TDC_LOCK_GRACE:
@@ -664,6 +687,19 @@ class NkfEngine:
                 else BS_TAU_REL)
             if self.bs_gain != 1.0:
                 emit = emit * np.float32(self.bs_gain)
+
+            # Loop-active trim: multiplicative with the backstop, own
+            # smoothing toward LOOP_TRIM while engaged, slow release
+            # after. The engine keeps adapting underneath the whole
+            # time — the trim starves the loop of gain, never the
+            # canceller of signal.
+            looped = self.loop_conf >= LOOP_ON
+            loop_target = LOOP_TRIM if looped else 1.0
+            self.loop_gain += (loop_target - self.loop_gain) * (
+                LOOP_TAU_ATK if loop_target < self.loop_gain
+                else LOOP_TAU_REL)
+            if self.loop_gain != 1.0:
+                emit = emit * np.float32(self.loop_gain)
 
             self.dep_mic += float(np.sum(mic_b.astype(np.float64) ** 2))
             self.dep_out += float(np.sum(emit.astype(np.float64) ** 2))
