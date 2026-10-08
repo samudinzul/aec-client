@@ -570,7 +570,7 @@ aec-client/
 │
 ├── CMakeLists.txt                  Build configuration
 ├── scripts/
-│   ├── make-desktop-build.sh       Desktop app build (quiet, app-only, --run to launch)
+│   ├── make-desktop-build.sh      Desktop app build (quiet, app-only, --run to launch)
 │   ├── test.sh                     Offline test suite (native + web)
 │   ├── make-release-desktop.sh     Desktop release bundle + zip builder
 │   ├── make-release-web.sh         Web release bundle + zip builder
