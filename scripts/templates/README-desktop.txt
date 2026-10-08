@@ -5,12 +5,13 @@ Real-time acoustic echo cancellation for Windows.
 
 > **IMPORTANT — READ THIS BEFORE DOUBLE-CLICKING aec_gui.exe**
 >
-> This app is unsigned, and two heuristics flag it: Microsoft
-> `Wacatac.B!ml` and MaxSecure `Trojan.Malware.300983.susgen`. Both are
-> false positives — they key on unsigned Windows executables that bundle
-> ML runtimes (ONNX Runtime + TFLite), and this app legitimately uses both
-> for echo cancellation and noise suppression. Only 2 of 71 antivirus
-> vendors flagged it.
+> This app is unsigned, which is the whole story: unsigned executables
+> that bundle ML runtimes (ONNX Runtime + TFLite) draw heuristic
+> attention, and this app legitimately uses both for echo cancellation
+> and noise suppression. Current release scans clean (0 detections on
+> the ZIP; the bare exe draws at most one minor-vendor reputation
+> flag — Defender, Bitdefender, Kaspersky and ESET pass it).
+> False positives get disputed per release, never "fixed" with packers.
 >
 > What you'll see depends on your machine:
 >
@@ -89,9 +90,9 @@ TIPS
   under 2% on a typical desktop; the post stages add a fraction of a
   percent.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
-  loops your voice back into the mic — NKF adapts live and is the most
-  sensitive to that loop; DTLN/AEC3 tolerate it. Prefer headphones
-  for mic tests.
+  loops your voice back into the mic — every engine rides through it
+  (NKF carries loop brakes + a no-cancel watchdog that show up in the
+  UI while active). Prefer headphones for mic tests anyway.
 - If echo comes back after a long call, click Stop then Start.
 - Very loud speakers can let some echo through (or make AEC3 mistake
   your voice for echo) — keep them moderate, or switch to

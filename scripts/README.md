@@ -4,10 +4,10 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 
 ## Layout
 
-- **Tools** (this folder): `make-desktop-build.sh`, `test.sh`,
-  `make-release-desktop.sh`, `make-release-web.sh`,
-  `standardize-releases.sh` — plus this file, the only `.md`
-  here, which documents them.
+- **Tools** (this folder): `make-desktop-build.sh`,
+  `make-web-build.sh`, `test.sh`, `make-release-desktop.sh`,
+  `make-release-web.sh`, `standardize-releases.sh` — plus this
+  file, the only `.md` here, which documents them.
 - **`templates/`**: release *inputs*, not docs — end-user README
   sources (`README-desktop.txt`, `README-web.txt`) and the GitHub
   notes template (`release-template.md`). The release scripts stamp
@@ -32,9 +32,10 @@ scripts/test.sh                        # offline tests (native + web)
 | `make-release-web.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-release-web.sh` |
 | `standardize-releases.sh` | Align GitHub release titles/notes (needs `gh auth login`) | `scripts/standardize-releases.sh` |
 
-`release-template.md`, `README.txt`, `README-web.txt` are inputs:
-the release scripts stamp versions into them — don't edit the
-outputs (`release/`, gitignored), edit these sources.
+`templates/` holds the inputs (`release-template.md`,
+`README-desktop.txt`, `README-web.txt`): the release scripts stamp
+versions into them — don't edit the outputs (`release/`,
+gitignored), edit these sources.
 
 ## What test.sh checks
 
@@ -43,8 +44,14 @@ outputs (`release/`, gitignored), edit these sources.
   These expectations are specific to the synth (a real howl *should*
   attack) — they pin the false-trigger fix, not the protection.
 - **web** (`python -m web.test_offline --smoke`, prefers `.venv`):
-  expects `SMOKE OK`. Skips (not fails) when models/litert are
-  missing.
+  synthetic pair through every available engine, expects `SMOKE OK`.
+  Skips (not fails) when models/litert are missing.
+- **web-res** (`python -m web.test_nkf_res`): NKF residual-suppressor
+  transparency / echo gain / doubletalk fingerprint.
+- **web-loop** (`python -m web.test_nkf_loop`): closed-loop no-blowout,
+  brake engagement + release, give-up braking, escalation, and the
+  loud-voice-no-false-trim guard.
 
 Failures print where to look (`/tmp/nkf_smoke_out.txt`,
-`/tmp/web_smoke_out.txt`, `nkf-phase.log`).
+`/tmp/web_smoke_out.txt`, `/tmp/web_res_out.txt`,
+`/tmp/web_loop_out.txt`, `nkf-phase.log`).

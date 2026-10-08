@@ -12,9 +12,11 @@ This project implements a web-based Dear ImGui UI that matches the desktop AEC C
 **Note**: This is a DOM implementation (real selects, sliders, checkboxes
 and buttons) styled to mirror the desktop Dear ImGui layout — same
 sections, labels, tab bar and footer. No canvas, no WebAssembly, so
-every control is clickable. Engine-bound widgets the server has no
-endpoint for (profile switching, WPE, sample rate) are shown fixed,
-the way the desktop shows a forced choice.
+every control is clickable. Same PROFILES table as the desktop
+(DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC) with the same
+experimental-engines gating; options whose backend is missing are
+disabled with a note. Fixed at 16 kHz like the desktop's neural
+engines.
 
 ## Key Features
 
@@ -30,17 +32,19 @@ the way the desktop shows a forced choice.
 ### Same Functionality
 - Device enumeration and selection (devices locked while running)
 - Microphone level 0–200% (More → Levels, like the desktop)
-- Noise suppression toggle (live) — the sole post stage
-- Profile section (fixed DTLN-AEC 128 — the web engine is not switchable)
+- Noise suppression toggle (live) — DTLN-NS post stage on every engine
+- Profile section (3 engines, hot-swappable while running; extras hidden until experimental tick)
+- NKF telemetry line (delay lock, exposure, backstop/loop/RES trim, guard resets)
 - Start/Stop + Reset to defaults, with live status
-- Live level meters (Mic/Out) with peak hold, while running
+- Live level meters (Mic/Out), while running
 - Minimize to system tray (native window only)
 - Wallpaper picker (browser-side backdrop, remembered in localStorage)
 
 ### Live Controls
 - NS toggle applies immediately
+- Profile switches hot-swap the engine (streams untouched, new engine starts reset)
 - Mic gain applies live to running chain
-- Device changes require restart
+- Device and Listen-to-myself changes require Stop -> Start
 - All status updates via WebSocket
 
 ## Setup
@@ -54,7 +58,7 @@ the way the desktop shows a forced choice.
 
 2. Run the web server:
    ```bash
-   python web/server.py
+   python -m web.server
    ```
 
 3. Open in browser:

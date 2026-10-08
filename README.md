@@ -52,14 +52,14 @@ No more headphones. No more echo. No dead-air noise.
   - AEC3 and NKF-AEC are **experimental** — hidden from the menu by default; tick **Show experimental engines** on the Appearance tab to reveal them.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on every path.
-- **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting; NKF keeps its divergence guard, staged exposure and self-monitor loop detector.
+- **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting; NKF keeps its divergence guard, staged exposure, loop brakes and no-cancel watchdog (all self-releasing, all voice-safe by construction).
 - **Low CPU usage** — engines typically well under 2% per stream on a typical desktop; the post stages add a fraction of a percent.
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
 - **Selectable sample rate** (16 / 48 kHz)
 - **Optional system tray** — runs in the background like a real utility
 - **Device filtering** — virtual cables hidden from Mic/Reference dropdowns
-- **Live level meters** with peak-hold (meters show the post-stage signal, i.e. what Discord hears)
+- **Live level meters** (meters show the post-stage signal, i.e. what Discord hears)
 - **Clock-drift correction** — stable over long calls
 - **Wallpaper customization**
 - **Auto-save settings** to `aec_config.txt`
@@ -71,15 +71,15 @@ No more headphones. No more echo. No dead-air noise.
 
 ![AEC Web UI](screenshots/web-ui.png)
 
-The default **DTLN-AEC 128 → DTLN-NS** chain also runs as a
+All three engine profiles (**DTLN-AEC 128**, **WebRTC AEC3**,
+**NKF-AEC**, each optionally followed by DTLN-NS) also run as a
 **pure-Python local web app**: no `.exe`, no installer, nothing
-for antivirus heuristics to flag. Python is the only prerequisite (a
-one-time install — see Requirements below). The desktop
-build's two VirusTotal false positives (`Wacatac.B!ml`,
-`susgen`) cannot occur here: every package is a mainstream
-PyPI wheel, and nothing we ship is a PE binary. **Never
-freeze it with PyInstaller/Nuitka** — that reintroduces the
-exact problem.
+for antivirus heuristics to flag — the web release ZIP scans
+0 detections on VirusTotal. Python is the only prerequisite (a
+one-time install — see Requirements below). Every package is a
+mainstream PyPI wheel, and nothing we ship is a PE binary
+(release asserts fail the build otherwise). **Never freeze it
+with PyInstaller/Nuitka** — that reintroduces the exact problem.
 
 **One click:** double-click `web\start.bat` — it creates a
 local Python environment, installs packages (first run only,
@@ -93,13 +93,11 @@ free), VB-CABLE, ~500 MB free.
 
 **Installing Python** — any one of:
 - **cmd.exe or PowerShell:** `winget install -e --id Python.Python.3.12`
-- **PowerShell silent install (no winget needed):**
-  ```powershell
-  Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe" -OutFile "$env:TEMP\python-installer.exe"; Start-Process -Wait -FilePath "$env:TEMP\python-installer.exe" -ArgumentList "/quiet", "PrependPath=1"
-  ```
-  Downloads the official installer and runs it silently, adding Python to PATH (no admin needed).
 - **python.org installer (manual):** https://www.python.org/downloads/ —
-  run it and tick **"Add python.exe to PATH"** on the first screen.
+  download it yourself, run it, and tick **"Add python.exe to PATH"**
+  on the first screen. (No scripted/silent installs anywhere in
+  this project — downloaders that fetch and silently run executables
+  are exactly what antivirus heuristics flag.)
 
 Then close and reopen your terminal (or reboot) so `python` is
 on PATH.
@@ -208,12 +206,13 @@ To sign a release, rebuild and re-zip with signing enabled:
 AEC_SIGN=1 \
 AEC_CERT_SHA1="<your cert thumbprint>" \
 AEC_TIMESTAMP_URL="http://timestamp.digicert.com" \
-scripts/make-release-desktop.sh 1.10.1
+scripts/make-release-desktop.sh
 ```
+(version defaults to `APP_VERSION`; explicit versions must match it.)
 
 The `AEC_SIGN` flag is off by default — releases stay unsigned until you
-have a cert. The signing step runs after the zip asserts, so a failed
-sign does not ship an unsigned build.
+have a cert. Signing runs before zipping (after the asserts), so a failed
+sign never ships and the signature lands inside the ZIP.
 
 ---
 
@@ -371,8 +370,8 @@ Web UI only (`web/`):
 - Frame buffering at 10–16 ms intervals
 - Lock-free SPSC ring buffers (audio thread ↔ UI thread)
 - Clock-drift correction (dynamic sample drop/duplicate)
-- RMS metering with peak hold + decay
-- Self-monitor loop detection (NKF: hold safe exposure while Listen-to-myself rings)
+- RMS metering (live levels show the post-stage signal)
+- Self-monitor loop brakes (NKF: wire trim + escalation, fast backstop attack, no-cancel watchdog — the engine keeps adapting underneath)
 
 ---
 
@@ -385,7 +384,7 @@ NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research m
 - **Model size**: 45 KB (~5.3K parameters — tiny *neural* core)
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms
-- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. NKF is strictly linear since 1.9 (the residual AEC3 pass was retired) — the **NKF-AEC** profile is NKF + DTLN-NS stacked.
+- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. The linear Kalman core carries an intrinsic Wiener residual suppressor (per-bin gain from its own echo estimate — the **NKF-AEC** profile is Kalman + RES + DTLN-NS stacked). Monitor loops meet downstream brakes only (wire trim with escalation, fast backstop attack, no-cancel watchdog): the engine never freezes or un-exposes, which field tests showed sustains howls.
 
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
@@ -480,7 +479,7 @@ curl -L -o models/dtln_aec_128_2.tflite \
   "https://raw.githubusercontent.com/breizhn/DTLN-aec/main/pretrained_models/dtln_aec_128_2.tflite"
 
 # DTLN noise reduction pair (~1.5 MB + ~2.5 MB) — runs after the engine
-# on the DTLN and WebRTC AEC3 paths (WebRTC NS is retired).
+# on every path (WebRTC NS is retired).
 curl -L -o models/dtln_ns_128_1.tflite \
   "https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation/raw/master/model/model_1.tflite"
 curl -L -o models/dtln_ns_128_2.tflite \

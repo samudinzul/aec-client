@@ -1,8 +1,8 @@
 # Model Downloads — AEC Client
 
-All neural-engine model files live in `models/` (required at **build and run time**:
+All neural-engine model files live in `models/` (required at **build and run time**):
 the CMake post-build step copies them next to `aec_gui.exe`, and
-`scripts/make-release-desktop.sh` bundles them into the release ZIP).
+`scripts/make-release-desktop.sh` bundles them into the release ZIP.
 `tensorflowlite_c.dll` lives in `libs/`.
 
 Sizes and SHA-256 hashes below were verified for the files currently in the tree.
@@ -46,7 +46,7 @@ curl -L -o models/dtln_aec_128_2.tflite \
   "https://raw.githubusercontent.com/breizhn/DTLN-aec/main/pretrained_models/dtln_aec_128_2.tflite"
 
 # DTLN noise reduction pair (~1.5 MB + ~2.5 MB) — runs after the engine
-# on the DTLN and WebRTC AEC3 paths (WebRTC NS is retired).
+# on every path (WebRTC NS is retired).
 curl -L -o models/dtln_ns_128_1.tflite \
   "https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation/raw/master/model/model_1.tflite"
 curl -L -o models/dtln_ns_128_2.tflite \
@@ -70,7 +70,7 @@ Check with: `sha256sum models/*`
 
 ## Notes
 
-- Without the DTLN pair, the DTLN profile (Voice Isolation) reports
+- Without the DTLN pair, the DTLN-AEC 128 profile reports
   `Failed to load DTLN model` on Start; the other profiles are unaffected.
 - The release script (`scripts/make-release-desktop.sh`) hard-requires the model files
   in its allowlist — a missing file aborts the release with `missing model: ...`.

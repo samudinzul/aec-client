@@ -107,27 +107,42 @@ Open http://localhost:8000 — that page IS the GUI.
 - **DTLN-AEC 128** (`models/dtln_aec_128_*.tflite` via `ai-edge-litert`)
   — the default desktop profile, ported sample-accurately: 512-block /
   128-shift / 257-bin, Hann-free rFFT like the C++ pocketfft path.
+- **WebRTC AEC3** (`pywebrtc-audio` EchoCanceller) — the same Chrome
+  code as the desktop path (AEC + capture HP filter, no NS/AGC),
+  experimental-gated.
+- **NKF-AEC** (`models/nkf.onnx` via `onnxruntime`) — NumPy port of
+  the desktop Kalman core + wrapper stages (TDC alignment,
+  shadow/crossfade exposure, divergence guard, loop brakes,
+  howl backstop, intrinsic Wiener RES), experimental-gated.
+  Hot-swappable while running; telemetry mirrors the desktop lines.
 - **DTLN-NS** (`models/dtln_ns_128_*.tflite`) after the engine,
   fail-open — missing/broken models pass audio through, never mute.
 - **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%
   (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
   the mic before the engine, for quiet microphones.
 
-16 kHz only (same auto-lock as the desktop DTLN path).
+16 kHz only (same auto-lock as the desktop neural engines).
 
 ## Files
 
 | File | Role | Mirrors |
 |------|------|---------|
 | `dsp.py` | rFFT/OLA framing, int16/float, RMS | `dtln_wrapper.cpp` DSP |
-| `dtln.py` | DTLN-AEC engine + LiteRT backend | `DtlnNew/Process/Reset` |
+| `dtln.py` | DTLN-AEC engine + LiteRT backend | `DtlnNew/Process/Stats` |
+| `aec3.py` | WebRTC AEC3 engine (EchoCanceller) | `Aec3New/CancelEcho` |
+| `nkf.py` | NKF-AEC engine + stages + RES/brakes | `NkfNew/Process`, `NKFImpl` |
 | `dtln_ns.py` | DTLN-NS stage + ring + stats | `DtlnNsNew/Process/Stats` |
-| `chain.py` | DTLN → NS stacking, fail-open | `main.cpp` frame pump |
+| `chain.py` | Engine select + NS stacking, fail-open | `main.cpp` frame pump |
 | `audio.py` | pyaudiowpatch callback-mode mic/loopback/CABLE I/O, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |
 | `gui.py` | Native window (pywebview/WebView2): in-process server, preloads models before opening, attaches to a running server, system tray, browser fallback | — |
-| `ui/index.html` | The GUI | — |
-| `test_offline.py` | WAV-in → WAV-out fidelity harness | — |
+| `ui/imgui_web.{html,js,css}` | Dear ImGui-style GUI (DOM) | `DrawUI` tabs/sections/footer |
+| `ui/index.html` | Classic fallback GUI at `/classic` | — |
+| `test_offline.py` | WAV-in → WAV-out fidelity harness + engine smoke | — |
+| `test_nkf_res.py` | NKF RES regressions (T1–T3) | — |
+| `test_nkf_loop.py` | NKF closed-loop regressions (L1–L7) | `tools/nkf_smoke.cpp` role |
+| `requirements*.txt` | base / window / engines / full sets | — |
+| `start.bat` | Double-click launcher (full install, native window) | — |
 
 ## Verify the port
 
