@@ -120,6 +120,31 @@ def l4_single_window_attack():
     return all(results)
 
 
+def l5_giveup_still_braked():
+    """Worst case: engine failed open (permanent mic passthrough) AND
+    looped. The Kalman core is out, but the wire brakes — loop trim,
+    backstop watch, loop detector — run on the emit path regardless
+    of give-up, so the loop must still stay bounded and release."""
+    import os
+    os.environ["NKF_FORCE_GIVEUP"] = "1"
+    try:
+        wire, snaps = _run_closed_loop()
+    finally:
+        del os.environ["NKF_FORCE_GIVEUP"]
+    ok = bool(np.all(np.isfinite(wire)))
+    peak = float(np.abs(wire).max())
+    ok = (ok and peak < 0.999
+          and snaps["mid"]["loopActive"] == 1
+          and snaps["mid"]["loopDb"] < -1.0
+          and snaps["end"]["loopActive"] == 0
+          and abs(snaps["end"]["loopDb"]) < 0.5)
+    print(f"L5 giveup-loop: finite={bool(np.all(np.isfinite(wire)))} "
+          f"peak={peak:.3f} trim={snaps['mid']['loopDb']:.1f}dB "
+          f"released={snaps['end']['loopActive'] == 0} "
+          f"({'PASS' if ok else 'FAIL'})")
+    return ok
+
+
 def main():
     if not NkfEngine().ready:
         print("SKIP (NKF backend unavailable)")
@@ -128,7 +153,8 @@ def main():
     results = [l1_no_blowout(wire, snaps),
                l2_brakes_engage(snaps),
                l3_release(snaps),
-               l4_single_window_attack()]
+               l4_single_window_attack(),
+               l5_giveup_still_braked()]
     print("LOOP TESTS: " + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
     return 0 if all(results) else 1
 
