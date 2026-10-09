@@ -30,22 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Driven by pre-suppression census (no self-blinding oscillation).
   Measured: 440 Hz tracked at 438 Hz (+17.8 dB over no-notch),
   20 Hz/s chirp tracked within 9 Hz (+13 dB), both released after;
-  voice bursts never engage it. (`web/nkf.py`, `web/test_nkf_notch.py`.)
-
-### Added
-
-- **Web NKF tracking notch replaces the broadband backstop trim.**
-  Same engagement/heal conditions (voice protection identical by
-  construction), but the actuator is a loop-gated RBJ notch steered
-  per block (slew-limited, depth-ramped, exact bypass): stable tones
-  die like before, slow sweeps are tracked instead of escaping,
-  and voice outside one band survives untouched. Driven by
-  pre-suppression census (no self-blinding oscillation), releases
-  on toneless windows or classic heal proof. Measured: stable
-  440 Hz killed at 438 Hz tracking (+17.8 dB over no-notch),
-  20 Hz/s chirp tracked within 9 Hz (+13 dB), both released
-  after; voice bursts never engage it. (`web/nkf.py`,
-  `web/test_nkf_notch.py` N1–N2.)
+  voice bursts never engage it. (`web/nkf.py`, `web/test_nkf_notch.py`
+  N1–N2.)
 
 ## [1.11.0] - 2026-10-08
 

@@ -13,7 +13,7 @@ decision below follows from that rule.
   tab (8 LOW + 10 INFO, zero dropped files / C2 / persistence).
   The bundled runtimes are legitimate; the *profile* (unsigned +
   uncommon + ML code) is what fires, never the behavior.
-- v1.11.0 record: both release ZIPs scan 0 detections. Standalone
+- v1.12.0 record: both release ZIPs scan 0 detections. Standalone
   `aec_gui.exe`: SecureAge only (Defender, Bitdefender, Kaspersky,
   ESET clean).
 - One Bitdefender-family container heuristic fired on an interim web
@@ -96,7 +96,6 @@ that is why the web build exists.
   clean 0/61 row exonerates; a flagged row names the surgery);
   (c) only the FINAL bytes matter — verdicts attach to hashes, so
   never dispute or celebrate an interim build; scan what ships.
-- A Defender/ML false positive on the exe is fought with process,
 - A Defender/ML false positive on the exe is fought with process,
   not code tricks: submit the file to Microsoft Security
   Intelligence (filesubmission portal, "incorrectly detected as

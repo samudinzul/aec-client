@@ -32,9 +32,11 @@ pure NumPy when it is absent — the extension is never required.
    ```
    maturin build --manifest-path ext/aec_dsp/Cargo.toml --release
    ```
-   for the shipping wheel. Copy the resulting
-   `aec_dsp*.pyd` next to `web/` (or install the wheel) — the
-   release script picks it up as `web/aec_dsp*.pyd`.
+    for the shipping wheel. The wheel is for local dev installs
+    only (`maturin develop` / `pip install` into your venv) —
+    a `.pyd` is a PE binary and must NEVER ship in a release zip
+    (`scripts/make-release-web.sh` asserts zero `.pyd` and fails
+    the build otherwise; `web/dsp.py` falls back to NumPy).
 
 Linux dev loop is identical (`maturin develop`).
 

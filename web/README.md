@@ -50,8 +50,8 @@ native window, and all 3 engines), then opens the GUI
 in a native app window (Edge WebView2 — built into
 Windows 10/11, so no browser is needed) once the models
 are loaded. The WebRTC AEC3 / NKF-AEC profiles appear
-once you tick "Show experimental engines" in Appearance
--> Behavior. Click it again any time to open another
+once you tick "Show experimental engines" on the Appearance
+tab. Click it again any time to open another
 window against the running server. Stop: close the
 window — the server stops with it — or press Ctrl+C in
 the console. The Appearance tab minimizes to the system
@@ -114,8 +114,9 @@ Open http://localhost:8000 — that page IS the GUI.
 - **NKF-AEC** (`models/nkf.onnx` via `onnxruntime`) — NumPy port of
   the desktop Kalman core + wrapper stages (TDC alignment,
   shadow/crossfade exposure, divergence guard, loop brakes,
-  howl backstop, intrinsic Wiener RES), experimental-gated.
-  Hot-swappable while running; telemetry mirrors the desktop lines.
+  loop-gated tracking notch, intrinsic Wiener RES),
+  experimental-gated. Hot-swappable while running; telemetry
+  mirrors the desktop lines.
 - **DTLN-NS** (`models/dtln_ns_128_*.tflite`) after the engine,
   fail-open — missing/broken models pass audio through, never mute.
 - **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%
@@ -141,7 +142,8 @@ Open http://localhost:8000 — that page IS the GUI.
 | `ui/index.html` | Classic fallback GUI at `/classic` | — |
 | `test_offline.py` | WAV-in → WAV-out fidelity harness + engine smoke | — |
 | `test_nkf_res.py` | NKF RES regressions (T1–T3) | — |
-| `test_nkf_loop.py` | NKF closed-loop regressions (L1–L7) | `tools/nkf_smoke.cpp` role |
+| `test_nkf_loop.py` | NKF closed-loop regressions (L1–L8) | `tools/nkf_smoke.cpp` role |
+| `test_nkf_notch.py` | NKF tracking-notch regressions (N1–N2) | — |
 | `requirements*.txt` | base / window / engines / full sets | — |
 | `start.bat` | Double-click launcher (full install, native window) | — |
 

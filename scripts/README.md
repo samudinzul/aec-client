@@ -49,9 +49,13 @@ gitignored), edit these sources.
 - **web-res** (`python -m web.test_nkf_res`): NKF residual-suppressor
   transparency / echo gain / doubletalk fingerprint.
 - **web-loop** (`python -m web.test_nkf_loop`): closed-loop no-blowout,
-  brake engagement + release, give-up braking, escalation, and the
+  brake engagement + release, give-up braking, escalation,
+  sliding-drift boundary (L1–L8), and the
   loud-voice-no-false-trim guard.
+- **web-notch** (`python -m web.test_nkf_notch`): tracking-notch
+  stable-tone kill + sweep tracking + release, voice never engages
+  (N1–N2). Skips when the NKF backend is unavailable.
 
 Failures print where to look (`/tmp/nkf_smoke_out.txt`,
 `/tmp/web_smoke_out.txt`, `/tmp/web_res_out.txt`,
-`/tmp/web_loop_out.txt`, `nkf-phase.log`).
+`/tmp/web_loop_out.txt`, `/tmp/web_notch_out.txt`, `nkf-phase.log`).

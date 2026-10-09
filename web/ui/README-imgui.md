@@ -34,7 +34,7 @@ engines.
 - Microphone level 0–200% (More → Levels, like the desktop)
 - Noise suppression toggle (live) — DTLN-NS post stage on every engine
 - Profile section (3 engines, hot-swappable while running; extras hidden until experimental tick)
-- NKF telemetry line (delay lock, exposure, backstop/loop/RES trim, guard resets)
+- NKF telemetry line (delay lock, exposure, notch/loop/RES trim, guard resets)
 - Start/Stop + Reset to defaults, with live status
 - Live level meters (Mic/Out), while running
 - Minimize to system tray (native window only)
@@ -92,16 +92,25 @@ WebAssembly.
 3. **Feature Parity**: All desktop functionality available
 4. **Modern Look**: Professional UI with smooth interactions
 5. **Performance**: Same audio processing as desktop, just web-based UI
-6. **Cross-Platform**: Works on any platform with pywebview support
+6. **Windows-native I/O**: same WASAPI loopback + CABLE model as the desktop (via `pyaudiowpatch`), not a cross-platform browser-mic app
 7. **Low Maintenance**: Reuses all existing backend logic
 8. **Universal Compatibility**: Works in all modern browsers without WebAssembly
 
 ## Limitations
 
-1. **Browser Dependencies**: Requires modern browser with Web Workers support
-2. **Graphics**: Limited 2D/3D capabilities vs native OpenGL
-3. **System Integration**: Some desktop features (tray, wallpaper) may have limitations
-4. **Performance**: Generally acceptable for real-time audio processing
+1. **Windows + hardware to actually run.** The page renders
+   anywhere, but Start needs the local server with `pyaudiowpatch`
+   (WASAPI loopback), VB-CABLE, and a mic + speakers — on a machine
+   without them the device lists stay empty and the cable check
+   warns, exactly like the desktop app with no devices.
+2. **Meters need the WebSocket.** If `/ws` can't connect the page
+   shows "Server disconnected — retrying…" and meters freeze;
+   controls still POST. (Needs the `websockets` package server-side
+   — part of the base install.)
+3. **Appearance extras are per-context.** Minimize-to-tray lives in
+   the native window only (hidden in a browser tab); the wallpaper
+   picker is a browser-side backdrop remembered in localStorage,
+   not the desktop's wallpaper file.
 
 ## Usage
 

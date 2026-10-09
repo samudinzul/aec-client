@@ -2,7 +2,9 @@
 
 > Real-time acoustic echo cancellation for Windows — use speakers and a microphone at the same time in Discord, Zoom, Teams, or any other voice app.
 
-![AEC Client screenshot](screenshots/main.png)
+![AEC Client — desktop app (left) and web UI (right), same Idle state](screenshots/desktop-and-web.png)
+
+*Left: desktop `aec_gui.exe`. Right: web UI served from this repo (`web/start.bat`). Same three profiles, same chain, same telemetry — pick the window you prefer.*
 
 **Built entirely with open-source tools.** No proprietary SDKs. No cloud dependencies. No telemetry.
 
@@ -52,7 +54,7 @@ No more headphones. No more echo. No dead-air noise.
   - AEC3 and NKF-AEC are **experimental** — hidden from the menu by default; tick **Show experimental engines** on the Appearance tab to reveal them.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on every path.
-- **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting; NKF keeps its divergence guard, staged exposure, loop brakes and no-cancel watchdog (all self-releasing, all voice-safe by construction).
+- **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting; NKF keeps its divergence guard, staged exposure, loop brakes, no-cancel watchdog and loop-gated tracking notch (all self-releasing, all voice-safe by construction).
 - **Low CPU usage** — engines typically well under 2% per stream on a typical desktop; the post stages add a fraction of a percent.
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -68,8 +70,6 @@ No more headphones. No more echo. No dead-air noise.
 ---
 
 ## Web UI (Python, no installer)
-
-![AEC Web UI](screenshots/web-ui.png)
 
 All three engine profiles (**DTLN-AEC 128**, **WebRTC AEC3**,
 **NKF-AEC**, each optionally followed by DTLN-NS) also run as a
@@ -143,7 +143,7 @@ Done. Talk normally with speakers on.
 > Every release is built straight from the public source in this repo
 > — audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
 >
-> **VirusTotal record (v1.11.0, pre-publish scans).** Both release
+> **VirusTotal record (v1.12.0, pre-publish scans).** Both release
 > ZIPs scan **0 detections**. The standalone `aec_gui.exe` draws one
 > flag — SecureAge only (unsigned-file reputation); Defender,
 > Bitdefender, Kaspersky and ESET are clean, and its behavior tab is
@@ -259,7 +259,7 @@ The release ZIP bundles all required DLLs:
 
 | File | Size | Purpose |
 |------|------|---------|
-| `aec_gui.exe` | ~2.4 MB | Main application (includes the NKF neural engine) |
+| `aec_gui.exe` | ~1.9 MB | Main application (includes the NKF neural engine) |
 | `libwebrtc-audio-processing-1-3.dll` | ~950 KB | WebRTC AEC3 + high-pass filter |
 | `onnxruntime.dll` | ~16 MB | Neural inference (NKF, DTLN ONNX fallback; official MS build, uncompressed) |
 | `msvcp140/vcruntime140*.dll` | ~900 KB | VC++ 14 runtime (required by onnxruntime.dll) |
@@ -301,7 +301,7 @@ Settings are saved automatically. Only one copy of the app runs at a time (openi
 | Language | Role |
 |----------|------|
 | **C++17** | Main application |
-| **Python** | Web UI (server, DSP, engines via LiteRT) |
+| **Python** | Web UI (server, DSP, engines via LiteRT / pywebrtc-audio / onnxruntime) |
 | **C** | Third-party libraries (miniaudio, stb_image, GGML via NKF) |
 | **CMake** | Build system |
 | **Bash** | Build scripts |
@@ -371,7 +371,7 @@ Web UI only (`web/`):
 - Lock-free SPSC ring buffers (audio thread ↔ UI thread)
 - Clock-drift correction (dynamic sample drop/duplicate)
 - RMS metering (live levels show the post-stage signal)
-- Self-monitor loop brakes (NKF: wire trim + escalation, fast backstop attack, no-cancel watchdog — the engine keeps adapting underneath)
+- Self-monitor loop brakes (NKF: wire trim + escalation, loop-gated tracking notch, no-cancel watchdog — the engine keeps adapting underneath)
 
 ---
 
@@ -384,7 +384,7 @@ NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research m
 - **Model size**: 45 KB (~5.3K parameters — tiny *neural* core)
 - **Sample rate**: 16 kHz (auto-locked)
 - **Latency**: ~32 ms
-- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. The linear Kalman core carries an intrinsic Wiener residual suppressor (per-bin gain from its own echo estimate — the **NKF-AEC** profile is Kalman + RES + DTLN-NS stacked). Monitor loops meet downstream brakes only (wire trim with escalation, fast backstop attack, no-cancel watchdog): the engine never freezes or un-exposes, which field tests showed sustains howls.
+- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. The linear Kalman core carries an intrinsic Wiener residual suppressor (per-bin gain from its own echo estimate — the **NKF-AEC** profile is Kalman + RES + DTLN-NS stacked). Monitor loops meet downstream brakes only (wire trim with escalation, loop-gated tracking notch, no-cancel watchdog): the engine never freezes or un-exposes, which field tests showed sustains howls.
 
 The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
 
@@ -556,9 +556,14 @@ aec-client/
 │   ├── audio.py                pyaudiowpatch callback-mode mic/loopback/CABLE I/O
 │   ├── dsp.py                  rFFT/OLA framing, resampling, meters (+ optional Rust ext/)
 │   ├── dtln.py / dtln_ns.py    DTLN-AEC / DTLN-NS engines (LiteRT)
+│   ├── aec3.py               WebRTC AEC3 engine (pywebrtc-audio)
+│   ├── nkf.py                NKF-AEC engine + stages (onnxruntime, NumPy port)
 │   ├── ui/index.html           The GUI
 │   ├── test_offline.py         WAV-in → WAV-out fidelity harness
-│   ├── requirements.txt        PyPI wheels
+│   ├── test_nkf_res.py       NKF RES regressions (T1–T3)
+│   ├── test_nkf_loop.py      NKF closed-loop regressions (L1–L8)
+│   ├── test_nkf_notch.py     NKF tracking-notch regressions (N1–N2)
+│   ├── requirements*.txt        base / window / engines / full sets
 │   └── README.md               Web UI docs
 │
 ├── screenshots/
@@ -570,7 +575,8 @@ aec-client/
 │
 ├── CMakeLists.txt                  Build configuration
 ├── scripts/
-│   ├── make-desktop-build.sh      Desktop app build (quiet, app-only, --run to launch)
+│   ├── make-desktop-build.sh      Desktop app build (quiet; --fresh to wipe, --run to launch, --with-smoke for test tools)
+│   ├── make-web-build.sh          Web runtime prepare + verify (venv, packages, engine smoke; --lean for base set, --run to launch)
 │   ├── test.sh                     Offline test suite (native + web)
 │   ├── make-release-desktop.sh     Desktop release bundle + zip builder
 │   ├── make-release-web.sh         Web release bundle + zip builder
