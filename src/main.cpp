@@ -1343,10 +1343,10 @@ void DrawEngineSection() {
         // Suppressor telemetry: when the Output meter collapses, one
         // of these lines names the stage doing it. (NS has its own
         // diagnostics under its checkbox.)
-        if (ns.backstopDb < -0.5)
+        if (ns.notchFreq > 0.0f)
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                               "Backstop trim: %.1f dB (tonal wire?)",
-                               ns.backstopDb);
+                               "Notch %.0f Hz %+.1f dB",
+                               (double)ns.notchFreq, (double)ns.notchDb);
         if (ns.loopDb < -0.5)
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
                                "Loop trim: %.1f dB%s",

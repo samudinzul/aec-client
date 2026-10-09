@@ -117,56 +117,54 @@ static const int   LOOP_LOUD_BLOCKS = 96;     // ~3 s continuous per step
 static const size_t NOCANCEL_HOT_AFTER = 80000;  // ~5 s loud, uncancelled
 static const double NOCANCEL_ECHO_RATIO = 0.25;  // ref within 6 dB of mic
 
-// ---- Howl backstop: sustained tonal hold -> output trim ----------------
+// ---- Tonal census + tracking notch (was: howl backstop trim) ---------
 // A feedback howl is ONE tone owning the wire for seconds; voice and
 // music spread across the spectrum. Measure per-frame spectral
-// concentration of what we actually emit (512-pt Hann, best 3-bin sum
-// over total) and attack only after 8 s of it above the energy floors
-// — a hold no speech pattern sustains, so voice can't false-trigger.
-// This protects cases the engine cannot: broken/absent ref (loop
-// detector blind), failed-open engine, coupling past what cancellation
-// can pull under 1. Attack trims the WIRE (-6 dB, deepening to -20 on
-// repeat); release requires two windows of PROOF the engine is
-// cancelling again (wire-vs-mic depth <= BS_HEAL_D on non-tonal audio)
-// — releasing on mere silence would let the howl regrow and cycle.
+// concentration of the pre-notch wire (512-pt Hann, best 3-bin sum
+// over total) and arm only after a hold no speech pattern sustains,
+// so voice can't false-trigger. This protects cases the engine
+// cannot: broken/absent ref (loop detector blind), failed-open
+// engine, coupling past what cancellation can pull under 1.
+// The actuator is a tracking RBJ notch (mirrors web/nkf.py, proven
+// there first) instead of the retired broadband trim: stable tones
+// die like before, slow sweeps are followed instead of escaping,
+// and voice outside one band survives untouched. Release needs
+// PROOF (wire-vs-mic depth <= BS_HEAL_D on non-tonal audio) or a
+// fully toneless window — releasing on mere silence would let the
+// howl regrow and cycle. Depth ramps in/out (no clicks); ramp 0 is
+// an exact bypass.
 static const int    BS_BIN_RUN  = 40;      // same-bin (±1) run marking a
-                                            // STABLE tone (~1.3 s): a howl
-                                            // sits on one bin for seconds
-                                            // (fixed loop delay); voice pitch
-                                            // moves and consonants break the
-                                            // run. Sustained sung vowels can
-                                            // still trip it — correctly, they
-                                            // ARE sustained tones — and heal
-                                            // the moment phonation changes.
+                                             // STABLE tone (~1.3 s): a howl
+                                             // sits on one bin for seconds
+                                             // (fixed loop delay); voice pitch
+                                             // moves and consonants break the
+                                             // run. Sustained sung vowels can
+                                             // still trip it — correctly, they
+                                             // ARE sustained tones — and heal
+                                             // the moment phonation changes.
 static const int    BS_FRAMES   = 64;      // frames per window (64x512 = 2.048 s)
-static const int    BS_RUN      = 2;       // held windows -> attack (~4 s)
+static const int    BS_RUN      = 2;       // held windows -> arm (~4 s)
 static const int    BS_HEAL_RUN = 1;       // qualifying windows -> release.
-                                            // Deliberately asymmetric with
-                                            // BS_RUN: field logs showed heal
-                                            // alternating with run forever
-                                            // (tonal-stable-ish wire), so 2
-                                            // consecutive never arrived and
-                                            // voiced speech stayed trimmed.
-                                            // A single window still has to
-                                            // qualify (loud mic + proven
-                                            // cancellation), and a true
-                                            // stable howl never qualifies —
-                                            // it holds. Worst case on a
-                                            // wobbly howl is bounded pumping
-                                            // under the -24 dB floor.
-static const float  BS_MIN_TARGET = 0.0625f; // deepest trim: -24.1 dB.
-                                            // A sustained howl is still
-                                            // clearly suppressed, but a
-                                            // false trigger attenuates
-                                            // instead of muting (the old
-                                            // floor was 0.25^7 ≈ -84 dB).
+                                             // Deliberately asymmetric with
+                                             // BS_RUN: field logs showed heal
+                                             // alternating with run forever
+                                             // (tonal-stable-ish wire), so 2
+                                             // consecutive never arrived and
+                                             // voiced speech stayed trimmed.
+                                             // A single window still has to
+                                             // qualify (loud mic + proven
+                                             // cancellation), and a true
+                                             // stable howl never qualifies —
+                                             // it holds.
 static const double BS_TONAL    = 0.33;  // per-frame 3-bin power fraction
 static const int    BS_HITS     = 38;      // >=~60% of 64 frames tonal
 static const double BS_MIC_MS   = 8.4e-5;  // mic mean-square floor (RMS ~300)
-static const double BS_OUT_MS   = 9.3e-6;  // wire mean-square floor (RMS ~100)
 static const double BS_HEAL_D   = -1.0;    // depth (dB) proving cancellation
-static const double BS_TAU_ATK  = 0.35;    // gain step per 512 block, attacking
-static const double BS_TAU_REL  = 0.08;    // gain step per 512 block, releasing
+static const double NOTCH_Q_BW  = 60.0;    // notch bandwidth, Hz
+static const double NOTCH_SLEW  = 150.0;   // max center move per block, Hz
+static const int    NOTCH_RAMP_BLOCKS = 8; // engage/disengage ramp (~256 ms)
+static const double NOTCH_FMIN  = 50.0;
+static const double NOTCH_FMAX  = 7500.0;
 
 // ---- Divergence guard ---------------------------------------------------
 // Second line of defence: if output energy runs far above BOTH inputs,
@@ -240,19 +238,27 @@ struct NkfHandle {
     // Howl backstop state (tonal-hold detector + wire trim). bsHits/
     // bsFrames = current window's frame census; bsRun/bsHeal = the
     // attack/release hold counters fed by NkfBackstopWindow.
-    float bsGain = 1.0f, bsTarget = 1.0f;
     int   bsHits = 0, bsFrames = 0;
-    int   bsRun = 0, bsHeal = 0, bsAttacks = 0;
+    int   bsRun = 0, bsHeal = 0;
     int   bsBinLast = -1000000, bsBinRun = 0;  // tonal-center stability
     int   bsBinBest = 0, bsBinDom = -1;        // window max run + its bin
-    bool  bsActive = false;
+    // Tracking notch (replaces the broadband trim — mirror web/nkf.py).
+    bool  notchArmed = false;
+    float notchRamp = 0.0f;
+    double notchF0 = 0.0;
+    double notchB[3] = { 1.0, 0.0, 0.0 };
+    double notchA[2] = { 0.0, 0.0 };
+    double notchS1 = 0.0, notchS2 = 0.0;
+    double notchDb = 0.0;
     // Aggressive-on-loop brakes (mirror web/nkf.py).
     float loopGain = 1.0f;
     int   loopLoudRun = 0;
     size_t nocancelHotSamples = 0;
     bool  nocancelHot = false;
     bool  lastWindowCancelled = false;
-    bool  bsEnabled = true;             // NKF_BACKSTOP=0 disables the trim
+    bool  bsEnabled = true;             // NKF_BACKSTOP=0 disables the notch
+    bool  anfEnabled = true;            // NKF_DISABLE_ANF=1 forces bypass
+                                        // (A/B testing the actuator)
     // Frame-analysis scratch (512-pt Hann + r2c), built in NkfNew.
     std::vector<double> bsIn, bsHann;
     std::vector<std::complex<double>> bsSpec;
@@ -527,7 +533,25 @@ static bool NkfFrameTonal(NkfHandle* h, const float* v, int* bestBin) {
     return best3 / tot >= BS_TONAL;
 }
 
-// Window boundary (64 frames): depth log + attack/release decision.
+// Window boundary (64 frames): depth log + notch arm/disarm.
+// NOTE: name kept (callers, tests); the actuator is the tracking
+// notch now (mirror web/nkf.py), not the retired broadband trim.
+// Engagement/heal conditions are unchanged.
+static void NkfNotchRetune(NkfHandle* h) {
+    const double w0 = 2.0 * 3.14159265358979323846 * h->notchF0 / 16000.0;
+    double q = h->notchF0 / NOTCH_Q_BW;
+    if (q < 1.0) q = 1.0;
+    if (q > 20.0) q = 20.0;
+    const double alpha = sin(w0) / (2.0 * q);
+    const double c = cos(w0);
+    const double a0 = 1.0 + alpha;
+    h->notchB[0] = 1.0 / a0;
+    h->notchB[1] = -2.0 * c / a0;
+    h->notchB[2] = 1.0 / a0;
+    h->notchA[0] = -2.0 * c / a0;
+    h->notchA[1] = (1.0 - alpha) / a0;
+}
+
 static void NkfBackstopWindow(NkfHandle* h) {
     const int frames = h->bsFrames;
     const double micMs = h->depMic / (double)h->depSamples;
@@ -555,55 +579,52 @@ static void NkfBackstopWindow(NkfHandle* h) {
     // blocks this window. A howl parks; voiced speech wanders, so a
     // tonal-but-moving wire is voice, not feedback.
     const bool stable = h->bsBinBest >= BS_BIN_RUN;
-    if (h->bsHits >= BS_HITS / 2 || h->bsActive)
+    if (h->bsHits >= BS_HITS / 2 || h->notchArmed)
         NkfPhase("t=%.2f bs-watch hits=%d/%d dom=%d stable=%d micMs=%.2e outMs=%.2e d=%.1f "
                  "run=%d heal=%d", NKF_T(h), h->bsHits, frames, h->bsBinDom,
                  stable ? 1 : 0, micMs, outMs,
                  depth, h->bsRun, h->bsHeal);
-    // Attack needs two consecutive CENTER-STABLE tonal windows: a
+    // Arm needs two consecutive CENTER-STABLE tonal windows: a
     // merely-tonal window with a wandering center falls into the
     // heal/hold branches below (both reset the run counter), so it
-    // can never accrue an attack. Net effect, verified on the synth:
-    // fixed-center howls attack, wandering voices never do. Known
-    // trade, accepted deliberately: a fast-SWEEPING howl never holds
-    // one bin long enough to attack — stable loop tones, the
-    // dangerous common case, always qualify.
+    // can never accrue an arm. Net effect, verified on the synth:
+    // fixed-center howls arm, wandering voices never do. The notch
+    // then TRACKS (steered per block below), so slow sweeps are
+    // followed where the retired trim could never hold them.
     if (tonal && stable) {
         h->bsHeal = 0;
         if (h->bsRun < 1000) h->bsRun++;
-        // Looped howls attack after ONE window: a tonal-stable wire
+        // Looped howls arm after ONE window: a tonal-stable wire
         // while the loop detector is engaged is the howl signature —
         // waiting costs howl seconds. Heal still demands proof.
         const int needRun =
             (h->loopConf >= LOOP_ON) ? 1 : BS_RUN;
-        if (h->bsRun >= needRun && h->bsEnabled) {
-            float want = powf(0.25f, h->bsAttacks + 1);
-            if (want < BS_MIN_TARGET) want = BS_MIN_TARGET;
-            if (want < h->bsTarget) {
-                h->bsTarget = want;
-                h->bsActive = true;
-                if (h->bsAttacks < 6) h->bsAttacks++;
-                NkfPhase("t=%.2f backstop ATTACK #%d depth=%.1f dB "
-                         "tonal=%d/%d gain -> %.1f dB",
-                         NKF_T(h), h->bsAttacks, depth, h->bsHits, frames,
-                         20.0 * log10((double)want));
+        if (h->bsRun >= needRun && h->bsEnabled && h->anfEnabled) {
+            if (!h->notchArmed) {
+                h->notchArmed = true;
+                double f = (double)h->bsBinDom * 16000.0 / 512.0;
+                if (f < NOTCH_FMIN) f = NOTCH_FMIN;
+                if (f > NOTCH_FMAX) f = NOTCH_FMAX;
+                h->notchF0 = f;
+                NkfNotchRetune(h);
+                NkfPhase("t=%.2f notch ATTACK depth=%.1f dB "
+                         "tonal=%d/%d f0=%.0f Hz",
+                         NKF_T(h), depth, h->bsHits, frames, f);
             }
         }
     // Heal accrues on non-tonal windows (classic case) AND on
     // tonal-but-unstable ones (voiced speech: pitch wanders bin to
-    // bin, so no 40-block run forms). A fixed-center howl keeps
-    // `stable` true and can never heal — the trim holds. (The
-    // `!stable` arm is reachable here precisely because unstable
-    // windows skip the attack branch above.)
-    } else if ((!tonal || !stable) && floors && depth <= BS_HEAL_D) {
+    // bin, so no 40-block run forms) — plus any fully toneless
+    // window (nothing to notch). A fixed-center howl keeps
+    // `stable` true and can never heal.
+    } else if (((!tonal || !stable) && floors && depth <= BS_HEAL_D)
+               || (frames > 0 && h->bsHits == 0)) {
         h->bsRun = 0;
         if (h->bsHeal < 1000) h->bsHeal++;
-        if (h->bsHeal >= BS_HEAL_RUN && h->bsActive) {
-            h->bsTarget = 1.0f;
-            h->bsActive = false;
-            h->bsAttacks = 0;
+        if (h->bsHeal >= BS_HEAL_RUN && h->notchArmed) {
+            h->notchArmed = false;
             h->bsRun = h->bsHeal = 0;
-            NkfPhase("t=%.2f backstop release (cancel proven, depth=%.1f dB)",
+            NkfPhase("t=%.2f notch release (tone gone, depth=%.1f dB)",
                      NKF_T(h), depth);
         }
     } else {
@@ -670,7 +691,10 @@ NkfHandle* NkfNew(const char* modelPath) {
     // Howl backstop: 512-pt Hann frame analysis, one frame per block.
     const char* bs = getenv("NKF_BACKSTOP");
     h->bsEnabled = !(bs && bs[0] == '0');
-    if (!h->bsEnabled) NkfPhase("backstop disabled (NKF_BACKSTOP=0)");
+    if (!h->bsEnabled) NkfPhase("notch disabled (NKF_BACKSTOP=0)");
+    const char* anf = getenv("NKF_DISABLE_ANF");
+    h->anfEnabled = !(anf && anf[0] == '1');
+    if (!h->anfEnabled) NkfPhase("notch bypassed (NKF_DISABLE_ANF=1)");
     if (getenv("NKF_FORCE_GIVEUP")) {
         h->giveUp = true;
         NkfPhase("forced fail-open (NKF_FORCE_GIVEUP)");
@@ -874,36 +898,12 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
                        : (step >= 1) ? LOOP_TRIM_DEEP : LOOP_TRIM;
         }
 
-        // Howl backstop: smooth toward the target gain, trim the wire.
-        h->bsGain += (float)((h->bsTarget - h->bsGain) *
-                             ((h->bsTarget < h->bsGain) ? BS_TAU_ATK
-                                                        : BS_TAU_REL));
-        if (h->bsGain != 1.0f)
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
-                h->emitBlock[i] *= h->bsGain;
-        // Loop trim: multiplicative with the backstop, own smoothing.
-        // Starves the loop of gain; the engine keeps adapting under it.
-        h->loopGain += (float)((loopTarget - h->loopGain) *
-                               ((loopTarget < h->loopGain) ? LOOP_TAU_ATK
-                                                           : LOOP_TAU_REL));
-        if (h->loopGain != 1.0f)
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
-                h->emitBlock[i] *= h->loopGain;
-
-        // Window accumulators on the WIRE vs mic: the howl fuel check
-        // now sees what the loop actually carries (shadow and fail-open
-        // included — emit == mic there, i.e. 0 dB, uncancelled). The
-        // frame census feeds the tonal-hold trigger; every 64th frame
-        // closes the window and runs attack/release + the depth log.
+        // Tonal census on the PRE-notch wire: sense the threat, not
+        // our own suppression (post-notch analysis would go blind the
+        // moment the notch works, oscillating armed state on a
+        // sustained tone). One analysis serves steering below and the
+        // stability runs — no extra FFT.
         {
-            double sm = 0, so = 0;
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-                sm += (double)h->micBlock[i] * h->micBlock[i];
-                so += (double)h->emitBlock[i] * h->emitBlock[i];
-            }
-            h->depMic += sm;
-            h->depOut += so;
-            h->depSamples += NKF_BLOCK_SHIFT;
             int bb = -1;
             if (NkfFrameTonal(h, h->emitBlock, &bb)) {
                 h->bsHits++;
@@ -925,7 +925,92 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             } else {
                 h->bsBinLast = -1000000;
                 h->bsBinRun = 0;
+                bb = -1;
             }
+            // Tracking notch (replaces the broadband trim — mirror
+            // web/nkf.py): steer toward this block's center
+            // (slew-limited: sweeps tracked, jumps absorbed), depth
+            // ramps in/out (no clicks), exact bypass at ramp 0.
+            if (h->notchArmed && h->anfEnabled && bb > 0) {
+                double target = (double)bb * 16000.0 / 512.0;
+                if (target < NOTCH_FMIN) target = NOTCH_FMIN;
+                if (target > NOTCH_FMAX) target = NOTCH_FMAX;
+                double step = target - h->notchF0;
+                if (step > NOTCH_SLEW) step = NOTCH_SLEW;
+                else if (step < -NOTCH_SLEW) step = -NOTCH_SLEW;
+                if (step != 0.0) {
+                    h->notchF0 += step;
+                    NkfNotchRetune(h);
+                }
+            }
+            const float wantRamp =
+                (h->notchArmed && h->anfEnabled) ? 1.0f : 0.0f;
+            const float rampStep = 1.0f / (float)NOTCH_RAMP_BLOCKS;
+            if (h->notchRamp < wantRamp) {
+                h->notchRamp += rampStep;
+                if (h->notchRamp > wantRamp) h->notchRamp = wantRamp;
+            } else if (h->notchRamp > wantRamp) {
+                h->notchRamp -= rampStep;
+                if (h->notchRamp < wantRamp) h->notchRamp = wantRamp;
+            }
+            if (h->notchRamp > 0.0f) {
+                double inE = 0.0;
+                for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                    const double v = h->emitBlock[i];
+                    inE += v * v;
+                }
+                const double b0 = h->notchB[0], b1 = h->notchB[1],
+                             b2 = h->notchB[2];
+                const double a1 = h->notchA[0], a2 = h->notchA[1];
+                double s1 = h->notchS1, s2 = h->notchS2;
+                for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                    const double x = h->emitBlock[i];
+                    const double yn = b0 * x + s1;
+                    s1 = b1 * x - a1 * yn + s2;
+                    s2 = b2 * x - a2 * yn;
+                    h->emitBlock[i] = (float)(x + (yn - x)
+                                              * (double)h->notchRamp);
+                }
+                h->notchS1 = s1;
+                h->notchS2 = s2;
+                double outE = 0.0;
+                for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                    const double v = h->emitBlock[i];
+                    outE += v * v;
+                }
+                // Guard the silence floor: log10(0) is -inf, and -inf
+                // arithmetic NaN-poisons the smoothed telemetry (and
+                // anything downstream reading it) permanently.
+                const double inst =
+                    (inE > 1e-12)
+                    ? 10.0 * log10(outE / (inE + 1e-12)) : 0.0;
+                h->notchDb += 0.25 * (inst - h->notchDb);
+            } else {
+                h->notchDb += 0.25 * (0.0 - h->notchDb);
+            }
+        }
+        // Loop trim: multiplicative with the notch, own smoothing.
+        // Starves the loop of gain; the engine keeps adapting under it.
+        h->loopGain += (float)((loopTarget - h->loopGain) *
+                               ((loopTarget < h->loopGain) ? LOOP_TAU_ATK
+                                                           : LOOP_TAU_REL));
+        if (h->loopGain != 1.0f)
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                h->emitBlock[i] *= h->loopGain;
+
+        // Window accumulators on the WIRE vs mic: the howl fuel check
+        // now sees what the loop actually carries (shadow and fail-open
+        // included — emit == mic there, i.e. 0 dB, uncancelled). Every
+        // 64th frame closes the window and runs arm/release + depth log.
+        {
+            double sm = 0, so = 0;
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
+                sm += (double)h->micBlock[i] * h->micBlock[i];
+                so += (double)h->emitBlock[i] * h->emitBlock[i];
+            }
+            h->depMic += sm;
+            h->depOut += so;
+            h->depSamples += NKF_BLOCK_SHIFT;
             if (++h->bsFrames >= BS_FRAMES) NkfBackstopWindow(h);
         }
 
@@ -1010,16 +1095,22 @@ void NkfReset(NkfHandle* h) {
     h->lastTdcD = 0;
     h->depMic = h->depOut = 0.0;
     h->depSamples = 0;
-    h->bsGain = 1.0f;
-    h->bsTarget = 1.0f;
     h->loopGain = 1.0f;
     h->loopLoudRun = 0;
     h->nocancelHotSamples = 0;
     h->nocancelHot = false;
     h->lastWindowCancelled = false;
+    h->notchArmed = false;
+    h->notchRamp = 0.0f;
+    h->notchF0 = 0.0;
+    h->notchB[0] = 1.0; h->notchB[1] = 0.0; h->notchB[2] = 0.0;
+    h->notchA[0] = 0.0; h->notchA[1] = 0.0;
+    h->notchS1 = h->notchS2 = 0.0;
+    h->notchDb = 0.0;
     h->bsHits = h->bsFrames = 0;
-    h->bsRun = h->bsHeal = h->bsAttacks = 0;
-    h->bsActive = false;
+    h->bsRun = h->bsHeal = 0;
+    // NOTE: bsBin* intentionally survive reset (tonal-center memory is
+    // session-lifetime — mirrors web/nkf.py).
     h->engRanOnce = false;
     if (h->engine) h->engine->Reset();
 }
@@ -1039,10 +1130,11 @@ void NkfGetState(NkfHandle* h, NkfState* s) {
     s->loopActive = 0;
     s->guardResets = 0;
     s->giveUp = 0;
-    s->backstopDb = 0.0f;
     s->loopDb = 0.0f;
     s->resDb = 0.0f;
     s->nocancelHot = 0;
+    s->notchFreq = 0.0f;
+    s->notchDb = 0.0f;
     if (!h) return;
     s->lagSamples = h->alignDelay;
     s->confident = h->tdcConfident ? 1 : 0;
@@ -1052,10 +1144,11 @@ void NkfGetState(NkfHandle* h, NkfState* s) {
     s->loopActive = h->loopConf >= LOOP_ON ? 1 : 0;
     s->guardResets = h->resets;
     s->giveUp = h->giveUp ? 1 : 0;
-    s->backstopDb = (float)(20.0 * log10((double)h->bsGain + 1e-9));
     s->loopDb = (float)(20.0 * log10((double)h->loopGain + 1e-9));
     s->resDb = h->engine ? (float)h->engine->ResDb() : 0.0f;
     s->nocancelHot = h->nocancelHot ? 1 : 0;
+    s->notchFreq = (h->notchRamp > 0.0f) ? (float)h->notchF0 : 0.0f;
+    s->notchDb = (float)h->notchDb;
 }
 
 } // extern "C"

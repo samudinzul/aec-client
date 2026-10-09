@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Desktop NKF tracking notch replaces the broadband backstop trim**
+  (port of the web-proven stage: same engagement contract, narrower
+  actuator). `NkfState` swaps `backstopDb` for `notchFreq`/`notchDb`;
+  UI and smoke table follow (verdict logic unchanged — a notch on the
+  voice-burst synth still fails the run). Needs a desktop `--fresh`
+  rebuild to verify (no Windows toolchain here).
+
+### Added
+
 - **Web NKF tracking notch replaces the broadband backstop trim**
   (same engagement/heal conditions, narrower actuator): a loop-gated
   RBJ notch steered per block at the dominant bin (slew-limited,

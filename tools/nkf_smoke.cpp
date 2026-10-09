@@ -4,7 +4,7 @@
 // GUI runs (NkfProcess -> DTLN-NS) and prints a per-second table with
 // the engine telemetry that pinpoints output suppression: TDC lock
 // state, guard resets, loop flag, and — most importantly — the
-// howl-backstop trim in dB.
+// tracking-notch state (freq + broadband effect).
 //
 // Usage (build first, from the repo root on the Windows dev machine):
 //   cmake -B build -G Ninja && cmake --build build --target nkf_smoke
@@ -15,10 +15,10 @@
 // speaker-like tone as ref (echoed into mic with delay) plus periodic
 // voice bursts, i.e. the "loud speakers then suppression?" scenario.
 //
-// Reading the table: the `bsDb` column is the backstop output trim
-// (0 = full level). If outRMS collapses while bsDb dives negative,
-// the backstop is your suppressor. If outRMS collapses with bsDb at
-// 0 and `lock=0`, the TDC never locked (check `lag`). `giveUp=1`
+// Reading the table: the `notchHz`/`notchDb` columns show the tracking
+// notch (0 Hz = bypassed). If outRMS collapses while a notch is engaged,
+// the notch is your suppressor. If outRMS collapses with no notch and
+// `lock=0`, the TDC never locked (check `lag`). `giveUp=1`
 // means fail-open mic passthrough (loud, not suppressed).
 #include <cmath>
 #include <cstdint>
@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
 
     int16_t micF[kFrame], refF[kFrame], clF[kFrame];
     float wf[kFrame];
-    printf("sec  micRMS  engRMS  outRMS  lag  lock conf exp loop rst give bsDb loopDb resDb\n");
+    printf("sec  micRMS  engRMS  outRMS  lag  lock conf exp loop rst give notchHz notchDb loopDb resDb\n");
     double accMic = 0, accEng = 0, accOut = 0;
     size_t accN = 0;
     int sec = 0;
@@ -212,12 +212,12 @@ int main(int argc, char** argv) {
         if (accN >= (size_t)kSr) {
             NkfState st = {};
             NkfGetState(nkf, &st);
-            printf("%3d  %6.0f  %6.0f  %6.0f  %5d  %d    %d    %d   %d    %d   %d    %+.1f %+.1f %+.1f\n",
+            printf("%3d  %6.0f  %6.0f  %6.0f  %5d  %d    %d    %d   %d    %d   %d    %7.0f %+.1f %+.1f %+.1f\n",
                    ++sec, sqrt(accMic / accN), sqrt(accEng / accN),
                    sqrt(accOut / accN), st.lagSamples,
                    st.locked, st.confident, st.exposed, st.loopActive,
-                   st.guardResets, st.giveUp, st.backstopDb,
-                   st.loopDb, st.resDb);
+                   st.guardResets, st.giveUp, st.notchFreq,
+                   st.notchDb, st.loopDb, st.resDb);
             accMic = accEng = accOut = 0;
             accN = 0;
         }
@@ -226,9 +226,9 @@ int main(int argc, char** argv) {
     printf("wrote %s (%zu samples)\n", outPath, out.size());
     NkfState st = {};
     NkfGetState(nkf, &st);
-    if (st.backstopDb < -1.0)
-        printf("verdict: backstop trimmed output to %+.1f dB (tonal wire?)\n",
-               st.backstopDb);
+    if (st.notchFreq > 0.0f)
+        printf("verdict: notch engaged at %.0f Hz (%+.1f dB) — unexpected on synth\n",
+               (double)st.notchFreq, (double)st.notchDb);
     else if (st.giveUp)
         printf("verdict: engine gave up -> fail-open mic passthrough\n");
     else if (!st.locked)

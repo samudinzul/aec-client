@@ -47,10 +47,11 @@ typedef struct NkfState {
     int loopActive;    // 1 = self-monitor loop currently detected
     int guardResets;   // divergence resets this session
     int giveUp;        // 1 = failed open (permanent mic passthrough)
-    float backstopDb;  // howl-backstop output trim, dB (0 = full level)
     float loopDb;      // loop/nocancel wire trim, dB (0 = full level)
     float resDb;       // intrinsic RES attenuation estimate, dB
     int nocancelHot;   // 1 = loud both legs, nothing cancelling
+    float notchFreq;   // tracking-notch center, Hz (0 = bypassed)
+    float notchDb;     // notch broadband effect estimate, dB (~0 idle)
 } NkfState;
 void NkfGetState(NkfHandle* h, NkfState* s);
 
