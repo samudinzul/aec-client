@@ -2,7 +2,7 @@
 
 > Real-time acoustic echo cancellation for Windows — use speakers and a microphone at the same time in Discord, Zoom, Teams, or any other voice app.
 
-![AEC Client — desktop app (left) and web UI (right), same Idle state](screenshots/desktop-and-web.png)
+![AEC Client — desktop app (left) and web UI (right), same Running state](screenshots/desktop-and-web.png)
 
 *Left: desktop `aec_gui.exe`. Right: web UI served from this repo (`web/start.bat`). Same three profiles, same chain, same telemetry — pick the window you prefer.*
 
