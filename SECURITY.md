@@ -5,25 +5,22 @@ to any antivirus** — no virus/malware/trojan flags, no heuristic
 detections, no SmartScreen warnings. Not "low risk": zero. Every
 decision below follows from that rule.
 
-## Threat model (what flagged us, and what we learned)
+## Threat model (current: SecureAge APEX)
 
 - The unsigned desktop `.exe` bundles ONNX Runtime + TFLite and is
-  rare (low prevalence). That profile historically tripped ML
-  heuristics: Microsoft `Wacatac.B!ml` and MaxSecure `susgen` (2/71).
-  Both stopped firing on current builds (metadata + manifest +
-  accumulated reputation); the standing record is one minor-vendor
-  reputation flag on the bare exe, with a clean behavior tab. The
-  bundled runtimes are legitimate; the *profile* (unsigned +
+  rare (low prevalence). That profile draws aggressive AI heuristics;
+  the standing flag is SecureAge APEX only, with a clean behavior
+  tab (8 LOW + 10 INFO, zero dropped files / C2 / persistence).
+  The bundled runtimes are legitimate; the *profile* (unsigned +
   uncommon + ML code) is what fires, never the behavior.
 - v1.11.0 record: both release ZIPs scan 0 detections. Standalone
   `aec_gui.exe`: SecureAge only (Defender, Bitdefender, Kaspersky,
-  ESET clean; 8 LOW + 10 INFO behavior, zero dropped files / C2 /
-  persistence).
-- One Bitdefender-family container heuristic (`Heur.BZC.PQZ.Pantera`,
-  6/64 incl. licensees) fired on an interim web ZIP — and cleared to
-  0 when the trigger was removed. Lesson, now policy (see Web
-  build): heuristics read *content*, not file roles — a doc file
-  can out-flag an executable.
+  ESET clean).
+- One Bitdefender-family container heuristic fired on an interim web
+  ZIP — and cleared to 0 when the trigger (a downloader-shaped doc
+  snippet) was removed. Lesson, now policy (see Web build):
+  heuristics read *content*, not file roles — a doc file can
+  out-flag an executable.
 - Any PE binary we compile ourselves (`.exe`, `.dll`, `.pyd`) has
   the same problem: zero cloud reputation. Mainstream wheels
   (numpy, onnxruntime) do not — prevalence is its own reputation.

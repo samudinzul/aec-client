@@ -33,8 +33,9 @@ installs itself on first run.
 ## Why this exists
 
 `aec_gui.exe` is unsigned and bundles ONNX Runtime + TFLite, so
-Microsoft `Wacatac.B!ml` and MaxSecure `susgen` flag it (2/71 false
-positive). A code-signing certificate (~$200/yr) is the only fix for
+aggressive AI heuristics flag it (standing: SecureAge APEX only,
+1/71, clean behavior tab — disputed per release, see `SECURITY.md`).
+A code-signing certificate (~$200/yr) is the only fix for
 the exe — this project sidesteps it instead: **ship `.py`, not `.exe`.**
 Every ML package here is a mainstream reputable wheel; nothing we write
 is a PE binary. **Never freeze this with PyInstaller/Nuitka** — that

@@ -21,8 +21,8 @@
 # and ships the exact AV-heuristic risk this build exists to
 # dodge (it stays a local-only build; the UI falls back to
 # NumPy without it). Nothing in here can trip the
-# Wacatac.B!ml / susgen heuristics that flag the unsigned
-# desktop build.
+# AI heuristics that flag the unsigned
+# desktop build (see SECURITY.md).
 #
 # release/ is gitignored; run from the repo root.
 set -euo pipefail

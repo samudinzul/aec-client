@@ -33,8 +33,8 @@
 #     dropped instead of linked in
 #   - -s: symbols stripped from the binaries
 #   - ccache used automatically when installed
-#   - NO UPX packing, ever: packed PEs trip the exact AV heuristics
-#     (Wacatac.B!ml / susgen) this project exists to dodge
+#   - NO UPX packing, ever: packed PEs trip the exact aggressive
+#     AI heuristics (see SECURITY.md) this project exists to dodge
 #   - nkf_smoke stays a console app (no -mwindows on it)
 #
 # After the build it prints a size audit (exe + DLLs + models) so

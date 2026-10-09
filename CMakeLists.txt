@@ -112,8 +112,8 @@ add_custom_command(TARGET nkf_smoke POST_BUILD
 #  ONNX Runtime — official Microsoft build (v1.29.0), vendored
 #  uncompressed (~16 MB). Replaces the MSYS2 build (27.5 MB) and
 #  its 97-DLL absl/onnx/protobuf/re2 dependency cluster.
-#  Uncompressed on purpose: UPX-packing trips the MaxSecure/susgen
-#  heuristic, so the raw vendor DLL ships instead.
+#  Uncompressed on purpose: UPX-packing trips ML heuristics
+#  (see SECURITY.md), so the raw vendor DLL ships instead.
 #  Provenance: LICENSES/THIRD-PARTY.txt
 # ============================================================
 if(NOT EXISTS "${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll")

@@ -2,8 +2,8 @@
 //
 // Two AV-posture reasons this file exists (see SECURITY.md):
 // - A custom icon changes the resource entropy of the PE header,
-//   which is sometimes enough to break the Wacatac.B!ml static
-//   pattern match on VirusTotal. Heuristic bypass, not a fix.
+//   which is sometimes enough to break ML-heuristic static pattern
+//   matches on VirusTotal. Heuristic bypass, not a fix.
 // - VERSIONINFO publisher metadata: an anonymous exe (no Company /
 //   Product / FileVersion) is the worst reputation profile for
 //   SmartScreen and ML heuristics. Metadata does not replace code

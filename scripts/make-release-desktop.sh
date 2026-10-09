@@ -98,8 +98,9 @@ done
 #  so the signature ships inside the zip (signing after would only
 #  sign the staging copy nobody downloads).
 #
-#  The unsigned build trips Microsoft's Wacatac.B!ml heuristic
-#  (unsigned PE + bundled ML runtimes). A code-signing certificate
+#  The unsigned build draws AI-heuristic flags (unsigned PE +
+#  bundled ML runtimes; standing: SecureAge APEX only — see
+#  SECURITY.md). A code-signing certificate
 #  is the only fix. Set AEC_SIGN=1 to enable; you must also have
 #  the cert installed in your cert store and signtool on PATH.
 #

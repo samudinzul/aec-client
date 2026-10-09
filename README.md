@@ -149,10 +149,9 @@ Done. Talk normally with speakers on.
 > Bitdefender, Kaspersky and ESET are clean, and its behavior tab is
 > empty of anything real (8 LOW + 10 INFO, zero dropped files, zero
 > C2, zero persistence — sandbox noise like the OS trust-checking
-> our file and the sandbox renaming it). The older
-> `Wacatac.B!ml` / `susgen` pair no longer fires on current builds
-> (publisher metadata + execution manifest + accumulated reputation).
-> Any residual flag is disputed per release (see `SECURITY.md`) —
+> our file and the sandbox renaming it). Publisher metadata +
+> execution manifest + accumulated reputation keep it there: any
+> residual flag is disputed per release (see `SECURITY.md`) —
 > never "fixed" with packers or obfuscation.
 >
 > **Why anything flags it at all.** The app is unsigned, and signing
@@ -186,11 +185,11 @@ Done. Talk normally with speakers on.
 
 ## Signing releases
 
-The release ZIP is **unsigned by default**. Historically, unsigned binaries with
-bundled ML runtimes tripped Microsoft's `Wacatac.B!ml` and MaxSecure's
-`susgen` heuristics — neither fires on current builds (metadata +
-manifest + reputation), and the standing rule is zero detections before
-any ship (see `SECURITY.md` for the verdict record and process).
+The release ZIP is **unsigned by default**. Unsigned binaries with
+bundled ML runtimes draw AI-heuristic attention — none fires on
+current builds (metadata + manifest + reputation), and the standing
+rule is zero detections before any ship (see `SECURITY.md` for the
+verdict record and process).
 
 **A code-signing certificate is the only fix.** Two routes:
 
