@@ -64,13 +64,14 @@ QUICK START
 
 WHY NO ANTIVIRUS WARNING
 -------------------------
-The desktop app is an unsigned .exe that bundles ML
-runtimes, which trips two heuristics (Wacatac.B!ml,
-susgen). This bundle is Python + mainstream PyPI wheels
+This bundle is Python + mainstream PyPI wheels
 only - no .exe, no .dll, no .pyd, no packed executables,
-so those heuristics have no target. (A local-only Rust
+so antivirus heuristics have no target: the v1.11.0 ZIP
+scans 0 detections on VirusTotal. (A local-only Rust
 accelerator exists in ext/ for developers; it never
-ships in this ZIP.)
+ships in this ZIP. The desktop .exe is unsigned and carries
+a one-vendor reputation flag; see the repo README for the
+full record and the dispute process.)
 
 Do NOT freeze or pack this with PyInstaller/Nuitka -
 that would reintroduce the exact problem.

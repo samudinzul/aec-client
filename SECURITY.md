@@ -5,13 +5,25 @@ to any antivirus** — no virus/malware/trojan flags, no heuristic
 detections, no SmartScreen warnings. Not "low risk": zero. Every
 decision below follows from that rule.
 
-## Threat model (what flagged us before)
+## Threat model (what flagged us, and what we learned)
 
 - The unsigned desktop `.exe` bundles ONNX Runtime + TFLite and is
-  rare (low prevalence). That profile trips ML heuristics:
-  Microsoft `Wacatac.B!ml` and MaxSecure `susgen` (2/71 on
-  VirusTotal). The bundled runtimes are legitimate; the *profile*
-  (unsigned + uncommon + ML code) is what fires.
+  rare (low prevalence). That profile historically tripped ML
+  heuristics: Microsoft `Wacatac.B!ml` and MaxSecure `susgen` (2/71).
+  Both stopped firing on current builds (metadata + manifest +
+  accumulated reputation); the standing record is one minor-vendor
+  reputation flag on the bare exe, with a clean behavior tab. The
+  bundled runtimes are legitimate; the *profile* (unsigned +
+  uncommon + ML code) is what fires, never the behavior.
+- v1.11.0 record: both release ZIPs scan 0 detections. Standalone
+  `aec_gui.exe`: SecureAge only (Defender, Bitdefender, Kaspersky,
+  ESET clean; 8 LOW + 10 INFO behavior, zero dropped files / C2 /
+  persistence).
+- One Bitdefender-family container heuristic (`Heur.BZC.PQZ.Pantera`,
+  6/64 incl. licensees) fired on an interim web ZIP — and cleared to
+  0 when the trigger was removed. Lesson, now policy (see Web
+  build): heuristics read *content*, not file roles — a doc file
+  can out-flag an executable.
 - Any PE binary we compile ourselves (`.exe`, `.dll`, `.pyd`) has
   the same problem: zero cloud reputation. Mainstream wheels
   (numpy, onnxruntime) do not — prevalence is its own reputation.
@@ -62,6 +74,13 @@ that is why the web build exists.
 - Dependencies are mainstream PyPI wheels installed on the user's
   machine by the launchers. Never freeze with PyInstaller/Nuitka —
   that reintroduces the packed-binary target.
+- Shipped docs and scripts must contain no downloader-shaped
+  content — no silent download-and-execute one-liners, even as
+  documentation. Proven 2026-10: a PowerShell
+  download-and-silently-run snippet inside `web/README.md` got the
+  file typed as a script and flagged 7/54, outscoring the actual
+  `.bat` launcher (0/60). Install guidance describes manual steps;
+  automation lives in `.bat` files using only package managers.
 - Do not add a compiled component to the web bundle without
   updating this file and the release asserts first.
 
@@ -72,6 +91,15 @@ that is why the web build exists.
 - Before publishing, upload both zips to VirusTotal manually and
   record the verdict with the release notes. A single detection on
   a previously-clean build blocks the release until explained.
+- Read reports correctly, or the noise will steer you wrong:
+  (a) the Detection tab is the verdict — Relations IPs/domains/tags
+  are sandbox-environment noise (a 1/92 flag on a Microsoft shared
+  IP with 41,051 tenants implicates a stranger, never your file);
+  (b) the Relations file list identifies WHICH inner file fires (a
+  clean 0/61 row exonerates; a flagged row names the surgery);
+  (c) only the FINAL bytes matter — verdicts attach to hashes, so
+  never dispute or celebrate an interim build; scan what ships.
+- A Defender/ML false positive on the exe is fought with process,
 - A Defender/ML false positive on the exe is fought with process,
   not code tricks: submit the file to Microsoft Security
   Intelligence (filesubmission portal, "incorrectly detected as

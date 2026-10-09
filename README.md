@@ -186,10 +186,11 @@ Done. Talk normally with speakers on.
 
 ## Signing releases
 
-The release ZIP is **unsigned by default**. Unsigned binaries with
-bundled ML runtimes trip Microsoft's `Wacatac.B!ml` and MaxSecure's
-`susgen` heuristics, which show up as false positives on VirusTotal
-and in Windows Defender.
+The release ZIP is **unsigned by default**. Historically, unsigned binaries with
+bundled ML runtimes tripped Microsoft's `Wacatac.B!ml` and MaxSecure's
+`susgen` heuristics — neither fires on current builds (metadata +
+manifest + reputation), and the standing rule is zero detections before
+any ship (see `SECURITY.md` for the verdict record and process).
 
 **A code-signing certificate is the only fix.** Two routes:
 
