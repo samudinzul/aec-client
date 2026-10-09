@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   depth-ramped, exact bypass) kills stable tones like the trim did
   and additionally tracks slow sweeps the fixed trim could never
   hold — voice outside one band survives untouched either way.
+  Field-verified: loud monitoring sessions no longer howl.
   Driven by pre-suppression census (no self-blinding oscillation).
   Measured: 440 Hz tracked at 438 Hz (+17.8 dB over no-notch),
   20 Hz/s chirp tracked within 9 Hz (+13 dB), both released after;
