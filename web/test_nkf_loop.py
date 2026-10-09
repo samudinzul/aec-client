@@ -197,6 +197,49 @@ def l7_loud_voice_broadband_music():
     return bool(ok)
 
 
+def l8_sliding_delay_stays_bounded():
+    """Realistic monitor-loop drift (delay wandering +-10 ms at
+    0.2 Hz, occasional clipping, coupling 2.0): correlators go
+    blind here, so no brake is expected to engage — but the wire
+    must stay finite, off full-scale, and recover after. This pins
+    the boundary: a future wire-loudness brake should drive the
+    RMS below, never above, today's number. Prints it for humans.
+    (Known: sustained ~0.1 RMS mush while active — the open
+    anti-howl item. A notch tracker would not help: the wire is
+    broadband, tonal fraction ~0.3, nothing to lock.)"""
+    # Wandering loop delay (+-10 ms at 0.2 Hz): correlators go
+    # blind here, so this pins boundedness only (see docstring).
+    sr, dur, amp, fmod = 16000, 14, 160.0, 0.2
+    t = np.arange(sr * dur) / sr
+    near = (((t % 2.0) < 0.5).astype(np.float32)
+            * (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))
+    eng = NkfEngine()
+    w = np.zeros(sr * dur, np.float32)
+    for i in range(0, sr * dur, 128):
+        sec = i / sr
+        g = 2.0 if 2.0 <= sec < 11.0 else 0.0
+        d = 800.0 + amp * np.sin(2 * np.pi * fmod * (i / sr))
+        m = near[i:i + 128].copy()
+        r = np.zeros(128, np.float32)
+        for j in range(128):
+            t_out = i + j - int(d)
+            if g and t_out >= 0:
+                m[j] += g * w[t_out]
+            t_ref = i + j - 800
+            r[j] = 0.0 if (sec >= 11.0 or t_ref < 0) else w[t_ref]
+        mi = np.clip(m * 1.5 * 32767.0, -32768,
+                     32767).astype(np.int16)
+        o = eng.process(mi, (np.clip(r, -1, 1) * 32767).astype(np.int16))
+        w[i:i + 128] = o.astype(np.float32) / 32768.0
+    tail = w[-4 * sr:]
+    lastrms = float(np.sqrt(np.mean(tail ** 2)))
+    peak = float(np.abs(w).max())
+    ok = bool(np.all(np.isfinite(w))) and peak <= 1.0
+    print(f"L8 sliding-drift: lastrms={lastrms:.3f} peak={peak:.3f} "
+          f"({'PASS (bounded)' if ok else 'FAIL'})")
+    return ok
+
+
 def main():
     if not NkfEngine().ready:
         print("SKIP (NKF backend unavailable)")
@@ -208,7 +251,8 @@ def main():
                l4_single_window_attack(),
                l5_giveup_still_braked(),
                l6_escalation_kills_it(),
-               l7_loud_voice_broadband_music()]
+               l7_loud_voice_broadband_music(),
+               l8_sliding_delay_stays_bounded()]
     print("LOOP TESTS: " + ("ALL PASS" if all(results) else "FAILURES PRESENT"))
     return 0 if all(results) else 1
 
