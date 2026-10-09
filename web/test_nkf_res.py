@@ -95,12 +95,14 @@ def t3_doubletalk():
     out = _run(eng, mic, ref)
     st = eng.get_state()
     checks = [st["exposed"] == 1, st["guardResets"] == 0,
-              st["giveUp"] == 0, abs(st["backstopDb"]) < 0.5,
+              st["giveUp"] == 0, st["notchFreq"] == 0.0,
+              abs(st["notchDb"]) < 0.5,
               bool(np.all(np.isfinite(out)))]
     ok = all(checks)
     res = st.get("resDb", 0.0)
     print(f"T3 doubletalk: exposed={st['exposed']} resets={st['guardResets']} "
-          f"giveup={st['giveUp']} bs={st['backstopDb']:.1f}dB "
+          f"giveup={st['giveUp']} notch={st['notchFreq']:.0f}Hz/"
+          f"{st['notchDb']:.1f}dB "
           f"res={res:.1f}dB ({'PASS' if ok else 'FAIL'})")
     return ok
 

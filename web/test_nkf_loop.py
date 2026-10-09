@@ -107,7 +107,7 @@ def l3_release(snaps):
 def l4_single_window_attack():
     import web.nkf as nkf_mod
     results = []
-    for looped, want_target in ((True, True), (False, False)):
+    for looped, want_armed in ((True, True), (False, False)):
         eng = NkfEngine()
         eng.loop_conf = LOOP_ON if looped else 0
         eng.bs_hits = 64
@@ -118,11 +118,11 @@ def l4_single_window_attack():
         eng.dep_out = 5e-4 * 64
         eng.dep_samples = 64 * 512
         eng._backstop_window()
-        attacked = eng.bs_target < 1.0
-        results.append(attacked == want_target)
+        armed = eng.notch_armed
+        results.append(armed == want_armed)
         print(f"L4 {'looped' if looped else 'unlooped'}: "
-              f"bsTarget={eng.bs_target:.4f} "
-              f"({'PASS' if attacked == want_target else 'FAIL'})")
+              f"notch_armed={armed} f0={eng.notch_f0:.1f}Hz "
+              f"({'PASS' if armed == want_armed else 'FAIL'})")
     assert nkf_mod.BS_RUN == 2  # pin the asymmetry this test relies on
     return all(results)
 

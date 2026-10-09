@@ -102,10 +102,12 @@ def smoke():
             k = st["nkf"]
             extra = (f" lag={k['lagSamples']} lock={k['locked']} "
                      f"exposed={k['exposed']} resets={k['guardResets']} "
-                     f"giveup={k['giveUp']} bs={k['backstopDb']:.1f}dB")
+                     f"giveup={k['giveUp']} notch={k['notchFreq']:.0f}Hz/"
+                     f"{k['notchDb']:.1f}dB")
             assert k["giveUp"] == 0, f"{name}: failed open on synth"
             assert k["guardResets"] == 0, f"{name}: guard tripped on synth"
-            assert abs(k["backstopDb"]) < 0.5, f"{name}: backstop trimmed voice"
+            assert k["notchFreq"] == 0.0, f"{name}: notch engaged on voice"
+            assert abs(k["notchDb"]) < 0.5, f"{name}: notch colored voice"
             assert abs(k.get("loopDb", 0.0)) < 0.5, f"{name}: loop trim fired without a loop"
             assert k.get("nocancelHot", 0) == 0, f"{name}: watchdog fired on healthy audio"
         print(f"engine {name}: PASS frames={st['frames']}{extra}")

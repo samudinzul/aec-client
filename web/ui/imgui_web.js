@@ -351,7 +351,7 @@ class WebImGuiUI {
 
     showEngineInfo(st) {
         // NKF telemetry mirrors the desktop NkfState lines (delay
-        // lock, exposure, backstop trim, guard resets). Other
+        // lock, exposure, notch/loop/RES trims, guard resets). Other
         // engines have no extra telemetry — the field stays empty.
         const box = this.el.enginfo;
         if (!st || !st.running || !st.nkf || !/NKF/.test(st.engine || '')) {
@@ -367,10 +367,10 @@ class WebImGuiUI {
             ((k.loopDb !== undefined && k.loopDb < -0.5) ? ' · loop trim ' + k.loopDb.toFixed(1) + ' dB' : '') +
             ' · resets ' + k.guardResets +
             ((k.resDb !== undefined && k.resDb < -0.5) ? ' · RES ' + k.resDb.toFixed(1) + ' dB' : '');
-        if (k.backstopDb < -0.5)
-            s += ' · Backstop trim: ' + k.backstopDb.toFixed(1) + ' dB (tonal wire?)';
+        if (k.notchFreq > 0)
+            s += ' · Notch ' + k.notchFreq.toFixed(0) + 'Hz ' + k.notchDb.toFixed(1) + 'dB';
         box.textContent = s;
-        box.style.color = k.backstopDb < -0.5 ? '#ff9d6b' : '';
+        box.style.color = k.notchFreq > 0 ? '#ff9d6b' : '';
     }
 
     savePrefs() {

@@ -130,6 +130,16 @@ if [ "$WEB" -ne 0 ]; then
             report "web-loop" FAIL "(see /tmp/web_loop_out.txt)"
         fi
     fi
+    # NKF tracking-notch regressions (same skip/fail contract).
+    if "$PY" -m web.test_nkf_notch > /tmp/web_notch_out.txt 2>&1; then
+        report "web-notch" PASS "($(grep -a -o 'ALL PASS' /tmp/web_notch_out.txt | head -1))"
+    else
+        if grep -aq "SKIP" /tmp/web_notch_out.txt 2>/dev/null; then
+            report "web-notch" SKIP "(NKF backend unavailable)"
+        else
+            report "web-notch" FAIL "(see /tmp/web_notch_out.txt)"
+        fi
+    fi
 fi
 
 echo ""

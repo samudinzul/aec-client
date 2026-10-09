@@ -256,9 +256,9 @@ function showEngineInfo(st) {
     (k.loopActive ? ' · loop!' : '') + (k.nocancelHot ? ' · no-cancel trim' : '') + ' · resets ' + k.guardResets;
   if (k.loopDb !== undefined && k.loopDb < -0.5) s += ' · loop trim ' + k.loopDb.toFixed(1) + ' dB';
   if (k.resDb !== undefined && k.resDb < -0.5) s += ' · RES ' + k.resDb.toFixed(1) + ' dB';
-  if (k.backstopDb < -0.5) s += ' · Backstop trim: ' + k.backstopDb.toFixed(1) + ' dB';
+  if (k.notchFreq > 0) s += ' · Notch ' + k.notchFreq.toFixed(0) + 'Hz ' + k.notchDb.toFixed(1) + 'dB';
   box.textContent = s;
-  box.style.color = k.backstopDb < -0.5 ? '#ff9d6b' : '';
+  box.style.color = k.notchFreq > 0 ? '#ff9d6b' : '';
 }
 function showGain() {
   $('gainVal').textContent = $('micGain').value + '%';

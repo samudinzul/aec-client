@@ -33,8 +33,11 @@ pip package, same models/nkf.onnx file):
   grace + ~5 s trims like a loop — covers clipped-ADC,
   beyond-range, jitter-chaotic AND false-confident locks by
   keying on cancellation evidence, not lock flags; skipped
-  failed-open), howl backstop (tonal-hold trim to a -24 dB
-  floor, single-window release on proven cancellation).
+  failed-open), tonal census + tracking notch (RBJ biquad steered
+  per block at the dominant bin — stable tones die like before,
+  slow sweeps are followed instead of escaping; gated by the same
+  attack branches, depth-ramped, exact bypass, releases on toneless
+  windows or classic heal proof).
 
 Deliberate omissions (desktop-only plumbing, not DSP):
 - NkfPhase transition log (desktop crash diagnostics; the
@@ -127,19 +130,29 @@ LOOP_LOUD_BLOCKS = 96   # 96 x 512-sample blocks ~= 3 s per step
 NOCANCEL_HOT_AFTER = 80000  # ~5 s of loud, uncancelled audio
 NOCANCEL_ECHO_RATIO = 0.25  # ref within 6 dB of mic = worth fixing
 
-# ---- Howl backstop -----------------------------------------------------
+# ---- Howl backstop (tonal census + heal) + tracking notch ---------------
+# The broadband trim is GONE (replaced by the notch below); what stays
+# is the detection machinery: per-block tonal census, stability runs,
+# window holds, heal-on-proof. Engagement conditions are unchanged
+# (tonal + stable, 2 windows unlooped / 1 looped) so voice protection
+# is identical — only the actuator changed (narrow cut vs broadband).
 BS_BIN_RUN = 40
 BS_FRAMES = 64
 BS_RUN = 2
 BS_HEAL_RUN = 1
-BS_MIN_TARGET = 0.0625
 BS_TONAL = 0.33
 BS_HITS = 38
 BS_MIC_MS = 8.4e-5
-BS_OUT_MS = 9.3e-6
 BS_HEAL_D = -1.0
-BS_TAU_ATK = 0.35
-BS_TAU_REL = 0.08
+# Tracking notch (RBJ biquad, steered per block): kills the tone the
+# census is watching — including sweeping ones the fixed trim could
+# never hold. Gated by the same attack branches (never free-running),
+# depth ramps in/out (no clicks), exact bypass at ramp 0.
+NOTCH_Q_BW = 60.0     # notch bandwidth, Hz (like the retired LMS notch)
+NOTCH_SLEW = 150.0    # max center movement per 512-block, Hz
+NOTCH_RAMP_BLOCKS = 8  # engage/disengage ramp (~256 ms)
+NOTCH_FMIN = 50.0
+NOTCH_FMAX = 7500.0
 
 # ---- Divergence guard --------------------------------------------------
 GUARD_HOT_BLOCKS = 3
@@ -317,11 +330,12 @@ class NkfEngine:
     pump frame size (128 on the web pump; 512-block internals)."""
 
     def __init__(self, model_dir="models", num_threads=None,
-                 enable_res=True):
+                 enable_res=True, enable_anf=True):
         self.ready = False
         self.last_error = ""
         self._core = None
         self._enable_res = enable_res
+        self._enable_anf = enable_anf
         if ort is None:
             self.last_error = ("onnxruntime is not installed "
                                "(pip install onnxruntime)")
@@ -371,12 +385,17 @@ class NkfEngine:
         self.last_tdc_d = 0
         self.dep_mic = self.dep_out = 0.0
         self.dep_samples = 0
-        self.bs_gain = 1.0
-        self.bs_target = 1.0
         self.loop_gain = 1.0
         self.bs_hits = self.bs_frames = 0
-        self.bs_run = self.bs_heal = self.bs_attacks = 0
-        self.bs_active = False
+        self.bs_run = self.bs_heal = 0
+        self.notch_armed = False
+        self.notch_ramp = 0.0
+        self.notch_f0 = 0.0
+        self.notch_b = (1.0, 0.0, 0.0)
+        self.notch_a = (0.0, 0.0)
+        self.notch_s1 = 0.0
+        self.notch_s2 = 0.0
+        self.notch_db = 0.0
         # NOTE: bsBin* intentionally survive reset (desktop NkfReset
         # leaves them — tonal-center memory is session-lifetime).
         self.bs_bin_last = -1000000
@@ -408,7 +427,9 @@ class NkfEngine:
             "nocancelHot": 1 if self.nocancel_hot else 0,
             "guardResets": int(self.resets),
             "giveUp": 1 if self.give_up else 0,
-            "backstopDb": float(20.0 * np.log10(self.bs_gain + 1e-9)),
+            "notchFreq": float(self.notch_f0)
+            if self.notch_ramp > 0.0 else 0.0,
+            "notchDb": float(self.notch_db),
             "resDb": float(self._core.res_db)
             if self._core is not None else 0.0,
             "loopDb": float(20.0 * np.log10(self.loop_gain + 1e-9)),
@@ -579,7 +600,28 @@ class NkfEngine:
                 best3, best_k = s, k
         return (bool(best3 / tot >= BS_TONAL), int(best_k))
 
+    @staticmethod
+    def _notch_coeffs(f0):
+        """RBJ notch biquad at f0 Hz (Fs 16 kHz), Q for ~60 Hz width.
+        Returns normalized (b0, b1, b2, a1, a2). Stable by construction
+        (poles inside the unit circle); depth is exact at center."""
+        w0 = 2.0 * math.pi * f0 / 16000.0
+        q = f0 / NOTCH_Q_BW
+        if q < 1.0:
+            q = 1.0
+        elif q > 20.0:
+            q = 20.0
+        alpha = math.sin(w0) / (2.0 * q)
+        c = math.cos(w0)
+        a0 = 1.0 + alpha
+        return (1.0 / a0, -2.0 * c / a0, 1.0 / a0,
+                -2.0 * c / a0, (1.0 - alpha) / a0)
+
     def _backstop_window(self):
+        # NOTE: name kept (callers, logs, tests); the actuator below is
+        # now the tracking notch, not the retired broadband trim. All
+        # engagement/heal conditions are unchanged — voice protection
+        # is identical, only the cut narrowed (one band vs everything).
         frames = self.bs_frames
         mic_ms = self.dep_mic / max(1, self.dep_samples)
         depth = 10.0 * np.log10(
@@ -594,28 +636,28 @@ class NkfEngine:
             self.bs_heal = 0
             if self.bs_run < 1000:
                 self.bs_run += 1
-            # Looped howls attack after ONE window: a tonal-stable
-            # wire while the loop detector is engaged is the howl
-            # signature itself — waiting costs howl seconds. Heal
-            # still demands proof (unchanged below).
+            # Looped howls arm after ONE window: a tonal-stable wire
+            # while the loop detector is engaged is the howl signature
+            # itself — waiting costs howl seconds. Heal still demands
+            # proof (unchanged below).
             need_run = 1 if self.loop_conf >= LOOP_ON else BS_RUN
             if self.bs_run >= need_run and self.bs_enabled:
-                want = 0.25 ** (self.bs_attacks + 1)
-                if want < BS_MIN_TARGET:
-                    want = BS_MIN_TARGET
-                if want < self.bs_target:
-                    self.bs_target = want
-                    self.bs_active = True
-                    if self.bs_attacks < 6:
-                        self.bs_attacks += 1
-        elif (not tonal or not stable) and floors:
+                if not self.notch_armed:
+                    self.notch_armed = True
+                    self.notch_f0 = max(
+                        NOTCH_FMIN,
+                        min(NOTCH_FMAX, self.bs_bin_dom * 16000.0 / 512.0))
+                    self._retune_notch()
+        elif ((not tonal or not stable) and floors) or \
+                (frames > 0 and self.bs_hits == 0):
+            # Heal on proof (classic) OR on a fully toneless window
+            # (nothing to notch — the tone is genuinely gone, not
+            # merely suppressed: the census runs pre-notch).
             self.bs_run = 0
             if self.bs_heal < 1000:
                 self.bs_heal += 1
-            if self.bs_heal >= BS_HEAL_RUN and self.bs_active:
-                self.bs_target = 1.0
-                self.bs_active = False
-                self.bs_attacks = 0
+            if self.bs_heal >= BS_HEAL_RUN and self.notch_armed:
+                self.notch_armed = False
                 self.bs_run = self.bs_heal = 0
         else:
             self.bs_run = 0
@@ -625,6 +667,11 @@ class NkfEngine:
         self.bs_hits = self.bs_frames = 0
         self.bs_bin_best = 0
         self.bs_bin_dom = -1
+
+    def _retune_notch(self):
+        b0, b1, b2, a1, a2 = self._notch_coeffs(self.notch_f0)
+        self.notch_b = (b0, b1, b2)
+        self.notch_a = (a1, a2)
 
     # -- Frame pump ----------------------------------------------------------
     def process(self, mic_i16, ref_i16):
@@ -738,11 +785,78 @@ class NkfEngine:
                     g = 1.0
             emit = mic_b + (out_b - mic_b) * np.float32(g)
 
-            self.bs_gain += (self.bs_target - self.bs_gain) * (
-                BS_TAU_ATK if self.bs_target < self.bs_gain
-                else BS_TAU_REL)
-            if self.bs_gain != 1.0:
-                emit = emit * np.float32(self.bs_gain)
+            # Tonal census on the PRE-notch wire: sense the threat,
+            # not our own suppression (post-notch analysis would go
+            # blind the moment the notch works, oscillating armed
+            # state on a sustained tone). One FFT serves steering
+            # below and the stability runs — no extra analysis.
+            tonal, bb = self._frame_tonal(emit)
+            if tonal:
+                self.bs_hits += 1
+                if self.bs_bin_last - 1 <= bb <= self.bs_bin_last + 1:
+                    self.bs_bin_run += 1
+                else:
+                    self.bs_bin_last = bb
+                    self.bs_bin_run = 1
+                if self.bs_bin_run > self.bs_bin_best:
+                    self.bs_bin_best = self.bs_bin_run
+                    self.bs_bin_dom = self.bs_bin_last
+            else:
+                self.bs_bin_last = -1000000
+                self.bs_bin_run = 0
+            # Tracking notch application (replaces the trim): steer
+            # toward this block's tonal center (slew-limited, so
+            # sweeps are tracked and spurious jumps absorbed), then
+            # filter with depth ramped in/out (no clicks on
+            # engage/disengage). Exact bypass at ramp 0.
+            if self.notch_armed and self._enable_anf and tonal \
+                    and bb > 0:
+                target = max(NOTCH_FMIN,
+                             min(NOTCH_FMAX, bb * 16000.0 / 512.0))
+                step = target - self.notch_f0
+                if step > NOTCH_SLEW:
+                    step = NOTCH_SLEW
+                elif step < -NOTCH_SLEW:
+                    step = -NOTCH_SLEW
+                if step != 0.0:
+                    self.notch_f0 += step
+                    self._retune_notch()
+            want_ramp = (1.0 if (self.notch_armed and self._enable_anf)
+                         else 0.0)
+            ramp_step = 1.0 / NOTCH_RAMP_BLOCKS
+            if self.notch_ramp < want_ramp:
+                self.notch_ramp = min(want_ramp,
+                                      self.notch_ramp + ramp_step)
+            elif self.notch_ramp > want_ramp:
+                self.notch_ramp = max(want_ramp,
+                                      self.notch_ramp - ramp_step)
+            if self.notch_ramp > 0.0:
+                in_e = float(np.sum(emit.astype(np.float64) ** 2))
+                b0, b1, b2 = self.notch_b
+                a1, a2 = self.notch_a
+                s1, s2 = self.notch_s1, self.notch_s2
+                out = np.empty_like(emit)
+                # NOTE: loop var MUST NOT be `n` — that name holds
+                # the pump frame size for the drain below. Shadowing
+                # it returns 511-sample frames (crashed L5).
+                for k in range(BLOCK_SHIFT):
+                    x = float(emit[k])
+                    yn = b0 * x + s1
+                    s1 = b1 * x - a1 * yn + s2
+                    s2 = b2 * x - a2 * yn
+                    out[k] = yn
+                self.notch_s1, self.notch_s2 = s1, s2
+                k = np.float32(self.notch_ramp)
+                emit = emit * (1.0 - k) + out * k
+                out_e = float(np.sum(emit.astype(np.float64) ** 2))
+                # Guard the silence floor: log10(0) is -inf, and
+                # -inf arithmetic NaN-poisons the smoothed telemetry
+                # (and anything downstream reading it) permanently.
+                inst = (10.0 * np.log10(out_e / (in_e + 1e-12))
+                        if in_e > 1e-12 else 0.0)
+            else:
+                inst = 0.0
+            self.notch_db += 0.25 * (inst - self.notch_db)
 
             # Escalation run: pre-gain wire energy (stable measure —
             # post-trim energy would sawtooth against its own trim).
@@ -777,20 +891,6 @@ class NkfEngine:
             self.dep_mic += float(np.sum(mic_b.astype(np.float64) ** 2))
             self.dep_out += float(np.sum(emit.astype(np.float64) ** 2))
             self.dep_samples += shift
-            tonal, bb = self._frame_tonal(emit)
-            if tonal:
-                self.bs_hits += 1
-                if self.bs_bin_last - 1 <= bb <= self.bs_bin_last + 1:
-                    self.bs_bin_run += 1
-                else:
-                    self.bs_bin_last = bb
-                    self.bs_bin_run = 1
-                if self.bs_bin_run > self.bs_bin_best:
-                    self.bs_bin_best = self.bs_bin_run
-                    self.bs_bin_dom = self.bs_bin_last
-            else:
-                self.bs_bin_last = -1000000
-                self.bs_bin_run = 0
             if self.bs_frames + 1 >= BS_FRAMES:
                 self.bs_frames += 1
                 self._backstop_window()
