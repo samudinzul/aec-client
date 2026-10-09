@@ -125,3 +125,10 @@ the detection label, the file hash (`sha256sum` is printed by both
 release scripts), and the VirusTotal link. Do not "fix" it with a
 packer, an obfuscator, or a renamed extension — those feed the
 heuristics, they don't starve them.
+
+Standing vendor channels:
+- SecureAge APEX (the v1.11.0 exe flag): false-positive submission
+  at https://www.secureage.com/article-report-false-positive
+  (their engine is AI-heuristic and aggressive by design — single-
+  vendor flags from it are routinely disregarded industry-wide,
+  but filing clears it for their users too).
