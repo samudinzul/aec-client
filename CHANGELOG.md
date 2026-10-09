@@ -125,8 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the UI shows loop-trim and RES lines next to Backstop trim;
   the smoke table prints `loopDb`/`resDb` columns (verdict logic
   untouched). (`NKFImpl.h/.cpp`, `src/nkf_wrapper.{h,cpp}`,
-  `src/main.cpp`, `tools/nkf_smoke.cpp`. Needs a desktop
-  `--fresh` rebuild to verify (no Windows toolchain here).
+  `src/main.cpp`, `tools/nkf_smoke.cpp`. Built clean, synth
+  fingerprint held, field-verified on loud monitoring like web.
 
 - **Web NKF intrinsic residual suppressor (Wiener post-filter).**
   The linear Kalman core passes nonlinear distortion, loud
