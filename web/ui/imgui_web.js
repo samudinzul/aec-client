@@ -12,7 +12,7 @@
 
 let webImGuiUI = null;
 
-const APP_VERSION = 'v1.11.0';
+const APP_VERSION = 'v1.12.0';
 
 class WebImGuiUI {
     constructor() {

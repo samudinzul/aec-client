@@ -66,8 +66,8 @@ WHY NO ANTIVIRUS WARNING
 -------------------------
 This bundle is Python + mainstream PyPI wheels
 only - no .exe, no .dll, no .pyd, no packed executables,
-so antivirus heuristics have no target: the v1.11.0 ZIP
-scans 0 detections on VirusTotal. (A local-only Rust
+so antivirus heuristics have no target: recent release ZIPs
+scan 0 detections on VirusTotal. (A local-only Rust
 accelerator exists in ext/ for developers; it never
 ships in this ZIP. The desktop .exe is unsigned and carries
 a one-vendor reputation flag; see the repo README for the

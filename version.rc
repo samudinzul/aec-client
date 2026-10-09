@@ -16,8 +16,8 @@
 IDR_ICON1 ICON DISCARDABLE "resources/app.ico"
 
 1 VERSIONINFO
-FILEVERSION     1,11,0,0
-PRODUCTVERSION  1,11,0,0
+FILEVERSION     1,12,0,0
+PRODUCTVERSION  1,12,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          0x40004L
@@ -30,11 +30,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "AEC Client"
             VALUE "FileDescription",  "AEC Client - acoustic echo cancellation"
-            VALUE "FileVersion",      "1.11.0"
+            VALUE "FileVersion",      "1.12.0"
             VALUE "InternalName",     "aec_gui"
             VALUE "OriginalFilename", "aec_gui.exe"
             VALUE "ProductName",      "AEC Client"
-            VALUE "ProductVersion",   "1.11.0"
+            VALUE "ProductVersion",   "1.12.0"
         END
     END
     BLOCK "VarFileInfo"
