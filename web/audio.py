@@ -411,8 +411,10 @@ class AudioRunner:
                 if len(carry):
                     out[:len(carry)] = carry
                 self._out_carry = np.zeros(0, dtype=np.float32)
-            pcm = (np.clip(out, -1.0, 1.0)
-                   * 32767.0).astype(np.int16).tobytes()
+            # Soft limiter (tanh knee at -3 dBFS), not a hard clip at 0 dBFS:
+            # the resampled mix can crest past 1.0 and a hard clip is
+            # square-wave distortion. Mirrors main.cpp SoftLimit.
+            pcm = dsp.soft_limit(out).astype(np.int16).tobytes()
         except Exception:
             pcm = np.zeros(frame_count, dtype=np.int16).tobytes()
         return (pcm, pa_patch.paContinue)
@@ -439,8 +441,10 @@ class AudioRunner:
                 if len(carry):
                     out[:len(carry)] = carry
                 self._mon_carry = np.zeros(0, dtype=np.float32)
-            pcm = (np.clip(out, -1.0, 1.0)
-                   * 32767.0).astype(np.int16).tobytes()
+            # Soft limiter (tanh knee at -3 dBFS), not a hard clip at 0 dBFS:
+            # the resampled mix can crest past 1.0 and a hard clip is
+            # square-wave distortion. Mirrors main.cpp SoftLimit.
+            pcm = dsp.soft_limit(out).astype(np.int16).tobytes()
         except Exception:
             pcm = np.zeros(frame_count, dtype=np.int16).tobytes()
         return (pcm, pa_patch.paContinue)
@@ -465,8 +469,11 @@ class AudioRunner:
         if sb is not None:
             mixed = (cleaned.astype(np.float32) / 32768.0
                      + sb * self.sb_gain)
-            cleaned = (np.clip(mixed, -1.0, 1.0)
-                       * 32767.0).astype(np.int16)
+            # Soft limiter, not a hard clip: mic gain can reach 4x and
+            # the soundboard gain 2x, so the sum routinely exceeds 1.0,
+            # and a hard clip there is square-wave distortion. Mirrors
+            # main.cpp SoftLimit (tanh knee at -3 dBFS).
+            cleaned = dsp.soft_limit(mixed).astype(np.int16)
         # Monitor gets the soundboard alone — never the mic, or you
         # would hear yourself on top of the pads. This runs every
         # frame regardless of whether a pad is sounding: sb is None

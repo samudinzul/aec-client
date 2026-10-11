@@ -172,6 +172,34 @@ def rms(x: np.ndarray) -> float:
     return float(np.sqrt(np.dot(v, v) / v.size))
 
 
+# Mirrors main.cpp SoftLimit: linear to -3 dBFS, tanh knee above it,
+# then a hard clamp as last-resort safety. Vectorized over the whole
+# frame (one np.tanh call) — same cost as the np.clip it replaces,
+# so there is no CPU regression vs the hard-clip web build.
+_KNEE = np.float32(0.7079)          # -3 dBFS, same constant as the C++ side
+_KNEE_COMP = np.float32(1.0) - _KNEE
+
+
+def soft_limit(x: np.ndarray) -> np.ndarray:
+    """Float [-1, 1] mix -> float in int16 domain [-32768, 32767].
+
+    Mirrors ``SoftLimit(v)`` in src/main.cpp exactly:
+        a = |v|
+        if a <= knee:  v * 32768
+        else:          sign(v) * (knee + (1-knee)*tanh((a-knee)/(1-knee))) * 32768
+    then clamp_s16. The tanh knee turns headroom into smooth compression
+    instead of the square-wave distortion a hard clip at 0 dBFS makes
+    (mic gain up to 4x + soundboard gain up to 2x routinely exceed 1.0).
+    """
+    v = np.asarray(x, dtype=np.float32)
+    a = np.abs(v)
+    # y = a below the knee, knee + (1-knee)*tanh(...) above.
+    y = np.where(a <= _KNEE, a,
+                 _KNEE + _KNEE_COMP * np.tanh((a - _KNEE) / _KNEE_COMP))
+    out = np.sign(v) * y * np.float32(32768.0)
+    return np.clip(out, -32768.0, 32767.0).astype(np.float32)
+
+
 def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
     """48000 -> 16000: symmetric FIR lowpass (fc ~7 kHz) + take every 3rd.
 
