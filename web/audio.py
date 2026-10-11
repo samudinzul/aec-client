@@ -401,7 +401,7 @@ class AudioRunner:
                 except queue.Empty:
                     break
                 carry = np.concatenate([carry, resample_from_16k(
-                    frame.astype(np.float32) / 32768.0, rate)])
+                    frame.astype(np.float32), rate)])
             if len(carry) >= frame_count:
                 out = carry[:frame_count]
                 self._out_carry = carry[frame_count:]
@@ -456,10 +456,16 @@ class AudioRunner:
     # -------------------------------------------------------
 
     def _pump(self, mic_i16, ref_i16):
-        cleaned = self.chain.process_frame(mic_i16, ref_i16)
+        # Chain output as float — the limiter runs ONCE, in the output
+        # callback after resampling, mirroring main.cpp (SoftLimit is
+        # the last step before the device). Limiting here too, then
+        # quantizing to int16 and re-limiting in _on_out double-compressed
+        # the signal (two tanh knees) and added a quantization step
+        # before resampling — audible as crackle vs the desktop.
+        out = cleaned = self.chain.process_frame(mic_i16, ref_i16).astype(np.float32) / 32768.0
 
         # Soundboard: mixed into the same frame the voice apps hear,
-        # summed before the clip so mic + sounds cannot clip each
+        # summed before the limiter so mic + sounds cannot clip each
         # other (desktop sums into SoftLimit the same way).
         sb = None
         if self.soundboard is not None:
@@ -468,13 +474,7 @@ class AudioRunner:
             except Exception:
                 sb = None  # fail-open: a broken pad never mutes the mic
         if sb is not None:
-            mixed = (cleaned.astype(np.float32) / 32768.0
-                     + sb * self.sb_gain)
-            # Soft limiter, not a hard clip: mic gain can reach 4x and
-            # the soundboard gain 2x, so the sum routinely exceeds 1.0,
-            # and a hard clip there is square-wave distortion. Mirrors
-            # main.cpp SoftLimit (tanh knee at -3 dBFS).
-            cleaned = dsp.soft_limit(mixed).astype(np.int16)
+            out = out + sb * self.sb_gain
         # Monitor gets the soundboard alone — never the mic, or you
         # would hear yourself on top of the pads. This runs every
         # frame regardless of whether a pad is sounding: sb is None
@@ -491,9 +491,9 @@ class AudioRunner:
                 pass
 
         self.in_rms = rms(mic_i16.astype(np.float32) / 32768.0)
-        self.out_rms = rms(cleaned.astype(np.float32) / 32768.0)
+        self.out_rms = rms(out)
         try:
-            self._out_q.put_nowait(cleaned)
+            self._out_q.put_nowait(out)
         except queue.Full:
             pass
 
