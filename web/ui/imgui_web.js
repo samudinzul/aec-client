@@ -829,6 +829,8 @@ class WebImGuiUI {
             this.el.devhint.textContent = '';
             this.el.status.textContent = 'Stopped.';
             this.updatePads([]);
+            this.micSmoothed = 0;
+            this.outSmoothed = 0;
         } else {
             this.el.status.textContent = 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')';
         }
@@ -838,9 +840,23 @@ class WebImGuiUI {
     meter(canvas, v) {
         const g = canvas.getContext('2d');
         const w = canvas.width, h = canvas.height;
-        const lvl = Math.min(1, Math.max(0, v * 4));
+        let key = null;
+        if (canvas.id === 'ig-mIn') key = 'micSmoothed';
+        else if (canvas.id === 'ig-mOut') key = 'outSmoothed';
+        if (key) {
+            if (this[key] === undefined) this[key] = 0;
+            const target = Math.min(1, Math.max(0, v * 4));
+            if (target >= this[key]) {
+                this[key] = target;
+            } else {
+                this[key] = this[key] * 0.9 + target * 0.1;
+            }
+            v = this[key];
+        } else {
+            v = Math.min(1, Math.max(0, v * 4));
+        }
         g.clearRect(0, 0, w, h);
-        const bw = Math.floor(lvl * w);
+        const bw = Math.floor(v * w);
         g.fillStyle = '#2a9d5c';
         if (bw > 0) g.fillRect(0, 0, bw, h);
     }
