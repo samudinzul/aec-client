@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover
 
 from .dsp import (FRAME_SIZE, SAMPLE_RATE, resample_from_16k,
                   resample_to_16k, rms)
+from . import dsp  # soft_limit (tanh knee) is referenced as dsp.soft_limit
 
 _Q_DEPTH = 64
 
