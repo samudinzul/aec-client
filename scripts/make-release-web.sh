@@ -9,6 +9,7 @@
 # Contract:
 #   release/AEC-Web-vX-win64/
 #     web/        (the app: start.bat, server, DSP, GUI)
+#     web/sounds/ (empty; users drop soundboard pads here)
 #     models/     (the two DTLN pairs + nkf.onnx — all three
 #                  profiles work offline; AEC3 needs no model file,
 #                  its pip package installs via requirements.txt)
@@ -39,7 +40,7 @@ command -v zip >/dev/null || { echo "zip not found" >&2; exit 1; }
 
 STAGE="release/AEC-Web-v${VER}-win64"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/models"
+mkdir -p "$STAGE/models" "$STAGE/web/sounds"
 
 # The app, minus caches and local junk.
 cp -r web "$STAGE/web"

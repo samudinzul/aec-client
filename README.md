@@ -67,6 +67,26 @@ No more headphones. No more echo. No dead-air noise.
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
 
+### Weak Hardware (low CPU / low RAM)
+
+All engines run well under 2% CPU on a typical desktop and the models
+are tiny (NKF is 45 KB; the DTLN pairs are a few MB), so RAM is rarely
+the bottleneck. If your machine is very low-end, in order of impact:
+
+1. **Pick the NKF-AEC profile** — smallest engine, designed for weak
+   CPUs. Reveal it by ticking **Show experimental engines** on the
+   Appearance tab.
+2. **Untick "Noise suppression"** — drops the second DTLN-NS pair from
+   the chain, halving the neural models loaded.
+3. **Web UI: skip the native window** — instead of `web\start.bat`
+   (which opens a WebView2 window), run `python -m web.server` and
+   open `http://localhost:8000/` in a browser you already have open.
+   Saves the WebView2 renderer processes (~100 MB+).
+4. **Desktop: minimize to tray** — the render loop throttles when
+   hidden, cutting idle CPU to near zero.
+5. **Stay at 16 kHz** (the default) — 48 kHz costs roughly 3× the
+   DSP work for no echo-cancellation benefit on DTLN or NKF.
+
 ---
 
 ## Web UI (Python, no installer)
@@ -576,7 +596,7 @@ aec-client/
 ├── CMakeLists.txt                  Build configuration
 ├── scripts/
 │   ├── make-desktop-build.sh      Desktop app build (quiet; --fresh to wipe, --run to launch, --with-smoke for test tools)
-│   ├── make-web-build.sh          Web runtime prepare + verify (venv, packages, engine smoke; --lean for base set, --run to launch)
+│   ├── make-web-build.sh          Web runtime prepare + verify (venv, packages, engine smoke; --fresh to wipe, --run to launch)
 │   ├── test.sh                     Offline test suite (native + web)
 │   ├── make-release-desktop.sh     Desktop release bundle + zip builder
 │   ├── make-release-web.sh         Web release bundle + zip builder

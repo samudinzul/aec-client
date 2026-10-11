@@ -246,6 +246,13 @@ input[type="checkbox"]:hover {
     min-width: auto;
 }
 
+/* Soundboard pad: green border while that pad is playing. */
+.pad-playing {
+    border-color: #2a9d5c !important;
+    box-shadow: 0 0 0 1px #2a9d5c, 0 0 12px rgba(42, 157, 92, 0.35);
+    color: #7be294 !important;
+}
+
 /* Status indicators */
 .status-dot {
     width: 12px;

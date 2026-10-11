@@ -10,6 +10,7 @@
 #     LICENSES/        (third-party credits)
 #     README.txt       (end-user doc, version stamped)
 #     wallpapers/      (empty; users bring their own)
+#     sounds/          (empty; users drop soundboard pads here)
 #   release/AEC-Client-vX-win64.zip  (top folder only — no releases/
 #     subfolder, no imgui.ini, no aec_config.txt, no .pdb, no junk)
 #
@@ -37,7 +38,7 @@ command -v zip >/dev/null || { echo "zip not found (pacman -S zip)" >&2; exit 1;
 
 STAGE="release/AEC-Client-v${VER}-win64"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/models" "$STAGE/LICENSES" "$STAGE/wallpapers"
+mkdir -p "$STAGE/models" "$STAGE/LICENSES" "$STAGE/wallpapers" "$STAGE/sounds"
 
 cp build/aec_gui.exe "$STAGE/"
 cp build/*.dll "$STAGE/"

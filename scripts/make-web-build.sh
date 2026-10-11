@@ -5,9 +5,7 @@
 #
 # Usage (MSYS2 UCRT64 bash, from the repo root):
 #   scripts/make-web-build.sh          # venv + full packages + checks
-#   scripts/make-web-build.sh --fresh  # wipe .venv first, rebuild it
-#   scripts/make-web-build.sh --lean   # base packages only
-#                                      # (DTLN profiles, ~140 MB)
+#   scripts/make-web-build.sh --fresh  # wipe .venv + bytecode caches, rebuild
 #   scripts/make-web-build.sh --run    # build, then launch the GUI
 #                                      # (native window via web.gui,
 #                                      # attaches if a server runs)
@@ -15,7 +13,9 @@
 # Steps:
 #   1. Find a Python (py launcher preferred, PATH fallback;
 #      version-checked 3.10-3.14 like web/start.bat).
-#   2. Create .venv unless present (--fresh wipes it first).
+#   2. Create .venv unless present (--fresh wipes .venv and all
+#      web/**/__pycache__ first, like make-desktop-build.sh
+#      --fresh wiping build/).
 #   3. pip install the requirement set (quiet no-op when satisfied).
 #   4. Byte-compile every web/*.py (syntax over the whole backend).
 #   5. Run the offline engine smoke (all available engines).
@@ -26,15 +26,13 @@
 set -euo pipefail
 
 FRESH=0
-LEAN=0
 RUN=0
 for a in "$@"; do
     case "$a" in
         --fresh) FRESH=1 ;;
-        --lean) LEAN=1 ;;
         --run) RUN=1 ;;
         -h|--help)
-            sed -n '2,25p' "$0"; exit 0 ;;
+            sed -n '2,23p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
@@ -62,32 +60,26 @@ find_vpy() {
         if "$cand" --version >/dev/null 2>&1; then VPY="$cand"; break; fi
     done
 }
+if [ "$FRESH" -ne 0 ]; then
+    echo "-- removing .venv and bytecode caches (fresh environment)"
+    rm -rf .venv
+    # Stale .pyc can shadow changed sources across a venv rebuild.
+    find web -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+fi
 find_vpy
 if [ -z "$VPY" ]; then
-    if [ ! -d .venv ] || [ "$FRESH" -ne 0 ]; then
-        if [ "$FRESH" -ne 0 ]; then
-            echo "-- removing .venv (fresh environment)"
-            rm -rf .venv
-        else
-            echo "-- creating .venv (first run only)"
-        fi
-        # shellcheck disable=SC2086
-        $PY_BIN -m venv .venv
-        find_vpy
-    fi
+    echo "-- creating .venv (first run only)"
+    # shellcheck disable=SC2086
+    $PY_BIN -m venv .venv
+    find_vpy
 fi
 [ -n "$VPY" ] || {
     echo "existing .venv is unusable here (foreign platform?) — rerun with --fresh to rebuild it" >&2
     exit 1; }
 
 # ---- 3. packages (quiet; no-op when satisfied) ----
-if [ "$LEAN" -ne 0 ]; then
-    REQ="web/requirements-base.txt"
-else
-    REQ="web/requirements.txt"
-fi
-echo "-- packages (${REQ})"
-if ! "$VPY" -m pip install -q --disable-pip-version-check -r "$REQ"; then
+echo "-- packages (web/requirements.txt)"
+if ! "$VPY" -m pip install -q --disable-pip-version-check -r web/requirements.txt; then
     echo "pip install failed — connect to the internet and retry" >&2
     exit 1
 fi

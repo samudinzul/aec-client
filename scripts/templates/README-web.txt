@@ -62,6 +62,23 @@ QUICK START
      Cancellation OFF (this app does it), Noise
      Suppression Krisp, Automatic Gain Control OFF.
 
+WEAK OR LOW-END PC?
+-------------------
+In order of impact:
+1. Pick the NKF-AEC profile (tick "Show experimental
+   engines" in Appearance to reveal it) - smallest
+   engine, designed for weak CPUs.
+2. Untick "Noise suppression" on the Audio tab -
+   halves the neural models loaded.
+3. Skip the native window: instead of web\start.bat,
+   run "python -m web.server" in a terminal and open
+   http://localhost:8000/ in a browser you already
+   have open. Saves the WebView2 renderer processes
+   (~100 MB+ RAM).
+Models are tiny (NKF is 45 KB), so RAM is rarely the
+bottleneck - the Python runtime itself uses more than
+the audio chain ever will.
+
 WHY NO ANTIVIRUS WARNING
 -------------------------
 This bundle is Python + mainstream PyPI wheels

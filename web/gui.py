@@ -66,16 +66,26 @@ def _prefs():
 
 def _serve():
     """Server thread: preload the models (the ~5 s
-    part), then serve. Runs before the window opens,
-    so Start is instant the moment the GUI appears."""
+    part) and scan the soundboard, then serve. Runs
+    before the window opens, so Start and the
+    soundboard tab are instant the moment the GUI
+    appears."""
     global _server
-    from .server import app, chain
+    from .server import app, chain, board
+    from .soundboard import decoders_available
 
     print("Loading models… (a few seconds)", flush=True)
     try:
         chain.preload()
     except Exception:
         pass  # /api/start surfaces the error
+    try:
+        n = len(board.scan())
+        print(f"Soundboard: dir={board.sounds_dir} "
+              f"decoders={decoders_available()} loaded={n}",
+              flush=True)
+    except Exception as e:
+        print(f"Soundboard: scan failed ({e})", flush=True)
     import uvicorn
     # Server.run() skips signal installation when
     # not on the main thread (uvicorn does this

@@ -321,15 +321,31 @@ class AudioRunner:
     ref_idx is a pyaudiowpatch loopback index.
     """
 
-    def __init__(self, chain, mic_idx=None, ref_idx=None, out_idx=None):
+    def __init__(self, chain, mic_idx=None, ref_idx=None, out_idx=None,
+                 soundboard=None, sb_gain=1.0,
+                 monitor_idx=None, monitor_gain=1.0, monitor_enabled=True):
         _need_pa()
         self.chain = chain
         self.mic_idx = int(mic_idx)
         self.ref_idx = int(ref_idx)
         self.out_idx = int(out_idx)
+        # Soundboard (desktop parity): the mix is summed into the
+        # chain output before the output resampler, so voice apps
+        # hear mic + sounds together and nothing clips each other.
+        self.soundboard = soundboard
+        self.sb_gain = float(sb_gain)
+        # Local monitor: a second playback device gets a copy of the
+        # soundboard mix only (never the mic), so you can hear your
+        # own pads while the cable still carries them to voice apps.
+        # monitor_enabled is a live toggle — the stream stays open
+        # but stops being fed when unticked (starves to silence).
+        self.monitor_idx = monitor_idx
+        self.monitor_gain = float(monitor_gain)
+        self.monitor_enabled = bool(monitor_enabled)
         self._in_q = queue.Queue(maxsize=_Q_DEPTH)
         self._ref_q = queue.Queue(maxsize=_Q_DEPTH)
         self._out_q = queue.Queue(maxsize=_Q_DEPTH)
+        self._mon_q = queue.Queue(maxsize=_Q_DEPTH)
         self._stop = threading.Event()
         self._threads = []
         self._pa = None
@@ -342,6 +358,8 @@ class AudioRunner:
         self._ref_rate = 48000
         self._out_rate = 48000
         self._out_carry = np.zeros(0, dtype=np.float32)
+        self._mon_rate = 48000
+        self._mon_carry = np.zeros(0, dtype=np.float32)
 
     # -------------------------------------------------------
     #  PortAudio callbacks (run on PortAudio's thread;
@@ -399,6 +417,34 @@ class AudioRunner:
             pcm = np.zeros(frame_count, dtype=np.int16).tobytes()
         return (pcm, pa_patch.paContinue)
 
+    def _on_mon(self, in_data, frame_count, time_info, status):
+        """Local monitor playback. Same drain-and-resample shape as
+        _on_out, but reading the soundboard-only queue. Starves to
+        silence, never blocks."""
+        try:
+            carry = self._mon_carry
+            rate = self._mon_rate
+            while len(carry) < frame_count:
+                try:
+                    frame = self._mon_q.get_nowait()
+                except queue.Empty:
+                    break
+                carry = np.concatenate([carry, resample_from_16k(
+                    frame.astype(np.float32), rate)])
+            if len(carry) >= frame_count:
+                out = carry[:frame_count]
+                self._mon_carry = carry[frame_count:]
+            else:
+                out = np.zeros(frame_count, dtype=np.float32)
+                if len(carry):
+                    out[:len(carry)] = carry
+                self._mon_carry = np.zeros(0, dtype=np.float32)
+            pcm = (np.clip(out, -1.0, 1.0)
+                   * 32767.0).astype(np.int16).tobytes()
+        except Exception:
+            pcm = np.zeros(frame_count, dtype=np.int16).tobytes()
+        return (pcm, pa_patch.paContinue)
+
     # -------------------------------------------------------
     #  Worker: input queues (native rate) -> 16 kHz frames
     #  -> chain -> output queue
@@ -406,6 +452,36 @@ class AudioRunner:
 
     def _pump(self, mic_i16, ref_i16):
         cleaned = self.chain.process_frame(mic_i16, ref_i16)
+
+        # Soundboard: mixed into the same frame the voice apps hear,
+        # summed before the clip so mic + sounds cannot clip each
+        # other (desktop sums into SoftLimit the same way).
+        sb = None
+        if self.soundboard is not None:
+            try:
+                sb = self.soundboard.mix(FRAME_SIZE, SAMPLE_RATE)
+            except Exception:
+                sb = None  # fail-open: a broken pad never mutes the mic
+        if sb is not None:
+            mixed = (cleaned.astype(np.float32) / 32768.0
+                     + sb * self.sb_gain)
+            cleaned = (np.clip(mixed, -1.0, 1.0)
+                       * 32767.0).astype(np.int16)
+        # Monitor gets the soundboard alone — never the mic, or you
+        # would hear yourself on top of the pads. This runs every
+        # frame regardless of whether a pad is sounding: sb is None
+        # when idle, so feed silence and keep the monitor stream
+        # draining (the callback would otherwise starve).
+        if self.monitor_idx is not None and self.monitor_enabled:
+            try:
+                if sb is not None:
+                    self._mon_q.put_nowait(sb * self.monitor_gain)
+                else:
+                    self._mon_q.put_nowait(
+                        np.zeros(FRAME_SIZE, dtype=np.float32))
+            except queue.Full:
+                pass
+
         self.in_rms = rms(mic_i16.astype(np.float32) / 32768.0)
         self.out_rms = rms(cleaned.astype(np.float32) / 32768.0)
         try:
@@ -475,6 +551,27 @@ class AudioRunner:
                               output_device_index=self.out_idx,
                               stream_callback=self._on_out)
         self._streams = [mic_s, ref_s, out_s]
+
+        # Local monitor: fail-open — a device that refuses to open
+        # must never block Start, the pads just stay in the cable.
+        if self.monitor_idx is not None:
+            try:
+                self._mon_rate = int(self._pa.get_device_info_by_index(
+                    self.monitor_idx).get("defaultSampleRate", 48000) or 48000)
+                self._mon_carry = np.zeros(0, dtype=np.float32)
+                while not self._mon_q.empty():
+                    try:
+                        self._mon_q.get_nowait()
+                    except queue.Empty:
+                        break
+                self._streams.append(self._pa.open(
+                    format=pa_patch.paInt16, channels=1,
+                    rate=self._mon_rate, output=True,
+                    output_device_index=self.monitor_idx,
+                    stream_callback=self._on_mon))
+            except Exception:
+                self.monitor_idx = None
+
         self._stop.clear()
         self._threads = [threading.Thread(target=self._work, daemon=True)]
         for t in self._threads:
@@ -504,7 +601,7 @@ class AudioRunner:
         except Exception:
             pass
         self._pa = None
-        for q in (self._in_q, self._ref_q, self._out_q):
+        for q in (self._in_q, self._ref_q, self._out_q, self._mon_q):
             while not q.empty():
                 try:
                     q.get_nowait()

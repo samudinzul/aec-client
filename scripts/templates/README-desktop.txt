@@ -86,9 +86,13 @@ QUICK START
 
 TIPS
 ----
-- CPU-sensitive? Try "NKF-AEC". DTLN/AEC3/NKF are all usually well
-  under 2% on a typical desktop; the post stages add a fraction of a
-  percent.
+- Weak or low-end PC? In order of impact: (1) pick the NKF-AEC
+  profile (tick "Show experimental engines" on the Appearance tab
+  to reveal it), (2) untick "Noise suppression" on the Audio tab
+  to halve the neural models loaded, (3) stay at the default 16000
+  sample rate. RAM is rarely the bottleneck - the models are tiny
+  (NKF is 45 KB) - and every engine is well under 2% CPU on a
+  typical desktop.
 - Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
   loops your voice back into the mic — every engine rides through it
   (NKF carries loop brakes + a no-cancel watchdog that show up in the

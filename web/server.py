@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .audio import AudioRunner, list_devices, speaker_output_for_ref
 from .chain import PROFILES, Chain
+from .soundboard import SoundBoard, decoders_available
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)  # repo root: models/ lives here
@@ -26,12 +27,36 @@ UI_DIR = os.path.join(HERE, "ui")
 
 app = FastAPI(title="aec-web")
 chain = Chain(model_dir=os.path.join(ROOT, "models"))
+board = SoundBoard()
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
          "nsEnabled": True, "micGain": 1.0,
          "trayEnabled": True, "listenToSelf": False,
-         "profile": 0, "experimentalEngines": False}
+         "profile": 0, "experimentalEngines": False,
+         "soundboardGain": 1.0, "monitorEnabled": True,
+         "monitorGain": 1.0, "monitorDevice": None}
+
+
+def monitor_output_index():
+    """Playback endpoint the local soundboard monitor feeds.
+
+    Default (-1 / None in the pref) follows "Your speakers": the
+    playback device backing the selected loopback reference, exactly
+    like the desktop's "Your speakers (follow)". An explicit device
+    index wins when it still exists.
+    """
+    explicit = prefs.get("monitorDevice")
+    devs = None
+    if explicit is not None:
+        devs = list_devices()
+        if any(e["index"] == explicit for e in devs["playback"]):
+            return explicit
+    if devs is None:
+        devs = list_devices()
+    ref_name = next((e["name"] for e in devs["loopback"]
+                     if e["index"] == prefs.get("ref")), "")
+    return speaker_output_for_ref(ref_name, devs["playback"])
 
 
 @app.get("/")
@@ -78,9 +103,14 @@ def state():
     st["listenToSelf"] = bool(prefs.get("listenToSelf"))
     st["profile"] = prefs.get("profile", 0)
     st["experimentalEngines"] = bool(prefs.get("experimentalEngines"))
-    if runner is not None:
-        st["inRms"] = runner.in_rms
-        st["outRms"] = runner.out_rms
+    st["soundboardPlaying"] = board.playing
+    # Snapshot: /api/stop nulls `runner` from a worker thread;
+    # a check-then-use race here raised and 500'd (the WS loop
+    # already snapshots for the same reason).
+    r = runner
+    if r is not None:
+        st["inRms"] = r.in_rms
+        st["outRms"] = r.out_rms
     return st
 
 
@@ -115,6 +145,44 @@ def set_prefs(body: dict):
         # Read by the native window (gui.py) to hide
         # to the system tray instead of quitting.
         prefs["trayEnabled"] = bool(body["trayEnabled"])
+    if "soundboardGain" in body:
+        # Live: push into the running pump (desktop reads the
+        # atomic every frame; here the runner holds the float).
+        try:
+            g = float(body["soundboardGain"])
+        except (TypeError, ValueError):
+            g = 1.0
+        prefs["soundboardGain"] = min(2.0, max(0.0, g))
+        r = runner  # snapshot: /api/stop may null it concurrently
+        if r is not None:
+            r.sb_gain = prefs["soundboardGain"]
+    if "monitorEnabled" in body:
+        # Live: the pump checks this every frame — unticking stops
+        # the monitor feed immediately (stream stays open, starves).
+        prefs["monitorEnabled"] = bool(body["monitorEnabled"])
+        r = runner
+        if r is not None:
+            r.monitor_enabled = prefs["monitorEnabled"]
+    if "monitorGain" in body:
+        try:
+            g = float(body["monitorGain"])
+        except (TypeError, ValueError):
+            g = 1.0
+        prefs["monitorGain"] = min(2.0, max(0.0, g))
+        r = runner
+        if r is not None:
+            r.monitor_gain = prefs["monitorGain"]
+    if "monitorDevice" in body:
+        # None (or -1) = follow "Your speakers". Stored only, like
+        # devices: the monitor stream opens at Start.
+        d = body["monitorDevice"]
+        if d in (None, -1, ""):
+            prefs["monitorDevice"] = None
+        else:
+            try:
+                prefs["monitorDevice"] = int(d)
+            except (TypeError, ValueError):
+                prefs["monitorDevice"] = None
     if "listenToSelf" in body:
         # Stored only (like devices): the output stream
         # opens at Start, so this applies after Stop -> Start.
@@ -147,6 +215,36 @@ def set_prefs(body: dict):
                         (i for i, (_, n) in enumerate(PROFILES)
                          if n == prev), 0)
     return prefs
+
+
+@app.get("/api/sounds")
+def sounds():
+    return {"sounds": board.list(), "playing": board.playing,
+            "dir": board.sounds_dir, "decoders": decoders_available()}
+
+
+@app.post("/api/sounds/refresh")
+def refresh_sounds():
+    # Stop-only, like the desktop Refresh button: the running voice
+    # holds indices into the loaded list, which must not move.
+    return {"sounds": board.scan(), "playing": board.playing,
+            "dir": board.sounds_dir, "decoders": decoders_available()}
+
+
+@app.post("/api/soundboard")
+def soundboard_cmd(body: dict):
+    action = body.get("action")
+    if action == "play":
+        if not board.play(body.get("index", -1)):
+            return {"ok": False, "error": "unknown sound",
+                    "playing": board.playing}
+    elif action == "stop":
+        board.stop(body.get("index"))
+    elif action == "stopAll":
+        board.stop_all()
+    else:
+        return {"ok": False, "error": f"unknown action: {action!r}"}
+    return {"ok": True, "playing": board.playing}
 
 
 @app.post("/api/start")
@@ -190,8 +288,24 @@ def start():
                         "error": "Listen to myself: no speaker output "
                                  f"matches '{ref_name or '?'}' — untick "
                                  "it or pick the speakers as Output"}
+        # Local soundboard monitor: a separate playback device, and
+        # only when the toggle is on. With Listen to myself the main
+        # output already lands on the speakers and already carries
+        # the soundboard, so a second stream would only double it.
+        mon_idx = None
+        if (prefs.get("monitorEnabled") and board.sounds
+                and not prefs.get("listenToSelf")):
+            try:
+                mon_idx = monitor_output_index()
+            except Exception:
+                mon_idx = None  # fail-open: pads still reach the cable
         try:
-            runner = AudioRunner(chain, prefs["mic"], prefs["ref"], out_idx)
+            runner = AudioRunner(chain, prefs["mic"], prefs["ref"], out_idx,
+                                 soundboard=board,
+                                 sb_gain=prefs.get("soundboardGain", 1.0),
+                                 monitor_idx=mon_idx,
+                                 monitor_gain=prefs.get("monitorGain", 1.0),
+                                 monitor_enabled=prefs.get("monitorEnabled", True))
             runner.start()
         except Exception as e:
             chain.stop()
@@ -211,6 +325,10 @@ def stop():
                 pass
             runner = None
         chain.stop()
+        # A sounding pad must not survive Stop and resume mid-file
+        # on the next Start — clear the voice immediately (no pump
+        # thread is left to consume a stop_all() request).
+        board.reset()
         return {"ok": True, "state": chain.state()}
 
 
@@ -224,6 +342,7 @@ async def ws_meters(ws: WebSocket):
             st["profile"] = prefs.get("profile", 0)
             st["experimentalEngines"] = bool(
                 prefs.get("experimentalEngines"))
+            st["soundboardPlaying"] = board.playing
             # Snapshot: the stop endpoint nulls `runner`
             # from a worker thread; reading it after the
             # None-check raised and dropped the socket on
@@ -252,6 +371,15 @@ def main():
     print("Loading models… (a few seconds)",
           flush=True)
     chain.preload()
+    # Decode the soundboard pads up front so the first tab open
+    # shows them, like the desktop's launch-time ScanSounds().
+    try:
+        n = len(board.scan())
+        print(f"Soundboard: dir={board.sounds_dir} "
+              f"decoders={decoders_available()} loaded={n}",
+              flush=True)
+    except Exception as e:  # pragma: no cover - never block startup
+        print(f"Soundboard: scan failed ({e})", flush=True)
     # Single worker, always: extra workers would duplicate the
     # preloaded models in RAM and fight over the one audio pump.
     uvicorn.run(app, host="127.0.0.1", port=8000,

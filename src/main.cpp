@@ -48,7 +48,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.12.0"
+#define APP_VERSION "1.13.0"
 
 // ============================================================
 //  Single-instance protection
@@ -124,6 +124,7 @@ struct SpscRing {
     inline size_t available() const {
         return head.load(std::memory_order_acquire) - tail.load(std::memory_order_relaxed);
     }
+    static constexpr size_t capacity = N;
     inline void write(const int16_t* src, size_t count) {
         size_t h = head.load(std::memory_order_relaxed);
         for (size_t i = 0; i < count; i++) buf[(h + i) & (N - 1)] = src[i];
@@ -181,7 +182,7 @@ const int PROFILE_COUNT = (int)(sizeof(PROFILES) / sizeof(PROFILES[0]));
 // ============================================================
 EngineState g_engine;
 
-ma_device g_micDevice, g_loopbackDevice, g_outputDevice;
+ma_device g_micDevice, g_loopbackDevice, g_outputDevice, g_monitorDevice;
 ma_context g_context;
 static bool g_contextInitialized = false;
 const int MAX_FRAME_SIZE = 480;
@@ -486,6 +487,180 @@ void RenderWallpaper(int vpW, int vpH) {
 }
 
 // ============================================================
+//  Soundboard
+// ============================================================
+// Sounds are decoded once at scan/launch into mono PCM and played
+// back by resampling linearly into the output callback, so a pad
+// click never touches the disk mid-call and never allocates on the
+// audio thread.
+const int MAX_SOUNDS        = 32;
+const int MAX_SOUND_SECONDS = 60;      // longer files are truncated
+const int MAX_SOUND_CHUNK   = 4096;
+
+struct Sound {
+    std::string        name;        // filename without extension
+    std::string        path;
+    std::vector<float> pcm;         // mono, -1..1
+    int                sampleRate = 0;
+};
+
+std::vector<Sound> g_sounds;
+std::atomic<float> g_soundboardGain(1.0f);
+
+// Voice state is owned by the audio thread alone. The UI only ever
+// writes the atomic arrays below, so the output callback takes no
+// lock and never blocks on a click. One sound at a time: clicking a
+// pad takes over from whatever is still sounding.
+struct SoundVoice {
+    const Sound* sound = nullptr;
+    double       pos   = 0.0;   // fractional read position (source frames)
+    bool         active = false;
+};
+SoundVoice g_soundVoice;
+
+// UI -> audio: 0 = nothing, 1 = play, 2 = stop. One byte per pad.
+std::atomic<uint8_t> g_soundRequest[MAX_SOUNDS];
+// audio -> UI: is this pad currently sounding (drives the button colour).
+std::atomic<bool> g_soundPlaying[MAX_SOUNDS];
+// UI -> audio: panic stop. Kills every voice in one go, for long
+// files where hunting for the pad that is still green is a nuisance.
+std::atomic<bool> g_soundStopAll{ false };
+
+// Local monitoring: a second playback device gets a copy of the
+// soundboard mix so it is audible on the speakers while voice apps
+// still hear it through VB-CABLE. Its own callback drains a ring fed
+// from the output callback, so the mic/AEC path is untouched.
+SpscRing<4096>    g_monitorRing;
+// Written by the UI thread (Start/StopMonitor), read by the audio
+// thread in FeedMonitor — atomic so the callback never sees a torn
+// flag. The device itself is only created/destroyed on the UI thread.
+std::atomic<bool> g_monitorStarted{ false };
+int               g_monitorIndex   = -1;      // -1 = follow "Your speakers"
+std::atomic<bool>  g_monitorEnabled{ true };
+std::atomic<float> g_monitorGain(1.0f);
+
+// Decode one file to mono f32 at its native rate. Kept at native rate
+// (instead of the engine rate) so the same scan stays valid across a
+// 16/48 kHz switch — MixSoundboard resamples per voice.
+static bool LoadSoundFile(const std::string& path, Sound& out) {
+    ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 1, 0);
+    ma_decoder dec;
+    if (ma_decoder_init_file(path.c_str(), &cfg, &dec) != MA_SUCCESS)
+        return false;
+    if (dec.outputSampleRate == 0) {
+        ma_decoder_uninit(&dec);
+        return false;
+    }
+    out.sampleRate = (int)dec.outputSampleRate;
+
+    const ma_uint64 capFrames =
+        (ma_uint64)((double)MAX_SOUND_SECONDS * (double)dec.outputSampleRate);
+    float chunk[MAX_SOUND_CHUNK];
+    ma_uint64 total = 0;
+    out.pcm.clear();
+    while (total < capFrames) {
+        ma_uint64 want = capFrames - total;
+        if (want > MAX_SOUND_CHUNK) want = MAX_SOUND_CHUNK;
+        ma_uint64 got = 0;
+        if (ma_decoder_read_pcm_frames(&dec, chunk, want, &got) != MA_SUCCESS ||
+            got == 0)
+            break;
+        out.pcm.insert(out.pcm.end(), chunk, chunk + got);
+        total += got;
+    }
+    ma_decoder_uninit(&dec);
+    return !out.pcm.empty();
+}
+
+// Rescan sounds/. Only called while the AEC is stopped: the voices
+// hold pointers into g_sounds, so the list must not move under them.
+void ScanSounds() {
+    g_soundVoice = SoundVoice();
+    for (auto& r : g_soundRequest) r.store(0);
+    for (auto& p : g_soundPlaying) p.store(false);
+    g_soundStopAll.store(false);
+    g_sounds.clear();
+
+    std::vector<std::string> candidates = { "sounds", "../sounds", "C:/aec/sounds" };
+    std::vector<std::string> files;
+    for (const auto& dir : candidates) {
+        if (!fs::exists(dir) || !fs::is_directory(dir)) continue;
+        for (auto& e : fs::directory_iterator(dir)) {
+            if (!e.is_regular_file()) continue;
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".wav" || ext == ".mp3" || ext == ".flac" || ext == ".ogg")
+                files.push_back(e.path().string());
+        }
+        if (!files.empty()) break;
+    }
+    std::sort(files.begin(), files.end());   // stable pad order
+
+    for (const auto& path : files) {
+        if ((int)g_sounds.size() >= MAX_SOUNDS) break;
+        Sound s;
+        s.path = path;
+        s.name = fs::path(path).stem().string();
+        if (s.name.empty()) s.name = fs::path(path).filename().string();
+        if (LoadSoundFile(path, s)) g_sounds.push_back(std::move(s));
+    }
+}
+
+// Audio-thread only. Fills pOut with fs frames of mono soundboard
+// audio scaled to -1..1, applying queued play/stop requests first.
+// Linear interpolation is plenty for SFX and keeps this allocation-
+// free with no resampler state to reset.
+static void MixSoundboard(float* pOut, int fs, int outRate) {
+    memset(pOut, 0, fs * sizeof(float));
+    const int nSounds = (int)g_sounds.size();
+    const int nPads   = nSounds < MAX_SOUNDS ? nSounds : MAX_SOUNDS;
+
+    // Panic stop first, so it also swallows any trigger still queued
+    // from a click a moment ago — "stop all" should always win.
+    if (g_soundStopAll.exchange(false)) {
+        g_soundVoice.active = false;
+        for (int s = 0; s < nPads; s++) g_soundRequest[s].store(0);
+    }
+
+    for (int s = 0; s < nPads; s++) {
+        uint8_t req = g_soundRequest[s].exchange(0);
+        if (req == 0) continue;
+        if (req == 2) {   // stop this pad
+            if (g_soundVoice.active && g_soundVoice.sound == &g_sounds[s])
+                g_soundVoice.active = false;
+            continue;
+        }
+        // Play: one sound at a time — the new click takes over from
+        // whatever is still sounding, so pads never stack up.
+        g_soundVoice.sound  = &g_sounds[s];
+        g_soundVoice.pos    = 0.0;
+        g_soundVoice.active = true;
+    }
+
+    if (g_soundVoice.active) {
+        const std::vector<float>& pcm = g_soundVoice.sound->pcm;
+        const double step =
+            (double)g_soundVoice.sound->sampleRate / (double)outRate;
+        for (int i = 0; i < fs; i++) {
+            if (g_soundVoice.pos >= (double)pcm.size()) {
+                g_soundVoice.active = false;
+                break;
+            }
+            const size_t i0 = (size_t)g_soundVoice.pos;
+            const float  frac = (float)(g_soundVoice.pos - (double)i0);
+            const float  s0 = pcm[i0];
+            const float  s1 = (i0 + 1 < pcm.size()) ? pcm[i0 + 1] : s0;
+            pOut[i] = s0 + (s1 - s0) * frac;
+            g_soundVoice.pos += step;
+        }
+    }
+
+    for (int s = 0; s < nPads; s++)
+        g_soundPlaying[s].store(g_soundVoice.active &&
+                                g_soundVoice.sound == &g_sounds[s]);
+}
+
+// ============================================================
 //  Settings
 // ============================================================
 // Post-stage pref sync: NS runs on every engine, so this just
@@ -516,7 +691,11 @@ void SaveSettings() {
         << (g_experimentalEngines.load() ? 1 : 0) << "\n"  // experimental engines flag
        << 0 << "\n"  // retired: nuked DEC-toggle slot
        << 9 << "\n"  // config gen (9: WPE/notch removed, NS on all engines)
-       << 0 << "\n"; // retired: NKF WPE dereverb (kept for file alignment)
+      << 0 << "\n"  // retired: NKF WPE dereverb (kept for file alignment)
+      << (int)(g_soundboardGain.load() * 100) << "\n"   // soundboard gain (%)
+      << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
+      << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
+      << g_monitorIndex << "\n";                        // monitor device (-1 = follow)
 }
 
 void LoadSettings() {
@@ -597,7 +776,6 @@ void LoadSettings() {
         // carry it — default OFF (DTLN only), per the release notes.
         int expRaw = 0;
         if (f >> expRaw) { (void)expRaw; }
-        if (f >> le_skip) { (void)le_skip; }
         // (Retired field: nuked DEC-toggle slot, always 0. Read to keep
         // old and new config files positionally aligned.)
         int dc_skip = 0;
@@ -605,6 +783,20 @@ void LoadSettings() {
         // New field — preset layout generation (missing = pre-cut layout
         // that still had "High Quality" at index 2).
         if (f >> pgen) { (void)pgen; }
+        // (Retired field: NKF WPE dereverb slot, always 0. Read to keep
+        // old and new config files positionally aligned.)
+        if (f >> le_skip) { (void)le_skip; }
+        // New field — soundboard gain (default 100% when missing).
+        int sbRaw = 100;
+        if (f >> sbRaw) g_soundboardGain.store(sbRaw / 100.0f);
+        // New fields — soundboard monitor. Defaults: on, 100%, and
+        // follow the "Your speakers" selection (-1).
+        int monOn = 1;
+        if (f >> monOn) g_monitorEnabled.store(monOn != 0);
+        int monGain = 100;
+        if (f >> monGain) g_monitorGain.store(monGain / 100.0f);
+        int monIdx = -1;
+        if (f >> monIdx) g_monitorIndex = monIdx;
         // "High Quality" was cut: generation-1 indices slide down
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
@@ -710,6 +902,10 @@ void ResetToDefaults() {
     g_listenToSelf = false;
     g_micGain.store(1.0f);
     g_outputGain.store(1.0f);
+    g_soundboardGain.store(1.0f);
+    g_monitorEnabled.store(true);
+    g_monitorGain.store(1.0f);
+    g_monitorIndex = -1;
     g_advancedOpen = false;  // reset lands simple: Advanced collapsed
     g_advInitDone = false;  // re-apply the persisted default next frame
     g_sampleRate.store(16000);
@@ -834,6 +1030,9 @@ void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCou
     if (!pInput) return;
     g_refRing.write((const int16_t*)pInput, frameCount);
 }
+// Defined with the monitor device, further down.
+static void FeedMonitor(const float* sb, int fs);
+
 void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
     int16_t* out = (int16_t*)pOutput;
     int fs = frameSizeForRate(g_sampleRate.load());
@@ -853,7 +1052,26 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // the speakers; monitor sessions never starved because they always
     // drive the speakers — same bug, masked.)
     if (g_micRing.available() < (size_t)fs) {
-        EmitFading(out, frameCount);
+        // Mic starve is fail-open for the voice path, but the
+        // soundboard must keep going through it — a pad click should
+        // not glitch just because the mic hiccuped. Silence here
+        // still falls back to the fade so the gap stays inaudible.
+        float sbStarve[MAX_FRAME_SIZE];
+        MixSoundboard(sbStarve, fs, g_sampleRate.load());
+        FeedMonitor(sbStarve, fs);
+        const float sbGainStarve = g_soundboardGain.load() * g_outputGain.load();
+        bool anySb = false;
+        for (int i = 0; i < fs; i++) {
+            out[i] = SoftLimit(sbStarve[i] * sbGainStarve);
+            if (sbStarve[i] != 0.0f) anySb = true;
+        }
+        if (anySb) {
+            memcpy(g_lastOutFrame, out, fs * sizeof(int16_t));
+            g_lastOutLen = fs;
+            g_lastOutValid = true;
+        } else {
+            EmitFading(out, frameCount);
+        }
         return;
     }
 
@@ -921,13 +1139,120 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         if (ratio < 1.0f) g_last_reduction_db = 20.0f * log10f(ratio);
     }
 
+    // Soundboard: pads are mixed into the same stream the voice apps
+    // hear, before the shared limiter so mic + sounds can never clip
+    // each other into distortion. (The Out meter above stays on the
+    // cleaned mic only — it measures AEC reduction, not programme.)
+    float sbBuf[MAX_FRAME_SIZE];
+    MixSoundboard(sbBuf, fs, g_sampleRate.load());
+    FeedMonitor(sbBuf, fs);
+    const float sbGain = g_soundboardGain.load() * g_outputGain.load();
+
     float gain = g_micGain.load() * g_outputGain.load();
     for (int i = 0; i < fs; i++)
-        out[i] = SoftLimit((float)cleanedFrame[i] * gain / 32768.0f);
+        out[i] = SoftLimit((float)cleanedFrame[i] * gain / 32768.0f
+                           + sbBuf[i] * sbGain);
     // Remember what we emitted for fail-open fades (mic starve etc).
     memcpy(g_lastOutFrame, out, fs * sizeof(int16_t));
     g_lastOutLen = fs;
     g_lastOutValid = true;
+}
+
+// ============================================================
+//  Soundboard monitor (speakers)
+// ============================================================
+// A second playback device carries a copy of the soundboard mix so
+// it is audible locally while voice apps still hear it via VB-CABLE.
+// Its own callback drains a ring fed from output_callback, which
+// keeps the mic/AEC path completely untouched.
+void monitor_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
+    int16_t* out = (int16_t*)pOutput;
+    const ma_uint32 n =
+        frameCount < (ma_uint32)MAX_FRAME_SIZE ? frameCount : (ma_uint32)MAX_FRAME_SIZE;
+
+    // The monitor runs on its own clock, so the ring can creep up or
+    // drain: trim the excess (same rule as the mic/ref drift guards).
+    const size_t driftTarget =
+        (size_t)frameSizeForRate(g_sampleRate.load()) * 2;
+    if (g_monitorRing.available() > driftTarget)
+        g_monitorRing.skip(g_monitorRing.available() - driftTarget);
+
+    ma_uint32 got = 0;
+    if (g_monitorRing.available() > 0) {
+        got = (ma_uint32)g_monitorRing.available();
+        if (got > n) got = n;
+        g_monitorRing.read(out, got);
+    }
+    if (got < frameCount)
+        memset(out + got, 0, (frameCount - got) * sizeof(int16_t));
+}
+
+// Hand one frame of soundboard audio to the monitor. Only while the
+// monitor device is actually consuming — otherwise the ring would
+// fill with audio nobody reads.
+static void FeedMonitor(const float* sb, int fs) {
+    if (!g_monitorStarted) return;
+    // This ring is single-producer/single-consumer: only the monitor
+    // callback may advance the tail, so this side must never skip().
+    // If the monitor is behind, drop the frame instead of wrapping
+    // over audio it has not read yet. (The two devices request the
+    // same sample rate, so drift — and therefore drops — are rare.)
+    if (g_monitorRing.available() + (size_t)fs > SpscRing<4096>::capacity)
+        return;
+    int16_t mon[MAX_FRAME_SIZE];
+    const float g = g_monitorGain.load();
+    for (int i = 0; i < fs; i++)
+        mon[i] = SoftLimit(sb[i] * g);
+    g_monitorRing.write(mon, fs);
+}
+
+// Which playback device the monitor feeds. -1 follows the "Your
+// speakers" selection, so changing speakers on the Audio tab carries
+// the monitor along automatically.
+static int MonitorDeviceIndex() {
+    if (g_monitorIndex >= 0 && g_monitorIndex < (int)g_playbackDevices.size())
+        return g_monitorIndex;
+    return g_refIndex;
+}
+
+void StopMonitor() {
+    if (!g_monitorStarted) return;
+    ma_device_uninit(&g_monitorDevice);
+    g_monitorStarted = false;
+    g_monitorRing.reset();
+}
+
+// Fail-open: a monitor that cannot start must never block the AEC —
+// the pads still play to voice apps, just not locally.
+void StartMonitor() {
+    if (g_monitorStarted || !g_isRunning) return;
+    if (!g_monitorEnabled.load()) return;
+    // With Listen to myself the main output already lands on the
+    // speakers and already carries the soundboard, so a second
+    // stream would only double the level.
+    if (g_listenToSelf) return;
+    if (g_playbackDevices.empty()) return;
+
+    const int monIdx = MonitorDeviceIndex();
+    if (monIdx < 0 || monIdx >= (int)g_playbackDevices.size()) return;
+
+    const int sr = g_sampleRate.load();
+    ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+    cfg.playback.format    = ma_format_s16;
+    cfg.playback.channels  = 1;
+    cfg.sampleRate         = sr;
+    cfg.periodSizeInFrames = frameSizeForRate(sr);
+    cfg.dataCallback       = monitor_callback;
+    cfg.playback.pDeviceID = &g_playbackDevices[monIdx].id;
+
+    g_monitorRing.reset();
+    if (ma_device_init(&g_context, &cfg, &g_monitorDevice) != MA_SUCCESS)
+        return;
+    if (ma_device_start(&g_monitorDevice) != MA_SUCCESS) {
+        ma_device_uninit(&g_monitorDevice);
+        return;
+    }
+    g_monitorStarted = true;
 }
 
 // ============================================================
@@ -957,6 +1282,9 @@ void BuildDisplayIndices() {
     };
     snap(g_micIndex, g_micDisplayIndices);
     snap(g_refIndex, g_refDisplayIndices);
+    // Monitor: -1 means "follow Your speakers" and is always valid;
+    // an explicit pick must still point at a real speaker device.
+    if (g_monitorIndex != -1) snap(g_monitorIndex, g_refDisplayIndices);
     // Output prefers CABLE Input (fresh installs land on it, not index 0).
     int cable = FindCableInputIndex();
     bool outKept = false;
@@ -1077,6 +1405,10 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load DTLN model");
         return;
     }
+    if (g_engine.type == ENGINE_AEC3 && !g_engine.aec3) {
+        snprintf(g_statusText, 128, "Failed to load AEC3 engine");
+        return;
+    }
     g_micRing.reset();
     g_refRing.reset();
 
@@ -1123,12 +1455,31 @@ void StartAEC() {
         return;
     }
 
-    ma_device_start(&g_micDevice);
-    ma_device_start(&g_loopbackDevice);
-    ma_device_start(&g_outputDevice);
+    if (ma_device_start(&g_micDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Failed to start mic");
+        ma_device_uninit(&g_outputDevice);
+        ma_device_uninit(&g_loopbackDevice);
+        ma_device_uninit(&g_micDevice);
+        return;
+    }
+    if (ma_device_start(&g_loopbackDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Failed to start loopback");
+        ma_device_uninit(&g_outputDevice);
+        ma_device_uninit(&g_loopbackDevice);
+        ma_device_uninit(&g_micDevice);
+        return;
+    }
+    if (ma_device_start(&g_outputDevice) != MA_SUCCESS) {
+        snprintf(g_statusText, 128, "Failed to start output");
+        ma_device_uninit(&g_outputDevice);
+        ma_device_uninit(&g_loopbackDevice);
+        ma_device_uninit(&g_micDevice);
+        return;
+    }
 
     g_isRunning = true;
     g_sessionStart = Clock::now();
+    StartMonitor();   // local soundboard monitoring (fail-open)
     const char* engineName =
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
@@ -1139,10 +1490,22 @@ void StartAEC() {
 
 void StopAEC() {
     if (!g_isRunning) return;
+    StopMonitor();
     ma_device_uninit(&g_micDevice);
     ma_device_uninit(&g_loopbackDevice);
     ma_device_uninit(&g_outputDevice);
     g_isRunning = false;
+    // Audio callbacks are dead (devices uninited) — reset soundboard state
+    // so a playing pad's voice, queued requests, and indicators don't
+    // survive Stop and resume mid-file on the next Start.
+    g_soundVoice.sound  = nullptr;
+    g_soundVoice.pos    = 0.0;
+    g_soundVoice.active = false;
+    for (int i = 0; i < MAX_SOUNDS; ++i) {
+        g_soundRequest[i].store(0);
+        g_soundPlaying[i].store(false);
+    }
+    g_soundStopAll.store(false);
     snprintf(g_statusText, 128, "Stopped");
 }
 
@@ -1232,11 +1595,13 @@ void DrawDevicesSection() {
     ImGui::SeparatorText("Devices");
 
     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90);
+    ImGui::BeginDisabled(g_isRunning);
     if (ImGui::Button("Refresh", ImVec2(90, 0))) {
         EnumerateDevices();
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Rescan audio devices without restarting");
+    ImGui::EndDisabled();
 
     ImGui::BeginDisabled(g_isRunning);
     const float labelCol = 190.0f;
@@ -1549,6 +1914,174 @@ void DrawAppearanceTab() {
             "DTLN-AEC 128 to hide them again.");
 }
 
+void DrawSoundboardTab() {
+    const float labelCol = 190.0f;
+
+    ImGui::SeparatorText("Level");
+    ImGui::TextUnformatted("Soundboard gain");
+    ImGui::SameLine(labelCol);
+    ImGui::SetNextItemWidth(-120);
+    float sbPct = g_soundboardGain.load() * 100.0f;
+    if (ImGui::SliderFloat("##soundboardgain", &sbPct, 0.0f, 200.0f, "%.0f%%")) {
+        g_soundboardGain.store(sbPct / 100.0f);
+        SaveSettings();
+    }
+    ImGui::TextDisabled("Sounds play into the same stream as your mic, so voice\n"
+                        "apps hear both. The Out meter measures mic only.");
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Monitor");
+
+    bool mon = g_monitorEnabled.load();
+    if (ImGui::Checkbox("Play soundboard to my speakers", &mon)) {
+        g_monitorEnabled.store(mon);
+        if (g_isRunning) { if (mon) StartMonitor(); else StopMonitor(); }
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Sends a copy of the soundboard to a speaker device so you hear\n"
+            "it locally. Voice apps still get it through VB-CABLE.\n"
+            "Needs the AEC to be running.");
+
+    if (mon) {
+        ImGui::TextUnformatted("Monitor to");
+        ImGui::SameLine(labelCol);
+        ImGui::SetNextItemWidth(-120);
+        const char* monName = "(none)";
+        if (g_monitorIndex == -1)
+            monName = "Your speakers (follow)";
+        else if (g_monitorIndex >= 0 && g_monitorIndex < (int)g_playbackDevices.size())
+            monName = g_playbackDevices[g_monitorIndex].name;
+        bool monChanged = false;
+        if (ImGui::BeginCombo("##mondev", monName)) {
+            if (ImGui::Selectable("Your speakers (follow)", g_monitorIndex == -1)) {
+                g_monitorIndex = -1;
+                monChanged = true;
+            }
+            for (int di : g_refDisplayIndices) {
+                if (di < 0 || di >= (int)g_playbackDevices.size()) continue;
+                const bool sel = (g_monitorIndex == di);
+                if (ImGui::Selectable(g_playbackDevices[di].name, sel)) {
+                    g_monitorIndex = di;
+                    monChanged = true;
+                }
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Where the local copy is played.\n"
+                "\"Your speakers (follow)\" tracks the reference device\n"
+                "chosen on the Audio tab.");
+        if (monChanged) {
+            SaveSettings();
+            if (g_isRunning) { StopMonitor(); StartMonitor(); }
+        }
+
+        ImGui::TextUnformatted("Monitor volume");
+        ImGui::SameLine(labelCol);
+        ImGui::SetNextItemWidth(-120);
+        float monPct = g_monitorGain.load() * 100.0f;
+        if (ImGui::SliderFloat("##mongain", &monPct, 0.0f, 200.0f, "%.0f%%")) {
+            g_monitorGain.store(monPct / 100.0f);
+            SaveSettings();
+        }
+
+        if (g_listenToSelf)
+            ImGui::TextDisabled("Listen to myself is on: the soundboard already reaches\n"
+                                "your speakers through the main output, so the monitor is\n"
+                                "paused to avoid playing it twice.");
+        else if (!g_isRunning)
+            ImGui::TextDisabled("Press Start to hear the monitor.");
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Sounds");
+
+    // Panic stop for long files: one button instead of hunting for
+    // whichever pad is still green.
+    bool anyPlaying = false;
+    for (int i = 0; i < (int)g_sounds.size() && i < MAX_SOUNDS; i++) {
+        if (g_soundPlaying[i].load()) { anyPlaying = true; break; }
+    }
+
+    // Rescan is stop-only: the playing voices hold pointers into the
+    // sound list, which must not move while the audio thread walks it.
+    if (!g_isRunning) {
+        if (ImGui::Button("Refresh")) ScanSounds();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan the sounds/ folder");
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button("Refresh");
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Stop the AEC to rescan the sounds/ folder");
+    }
+
+    if (anyPlaying) {
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.55f, 0.20f, 0.20f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.70f, 0.26f, 0.26f, 1.00f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.42f, 0.14f, 0.14f, 1.00f));
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!anyPlaying);
+    if (ImGui::Button("Stop all")) g_soundStopAll.store(true);
+    ImGui::EndDisabled();
+    if (anyPlaying) ImGui::PopStyleColor(3);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Silence every sound currently playing");
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d sound(s)  -  put .wav / .mp3 / .flac / .ogg in the sounds/ folder",
+                        (int)g_sounds.size());
+
+    if (g_sounds.empty()) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("Create a sounds/ folder next to the exe and drop audio\n"
+                            "files into it, then press Refresh.");
+        return;
+    }
+
+    if (!g_isRunning) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("Press Start to use the pads - sounds are played through\n"
+                            "the active output device (VB-CABLE).");
+    }
+
+    ImGui::Spacing();
+    const float padW = 140.0f;
+    int cols = (int)(ImGui::GetContentRegionAvail().x / (padW + 10.0f));
+    if (cols < 1) cols = 1;
+
+    for (int i = 0; i < (int)g_sounds.size(); i++) {
+        if (i % cols != 0) ImGui::SameLine();
+
+        // Green while sounding so it is obvious which pad is live and
+        // which click will stop it. PushID (not a ### suffix) so a
+        // long filename cannot truncate the ID into a collision.
+        const bool playing = g_soundPlaying[i].load();
+        if (playing) {
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.45f, 0.30f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.55f, 0.36f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.14f, 0.38f, 0.25f, 1.00f));
+        }
+        ImGui::PushID(i);
+        ImGui::BeginDisabled(!g_isRunning);
+        if (ImGui::Button(g_sounds[i].name.c_str(), ImVec2(padW, 0))) {
+            g_soundRequest[i] = playing ? (uint8_t)2 : (uint8_t)1;
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        if (playing) ImGui::PopStyleColor(3);
+
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\n%s", g_sounds[i].path.c_str(),
+                              playing ? "Playing - click to stop" : "Click to play");
+    }
+}
+
 void DrawAboutTab() {
     ImGui::SeparatorText("About");
 
@@ -1625,14 +2158,20 @@ void DrawUI() {
             DrawAudioTab();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Appearance")) {
+        if (ImGui::BeginTabItem("Soundboard")) {
             activeTab = 1;
+            ImGui::Spacing();
+            DrawSoundboardTab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Appearance")) {
+            activeTab = 2;
             ImGui::Spacing();
             DrawAppearanceTab();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("About")) {
-            activeTab = 2;
+            activeTab = 3;
             ImGui::Spacing();
             DrawAboutTab();
             ImGui::EndTabItem();
@@ -1640,9 +2179,9 @@ void DrawUI() {
         ImGui::EndTabBar();
     }
 
-    // Footer buttons (Start / Reset) live on the Audio tab only.
-    // Live Levels below stay visible on every tab while running.
-    if (activeTab == 0) {
+    // Footer buttons (Start / Reset) live on the Audio and Soundboard
+    // tabs. Live Levels below stay visible on every tab while running.
+    if (activeTab == 0 || activeTab == 1) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -1816,6 +2355,7 @@ int main(int, char**) {
     ImGui_ImplOpenGL3_Init(glslVersion);
 
     ScanWallpapers();
+    ScanSounds();
     LoadSettings();     // loads g_minimizeToTray too
     if (g_wallpaperIndex >= (int)g_wallpaperNames.size()) g_wallpaperIndex = 0;
     LoadWallpaperByIndex(g_wallpaperIndex);

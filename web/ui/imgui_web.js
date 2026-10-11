@@ -2,17 +2,18 @@
 //
 // Mirrors the desktop client (src/main.cpp DrawUI):
 // app header with status dot + Running/Idle, a horizontal
-// Audio / Appearance / About tab bar, and the same sections,
-// labels and footer behavior. Same PROFILES table (DTLN-AEC 128
-// / WebRTC AEC3 / NKF-AEC) with the same experimental-engines
-// gating; options whose backend is missing are disabled with a
-// note. Fixed at 16 kHz like the desktop's neural engines.
+// Audio / Soundboard / Appearance / About tab bar, and the same
+// sections, labels and footer behavior. Same PROFILES table
+// (DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC) with the same
+// experimental-engines gating; options whose backend is missing
+// are disabled with a note. Fixed at 16 kHz like the desktop's
+// neural engines.
 
 'use strict';
 
 let webImGuiUI = null;
 
-const APP_VERSION = 'v1.12.0';
+const APP_VERSION = 'v1.13.0';
 
 class WebImGuiUI {
     constructor() {
@@ -23,6 +24,15 @@ class WebImGuiUI {
         this.inited = false;
         this.el = {};
         this.lastDevices = null;
+        // Saved monitor device pref (null = follow Your speakers);
+        // applied once loadDevices has filled the dropdown.
+        this._prefMonitorDevice = null;
+        // Saved mic/ref/out device prefs; applied once loadDevices
+        // has filled the dropdowns (same race-safe pattern as the
+        // monitor device above).
+        this._prefDevs = null;
+        // Debounce timer for slider-driven prefs saves.
+        this._saveTimer = null;
     }
 
     init() {
@@ -36,6 +46,7 @@ class WebImGuiUI {
         this.refreshToggles();
         this.connect();
         this.loadDevices();
+        this.loadSounds();
         console.log('Web ImGui UI initialized successfully');
     }
 
@@ -75,7 +86,8 @@ class WebImGuiUI {
         const tabs = this.mk('div', 'tabs');
         tabs.style.cssText = 'max-width:640px;margin:0 auto 6px;';
         this.el.tabBtns = {};
-        for (const name of ['audio', 'appearance', 'about']) {
+        const TABS = ['audio', 'soundboard', 'appearance', 'about'];
+        for (const name of TABS) {
             const b = this.mk('button', 'tab' + (name === 'audio' ? ' active' : ''),
                 name[0].toUpperCase() + name.slice(1));
             b.type = 'button';
@@ -86,9 +98,10 @@ class WebImGuiUI {
 
         this.el.panels = {};
         this.el.panels.audio = this.buildAudioPanel();
+        this.el.panels.soundboard = this.buildSoundboardPanel();
         this.el.panels.appearance = this.buildAppearancePanel();
         this.el.panels.about = this.buildAboutPanel();
-        for (const name of ['audio', 'appearance', 'about']) {
+        for (const name of TABS) {
             if (name !== 'audio') this.el.panels[name].style.display = 'none';
             app.appendChild(this.el.panels[name]);
         }
@@ -171,6 +184,66 @@ class WebImGuiUI {
         err.id = 'ig-err';
         err.style.cssText = 'color:#ff9d9d;white-space:pre-wrap';
         p.appendChild(err);
+        return p;
+    }
+
+    buildSoundboardPanel() {
+        const p = this.mk('div');
+        p.style.cssText = 'max-width:640px;margin:0 auto;';
+
+        // --- Level ---
+        p.appendChild(this.sep('Level'));
+        const lvl = this.mk('div', 'frow');
+        lvl.innerHTML =
+            '<span class="flabel">Soundboard gain</span>' +
+            '<div class="fgrow" style="display:flex;gap:8px;align-items:center">' +
+            '<input type="range" id="ig-sbGain" min="0" max="200" step="1" value="100" style="flex:1">' +
+            '<span id="ig-sbGainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">100%</span>' +
+            '</div>';
+        p.appendChild(lvl);
+        p.appendChild(this.mk('div', 'hint',
+            'Sounds play into the same stream as your mic, so voice apps hear both.'));
+
+        // --- Monitor ---
+        p.appendChild(this.sep('Monitor'));
+        const mon = this.mk('div');
+        mon.innerHTML =
+            '<label class="chkline"><input type="checkbox" id="ig-monOn" checked>Play soundboard to my speakers</label>' +
+            '<div class="hint">Sends a copy of the soundboard to a speaker device so you hear it locally. ' +
+            'Voice apps still get it through VB-CABLE. Needs the session to be running.</div>';
+        p.appendChild(mon);
+        const monDev = this.mk('div', 'frow');
+        monDev.innerHTML = '<span class="flabel">Monitor to</span>' +
+            '<select id="ig-monDev"><option value="-1">Your speakers (follow)</option></select>';
+        p.appendChild(monDev);
+        const monVol = this.mk('div', 'frow');
+        monVol.innerHTML =
+            '<span class="flabel">Monitor volume</span>' +
+            '<div class="fgrow" style="display:flex;gap:8px;align-items:center">' +
+            '<input type="range" id="ig-monGain" min="0" max="200" step="1" value="100" style="flex:1">' +
+            '<span id="ig-monGainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">100%</span>' +
+            '</div>';
+        p.appendChild(monVol);
+        const monHint = this.mk('div', 'hint');
+        monHint.id = 'ig-monHint';
+        p.appendChild(monHint);
+        this.el.monHint = monHint;
+        this.el.monWrap = monDev;
+        this.el.monVolWrap = monVol;
+
+        // --- Sounds ---
+        const head = this.sep('Sounds');
+        head.innerHTML += '<span style="margin-left:auto;display:flex;gap:8px">' +
+            '<button id="ig-sbStopAll" type="button" class="button button-small button-danger" disabled>Stop all</button>' +
+            '<button id="ig-sbRefresh" type="button" class="button button-small button-secondary">Refresh</button></span>';
+        p.appendChild(head);
+        this.el.sbCount = this.mk('div', 'hint');
+        p.appendChild(this.el.sbCount);
+        this.el.sbPads = this.mk('div');
+        this.el.sbPads.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;';
+        p.appendChild(this.el.sbPads);
+        this.el.sbEmpty = this.mk('div', 'hint');
+        p.appendChild(this.el.sbEmpty);
         return p;
     }
 
@@ -261,8 +334,15 @@ class WebImGuiUI {
         this.el.cablewarn = q('ig-cablewarn');
         this.el.dotMic = q('ig-dotMic'); this.el.dotRef = q('ig-dotRef'); this.el.dotOut = q('ig-dotOut');
         this.el.wp = q('ig-wallpaper');
+        this.el.sbGain = q('ig-sbGain'); this.el.sbGainVal = q('ig-sbGainVal');
+        this.el.monOn = q('ig-monOn');
+        this.el.monDev = q('ig-monDev');
+        this.el.monGain = q('ig-monGain'); this.el.monGainVal = q('ig-monGainVal');
+        this.el.sbStopAll = q('ig-sbStopAll');
+        this.el.sbRefresh = q('ig-sbRefresh');
+        this.el.padBtns = [];
 
-        for (const name of ['audio', 'appearance', 'about']) {
+        for (const name of ['audio', 'soundboard', 'appearance', 'about']) {
             this.el.tabBtns[name].addEventListener('click', () => this.setTab(name));
         }
         // Tray is a native-window feature: hide the Appearance tab's
@@ -290,12 +370,32 @@ class WebImGuiUI {
             this.showListen();
             this.el.devhint.textContent = this.running ? 'Stop, then Start to apply the new output.' : '';
         });
-        this.el.gain.addEventListener('input', () => { this.showGain(); this.savePrefs(); });
+        this.el.gain.addEventListener('input', () => { this.showGain(); this.queueSavePrefs(); });
         this.el.tray.addEventListener('change', () => this.savePrefs());
         this.el.start.addEventListener('click', () => this.toggleStart());
         this.el.reset.addEventListener('click', () => this.resetDefaults());
         this.el.wp.addEventListener('change', () => this.applyWallpaper(true));
         this.$('ig-wpReload').addEventListener('click', () => this.applyWallpaper(true));
+
+        this.el.sbGain.addEventListener('input', () => {
+            this.el.sbGainVal.textContent = this.el.sbGain.value + '%';
+            this.queueSavePrefs();
+        });
+        this.el.monGain.addEventListener('input', () => {
+            this.el.monGainVal.textContent = this.el.monGain.value + '%';
+            this.queueSavePrefs();
+        });
+        this.el.monOn.addEventListener('change', () => {
+            this.savePrefs();
+            this.showMonitor();
+        });
+        this.el.monDev.addEventListener('change', () => this.savePrefs());
+        this.el.sbRefresh.addEventListener('click', () => this.rescanSounds());
+        this.el.sbStopAll.addEventListener('click', () => {
+            this.api('POST', '/api/soundboard', { action: 'stopAll' })
+                .then(() => this.updatePads([]))
+                .catch(() => {});
+        });
     }
 
     api(method, path, body) {
@@ -309,7 +409,7 @@ class WebImGuiUI {
     prefVal(sel) { const v = sel.value; return v === '' ? null : +v; }
 
     setTab(name) {
-        for (const k of ['audio', 'appearance', 'about']) {
+        for (const k of ['audio', 'soundboard', 'appearance', 'about']) {
             this.el.tabBtns[k].classList.toggle('active', k === name);
             this.el.panels[k].style.display = k === name ? '' : 'none';
         }
@@ -374,7 +474,8 @@ class WebImGuiUI {
     }
 
     savePrefs() {
-        this.api('POST', '/api/prefs', {
+        clearTimeout(this._saveTimer);
+        return this.api('POST', '/api/prefs', {
             mic: this.prefVal(this.el.mic), ref: this.prefVal(this.el.ref),
             out: this.prefVal(this.el.out),
             nsEnabled: this.el.ns.checked,
@@ -383,6 +484,30 @@ class WebImGuiUI {
             listenToSelf: this.el.listen.checked,
             profile: +this.el.profile.value,
             experimentalEngines: this.el.exp.checked,
+            soundboardGain: (+this.el.sbGain.value) / 100,
+            monitorEnabled: this.el.monOn.checked,
+            monitorGain: (+this.el.monGain.value) / 100,
+            // -1 = "Your speakers (follow)", the server's default
+            monitorDevice: +this.el.monDev.value === -1 ? null : +this.el.monDev.value,
+        }).catch(() => {});
+    }
+
+    queueSavePrefs() {
+        // Slider `input` fires many times per second; coalesce into
+        // one POST so rapid drags can't reorder on the wire.
+        clearTimeout(this._saveTimer);
+        this._saveTimer = setTimeout(() => this.savePrefs(), 120);
+    }
+
+    saveDevicePrefs() {
+        // Device-only save: loadDevices calls this after an
+        // enumeration so a vanished device snaps the server too,
+        // without clobbering the non-device prefs that
+        // refreshToggles may not have hydrated yet.
+        return this.api('POST', '/api/prefs', {
+            mic: this.prefVal(this.el.mic), ref: this.prefVal(this.el.ref),
+            out: this.prefVal(this.el.out),
+            monitorDevice: +this.el.monDev.value === -1 ? null : +this.el.monDev.value,
         }).catch(() => {});
     }
 
@@ -399,6 +524,27 @@ class WebImGuiUI {
             this.showListen();
             if (p && 'experimentalEngines' in p) this.el.exp.checked = !!p.experimentalEngines;
             if (p && 'profile' in p) this.el.profile.value = String(p.profile);
+            if (p && p.soundboardGain !== undefined) {
+                this.el.sbGain.value = Math.min(200, Math.max(0, Math.round(+p.soundboardGain * 100)));
+                this.el.sbGainVal.textContent = this.el.sbGain.value + '%';
+            }
+            if (p && 'monitorEnabled' in p) this.el.monOn.checked = !!p.monitorEnabled;
+            if (p && p.monitorGain !== undefined) {
+                this.el.monGain.value = Math.min(200, Math.max(0, Math.round(+p.monitorGain * 100)));
+                this.el.monGainVal.textContent = this.el.monGain.value + '%';
+            }
+            if (p && 'monitorDevice' in p) {
+                this._prefMonitorDevice = p.monitorDevice;
+                this.applyMonitorDevPref();
+            }
+            if (p) {
+                // Restore the saved mic/ref/out selections once the
+                // device dropdowns are filled (may land before or
+                // after loadDevices — both orders must end right).
+                this._prefDevs = { mic: p.mic, ref: p.ref, out: p.out };
+                this.applyDevicePrefs();
+            }
+            this.showMonitor();
             this.applyEngineAvailability();
         }).catch(() => {});
         this.api('GET', '/api/state').then((st) => {
@@ -442,9 +588,158 @@ class WebImGuiUI {
             this.setDot(this.el.dotOut, (d.playback || []).length > 0);
             const names = (d.playback || []).map((x) => x.name).join('\n');
             this.el.cablewarn.hidden = /CABLE/i.test(names);
-            this.savePrefs();
+            // Monitor device dropdown: follow-your-speakers + playback list.
+            const md = this.el.monDev;
+            md.innerHTML = '';
+            const follow = document.createElement('option');
+            follow.value = '-1';
+            follow.textContent = 'Your speakers (follow)';
+            md.appendChild(follow);
+            (d.playback || []).forEach((x) => {
+                const o = document.createElement('option');
+                o.value = x.index; o.textContent = x.name; md.appendChild(o);
+            });
+            // Restore the pref (may have landed before or after this
+            // enumeration — both orders must end on the right value).
+            this.applyMonitorDevPref();
+            // Same race-safe restore for the main mic/ref/out picks.
+            this.applyDevicePrefs();
+            // Device-only save: a vanished device snaps the server
+            // too, without clobbering non-device prefs that
+            // refreshToggles may not have hydrated yet.
+            this.saveDevicePrefs();
         } catch (e) {
             this.el.err.textContent = 'devices: could not reach server (' + e.message + ')';
+        }
+    }
+
+    applyMonitorDevPref() {
+        const md = this.el.monDev;
+        if (!md || !md.options.length) return;
+        const pref = this._prefMonitorDevice;
+        // null / -1 / missing = "Your speakers (follow)" (first option).
+        const want = (pref === null || pref === undefined || pref === -1)
+            ? '-1' : String(pref);
+        md.value = want;
+        if (md.selectedIndex < 0) { md.value = '-1'; }
+    }
+
+    applyDevicePrefs() {
+        // Restore the saved mic/ref/out selections once the device
+        // dropdowns are filled. A saved index that no longer exists
+        // (device unplugged) leaves loadDevices' snapped default in
+        // place — same contract as applyMonitorDevPref.
+        const d = this._prefDevs;
+        if (!d) return;
+        const apply = (sel, idx) => {
+            if (idx === null || idx === undefined) return;
+            const want = String(idx);
+            for (const o of sel.options) {
+                if (o.value === want) { sel.value = want; return; }
+            }
+        };
+        apply(this.el.mic, d.mic);
+        apply(this.el.ref, d.ref);
+        apply(this.el.out, d.out);
+    }
+
+    async loadSounds() {
+        try {
+            const s = await this.api('GET', '/api/sounds');
+            this.renderSounds(s || { sounds: [], playing: [] });
+        } catch (e) {
+            this.el.sbEmpty.textContent = 'sounds: server unreachable (' + e.message + ')';
+        }
+    }
+
+    async rescanSounds() {
+        const btn = this.el.sbRefresh;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try {
+            const s = await this.api('POST', '/api/sounds/refresh');
+            this.renderSounds(s || { sounds: [], playing: [] });
+        } catch (e) {
+            this.el.sbEmpty.textContent = 'sounds: server unreachable (' + e.message + ')';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    renderSounds(s) {
+        const list = Array.isArray(s.sounds) ? s.sounds : [];
+        const playing = Array.isArray(s.playing) ? s.playing : [];
+        const dec = Array.isArray(s.decoders) ? s.decoders : [];
+        const sfOk = dec.indexOf('.mp3') >= 0;  // soundfile present
+        this.sbPlaying = playing;
+        this.el.sbCount.textContent = list.length
+            ? list.length + ' sound' + (list.length === 1 ? '' : 's') + ' — ' +
+              (s.dir || 'sounds/') + (sfOk
+                  ? '' : ' · only .wav supported (install "soundfile" for mp3/flac/ogg)')
+            : '';
+        const extHint = sfOk ? '.wav/.mp3/.flac/.ogg' : '.wav only (install "soundfile" for more)';
+        this.el.sbEmpty.textContent = list.length
+            ? ''
+            : 'No sounds found. Drop ' + extHint + ' files into "' + (s.dir || 'sounds/') + '" and press Refresh.';
+        this.el.sbPads.innerHTML = '';
+        this.el.padBtns = [];
+        list.forEach((snd, i) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'button';
+            b.style.cssText = 'min-width:140px;text-align:left;padding:10px 12px;';
+            b.textContent = (i + 1) + '. ' + (snd.name || ('sound ' + (i + 1)));
+            b.disabled = !this.running;
+            b.classList.toggle('pad-playing', playing.indexOf(i) >= 0);
+            b.addEventListener('click', () => {
+                this.api('POST', '/api/soundboard', { action: 'play', index: i })
+                    .then((r) => {
+                        // The server's `playing` is stale until the
+                        // pump consumes the request (~8 ms); highlight
+                        // optimistically so the pad lights instantly.
+                        if (r && r.ok) this.updatePads([i]);
+                    })
+                    .catch(() => {});
+            });
+            this.el.sbPads.appendChild(b);
+            this.el.padBtns.push(b);
+        });
+        this.updateStopAll();
+        this.updatePads(playing);
+    }
+
+    updatePads(playing) {
+        if (playing) this.sbPlaying = playing;
+        const p = this.sbPlaying || [];
+        this.el.padBtns.forEach((b, i) => {
+            b.classList.toggle('pad-playing', p.indexOf(i) >= 0);
+            b.disabled = !this.running;
+        });
+        this.updateStopAll();
+    }
+
+    updateStopAll() {
+        this.el.sbStopAll.disabled = !((this.sbPlaying || []).length > 0);
+    }
+
+    showMonitor() {
+        const en = this.el.monOn.checked;
+        const listen = this.el.listen.checked;
+        this.el.monWrap.disabled = !en;
+        this.el.monVolWrap.style.opacity = en ? '1' : '0.5';
+        this.el.monGain.disabled = !en;
+        if (listen) {
+            this.el.monHint.textContent =
+                'Listen to myself already plays through your speakers. Monitor is off to avoid doubling.';
+            this.el.monWrap.disabled = true;
+            this.el.monVolWrap.style.opacity = '0.5';
+            this.el.monGain.disabled = true;
+        } else if (!this.running) {
+            this.el.monHint.textContent =
+                'Press Start to enable the local monitor.';
+        } else {
+            this.el.monHint.textContent =
+                'Sends a copy of the soundboard to the selected speaker so you hear it locally.';
         }
     }
 
@@ -464,12 +759,22 @@ class WebImGuiUI {
         this.el.gain.value = 100;
         this.showGain();
         this.el.ns.checked = true;
+        this.el.sbGain.value = 100;
+        this.el.sbGainVal.textContent = '100%';
+        this.el.monOn.checked = true;
+        this.el.monGain.value = 100;
+        this.el.monGainVal.textContent = '100%';
+        this._prefMonitorDevice = null;
+        this.applyMonitorDevPref();
+        this.showMonitor();
         this.savePrefs();
         this.el.status.textContent = this.running ? this.el.status.textContent : 'Defaults restored - press Start.';
     }
 
     async toggleStart() {
-        this.savePrefs();
+        // Await the prefs save so Start/Stop reads the latest device
+        // and gain values — fire-and-forget raced the start POST.
+        await this.savePrefs();
         const btn = this.el.start;
         btn.disabled = true;
         btn.textContent = this.running ? 'Stopping…' : 'Starting…';
@@ -517,12 +822,17 @@ class WebImGuiUI {
         this.el.rescan.disabled = on;
         this.el.listen.disabled = on;
         this.el.levels.hidden = !on;
+        // Soundboard pads only work while the session runs (mix happens
+        // in the pump thread).
+        this.el.sbRefresh.disabled = on;
         if (!on) {
             this.el.devhint.textContent = '';
             this.el.status.textContent = 'Stopped.';
+            this.updatePads([]);
         } else {
             this.el.status.textContent = 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')';
         }
+        this.showMonitor();
     }
 
     meter(canvas, v) {
@@ -555,7 +865,15 @@ class WebImGuiUI {
             return;
         }
         this.ws = ws;
-        ws.onopen = () => { this.wsRetry = 0; this.loadDevices(); };
+        ws.onopen = () => {
+            this.wsRetry = 0;
+            // Full resync: devices, sounds AND prefs — a server
+            // restart resets prefs to defaults, so the UI must not
+            // keep showing stale values after a reconnect.
+            this.loadDevices();
+            this.loadSounds();
+            this.refreshToggles();
+        };
         ws.onclose = () => {
             this.setRunning(false, {});
             this.el.status.textContent = 'Server disconnected — retrying…';
@@ -568,19 +886,27 @@ class WebImGuiUI {
                 this.el.runstate.textContent = 'Running  ' + this.uptime();
                 this.paintStartBtn();
             }
-            if (st.nsEnabled !== undefined && !!+st.nsEnabled !== this.el.ns.checked)
+            // Guard every WS-driven form update with activeElement:
+            // the 10 Hz tick must not fight the user mid-drag/mid-click
+            // (the slider was snapping back while being dragged).
+            if (st.nsEnabled !== undefined && !!+st.nsEnabled !== this.el.ns.checked
+                && document.activeElement !== this.el.ns)
                 this.el.ns.checked = !!+st.nsEnabled;
-            if (st.listenToSelf !== undefined && !!st.listenToSelf !== this.el.listen.checked) {
+            if (st.listenToSelf !== undefined && !!st.listenToSelf !== this.el.listen.checked
+                && document.activeElement !== this.el.listen) {
                 this.el.listen.checked = !!st.listenToSelf;
                 this.showListen();
             }
-            if (st.profile !== undefined && String(st.profile) !== this.el.profile.value)
+            if (st.profile !== undefined && String(st.profile) !== this.el.profile.value
+                && document.activeElement !== this.el.profile)
                 this.el.profile.value = String(st.profile);
-            if (st.experimentalEngines !== undefined)
+            if (st.experimentalEngines !== undefined
+                && document.activeElement !== this.el.exp)
                 this.el.exp.checked = !!st.experimentalEngines;
+            if (st.soundboardPlaying !== undefined) this.updatePads(st.soundboardPlaying);
             this.applyEngineAvailability(st.engines);
             this.showEngineInfo(st);
-            if (st.micGain !== undefined) {
+            if (st.micGain !== undefined && document.activeElement !== this.el.gain) {
                 const pct = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }
             }
