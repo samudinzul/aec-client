@@ -106,9 +106,18 @@ class SoundBoard:
         self.sounds_dir = sounds_dir
         self.sounds = []      # [{"name","path","pcm","rate"}]
         self.request = None   # ("play", i) | ("stop", i) | ("stopall",) | None
-        self.playing = []     # indices currently sounding (single voice: 0 or 1 item)
+        # playing is a *property*: it always reflects self._voice, so a
+        # stopAll() clears the pad highlight instantly instead of waiting
+        # for the pump to consume the request. (The old mutable list could
+        # stay lit while mix() was starved on a silent mic, and mix() could
+        # re-light it after a stop had already cleared it — both observed
+        # as "Stop all doesn't stop".)
         self._voice = None    # {"idx": int, "pos": float} — pump thread only
         self._scan_lock = threading.Lock()  # concurrent Refresh clicks
+
+    @property
+    def playing(self):
+        return [self._voice["idx"]] if self._voice is not None else []
 
     # ----------------------------------------------------------
     #  Loading (any thread; UI only calls it while stopped)
@@ -120,7 +129,6 @@ class SoundBoard:
         with self._scan_lock:
             self.request = None
             self._voice = None
-            self.playing = []
             self.sounds = []
 
             exts = set(decoders_available())
@@ -181,7 +189,16 @@ class SoundBoard:
         self.request = ("stop", index) if index is not None else ("stopall",)
 
     def stop_all(self):
+        """Stop everything now, not on the next pump tick.
+
+        Sets the request for the pump to drain (so a running voice is
+        stopped even if mix() is mid-frame) AND nulls the voice
+        directly. The pad highlight reads ``playing``, which is a
+        property over ``_voice`` — a request alone stays lit while the
+        pump is starved on a silent mic, which is exactly the "Stop all
+        doesn't stop" symptom."""
         self.request = ("stopall",)
+        self._voice = None
 
     def reset(self):
         """Force-clear the voice immediately (session Stop). Unlike
@@ -190,7 +207,6 @@ class SoundBoard:
         sounding pad must not survive Stop and resume on next Start."""
         self.request = None
         self._voice = None
-        self.playing = []
 
     # ----------------------------------------------------------
     #  Mixing (pump thread only)
@@ -217,13 +233,11 @@ class SoundBoard:
 
         v = self._voice
         if v is None:
-            self.playing = []
             return None
         snd = self.sounds[v["idx"]]
         pcm = snd["pcm"]
         if pcm.size == 0:
             self._voice = None
-            self.playing = []
             return None
 
         # Linear interpolation, vectorised: a Python per-sample loop
@@ -244,8 +258,6 @@ class SoundBoard:
 
         if pos >= pcm.size:
             self._voice = None
-            self.playing = []
         else:
             v["pos"] = pos
-            self.playing = [v["idx"]]
         return out
