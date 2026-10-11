@@ -138,7 +138,7 @@ class WebImGuiUI {
         rows.innerHTML =
             '<div class="frow"><span class="flabel"><span id="ig-dotMic" class="status-dot inactive"></span>Your microphone</span><select id="ig-mic"></select></div>' +
             '<div class="frow"><span class="flabel"><span id="ig-dotRef" class="status-dot inactive"></span>Your speakers</span><select id="ig-ref"></select></div>' +
-            '<div class="frow" id="ig-rowOut"><span class="flabel"><span id="ig-dotOut" class="status-dot inactive"></span>Send cleaned sound to</span><select id="ig-out"></select></div>' +
+            '<div class="frow" id="ig-rowOut"><span class="flabel"><span id="ig-dotOut" class="status-dot inactive"></span><span id="ig-outLabel">Send cleaned sound to</span></span><select id="ig-out"></select></div>' +
             '<div id="ig-cablewarn" class="warn" hidden>VB-CABLE not found - install VB-CABLE and enable CABLE Input, then hit Refresh.</div>' +
             '<div id="ig-devhint" class="hint" style="color:#ffd75e"></div>' +
             '<label class="chkline"><input type="checkbox" id="ig-listen">Listen to myself</label>' +
@@ -318,6 +318,7 @@ class WebImGuiUI {
     bind() {
         const q = (id) => this.$(id);
         this.el.mic = q('ig-mic'); this.el.ref = q('ig-ref'); this.el.out = q('ig-out');
+        this.el.outLabel = q('ig-outLabel');
         this.el.gain = q('ig-micGain'); this.el.gainVal = q('ig-gainVal');
         this.el.ns = q('ig-nsOn');
         this.el.listen = q('ig-listen');
@@ -420,10 +421,21 @@ class WebImGuiUI {
     }
 
     showListen() {
-        // Desktop parity: the Output row is hidden while
-        // Listen-to-myself reroutes to Your speakers.
-        this.el.rowOut.style.display = this.el.listen.checked ? 'none' : '';
-    }
+            // Desktop hides the Output row while Listen-to-myself is
+            // on, on the theory that "showing it would suggest it
+            // still does something". That reasoning assumes the
+            // destination is obvious — it isn't: the web build
+            // derives it from the ref loopback, and when that name
+            // doesn't map to a playback endpoint the audio goes
+            // nowhere and the user hears nothing with no clue why.
+            // So: keep the row visible and relabel it. The destination
+            // is now explicit and editable in both modes.
+            this.el.rowOut.style.display = '';
+            const lbl = this.el.outLabel;
+            if (lbl) lbl.textContent = this.el.listen.checked
+                ? 'Listen to myself — send to'
+                : 'Send cleaned sound to';
+        }
 
     applyEngineAvailability(engines) {
         // Desktop parity: extra profiles are HIDDEN until the

@@ -272,22 +272,28 @@ def start():
                              "and output device first"}
         out_idx = prefs["out"]
         if prefs.get("listenToSelf"):
-            # Route the cleaned mic to the speakers the ref
-            # loopback listens to (desktop Listen-to-myself):
-            # hear yourself for testing instead of feeding
-            # the voice app. Fail closed with a clear error
-            # rather than silently sending it elsewhere.
+            # Route the cleaned mic to the speakers (desktop
+            # Listen-to-myself): hear yourself for testing instead
+            # of feeding the voice app. The desktop derives this from
+            # the ref loopback; here the Output row is shown while on
+            # so the destination is visible and controllable — which
+            # matters, because when the loopback name doesn't map to
+            # a playback endpoint the audio went nowhere and the user
+            # heard nothing with no clue why. Prefer the derived
+            # speaker (desktop parity); fall back to the explicit
+            # pick only if derivation fails.
             devs = list_devices()
             ref_name = next((e["name"] for e in devs["loopback"]
                              if e["index"] == prefs["ref"]), "")
-            out_idx = speaker_output_for_ref(
-                ref_name, devs["playback"])
+            derived = speaker_output_for_ref(ref_name, devs["playback"])
+            if derived is not None:
+                out_idx = derived
             if out_idx is None:
                 chain.stop()
                 return {"ok": False,
                         "error": "Listen to myself: no speaker output "
-                                 f"matches '{ref_name or '?'}' — untick "
-                                 "it or pick the speakers as Output"}
+                                 "matches the selected reference — pick "
+                                 "the speakers as Output, or untick it"}
         # Local soundboard monitor: a separate playback device, and
         # only when the toggle is on. With Listen to myself the main
         # output already lands on the speakers and already carries
