@@ -48,6 +48,12 @@ rm -rf "$STAGE/web/__pycache__" "$STAGE/web/.venv"
 rm -f  "$STAGE/web/start.log"
 find "$STAGE/web" -name '*.pyc' -delete
 
+# The sounds/ folder ships EMPTY — users drop their own pads in.
+# The dev machine's demo mp3s are local test fixtures, not release
+# content (and shipping them would also leak the dev audio into the
+# bundle), so strip everything but the folder itself.
+find "$STAGE/web/sounds" -mindepth 1 -delete
+
 # Models: the two DTLN pairs + the NKF model (the NKF-AEC
 # profile fails closed at Start without it).
 for m in models/dtln_aec_128_1.tflite \
