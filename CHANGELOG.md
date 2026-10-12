@@ -79,6 +79,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mp3s into the release bundle. The contract says the folder ships
   empty — users drop their own pads in — so the fixtures are stripped
   after the copy. The desktop release script already did this.
+- **Desktop: exe, taskbar, and tray all show the app icon.** The tray
+  loaded the stock Windows icon while the exe embeds
+  `resources/app.ico` — and the running taskbar button did too (GLFW
+  builds its window class with `IDI_APPLICATION`). Three compounding
+  causes: `version.rc` used an undefined `IDR_ICON1`, which windres
+  stores as a *string*-named icon group that Explorer ignores and
+  `MAKEINTRESOURCE(101)` can never match (verified by parsing the
+  built exe: `RT_GROUP_ICON` held the string `'IDR_ICON1'`, no
+  integer entry); `main.cpp` passed `NULL` as the module to
+  `LoadIcon`, which only resolves stock `IDI_*` icons; and the window
+  itself never received `WM_SETICON`. `version.rc` now uses the
+  numeric ID `101`, the tray and window load the icon through
+  `GetModuleHandleW` (stock icon as fallback), and `SetupTray`
+  points both icon slots at it.
+- **Desktop: Output row stays visible with Listen to myself on.**
+  Same fix as the web build: the row was hidden while Listen to
+  myself was ticked, on the theory that showing it suggests it still
+  does something — but that assumes the destination is obvious. The
+  row is now shown in both modes and relabelled ("Listen to myself
+  - send to"), so the destination is explicit instead of hidden.
+  Routing itself was already correct (`outIdx = g_refIndex`).
+- **Desktop: `?` glyphs in UI text.** The bundled font has no em-dash,
+  so user-facing strings containing one rendered as `?`. All UI
+  literals now use ASCII (` - `).
 
 ### Changed
 
