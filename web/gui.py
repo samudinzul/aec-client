@@ -152,11 +152,14 @@ def _set_window_icon():
     """Point the native window (and console) at app.ico via WM_SETICON.
 
     pywebview exposes no icon parameter, so the window otherwise shows
-    python.exe's icon in the taskbar. A background thread waits for the
-    top-level window by title, then sets the big (taskbar) and small
-    (title-bar) icons from web/ui/favicon.ico. Fail-open: any error
-    (or a missing file) leaves the Python icon in place. The icon
-    handles stay alive for the life of the process (never destroyed).
+    python.exe's icon in the taskbar. A background thread finds every
+    top-level window of this process carrying our title (not just the
+    first — attach-mode can hold two, and WebView2 init can recreate
+    the window after first paint) and sets window + class icons, big
+    and small, from web/ui/favicon.ico, then re-applies once after
+    init settles in case init reset them. Fail-open: any error (or a
+    missing file) leaves the Python icon in place. The icon handles
+    stay alive for the life of the process (never destroyed).
     Windows only.
     """
     if sys.platform != "win32":
@@ -174,32 +177,88 @@ def _set_window_icon():
             import ctypes
             user32 = ctypes.windll.user32
             WM_SETICON, ICON_SMALL, ICON_BIG = 0x80, 0, 1
+            GCLP_HICON, GCLP_HICONSM = -14, -34
             IMAGE_ICON, LR_LOADFROMFILE = 1, 0x0010
+
+            try:
+                h_big = user32.LoadImageW(
+                    None, ico, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+                h_small = user32.LoadImageW(
+                    None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+            except Exception:
+                return
+            if not h_big and not h_small:
+                return
 
             def set_icon(hwnd):
                 try:
-                    h_big = user32.LoadImageW(
-                        None, ico, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
-                    h_small = user32.LoadImageW(
-                        None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
                     if h_big:
                         user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_big)
                     if h_small:
                         user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
+                    try:
+                        if h_big:
+                            user32.SetClassLongPtrW(hwnd, GCLP_HICON, h_big)
+                        if h_small:
+                            user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, h_small)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
-            # The pywebview window (taskbar button + title bar).
-            hwnd = None
+            def apply_all():
+                try:
+                    EnumProc = ctypes.WINFUNCTYPE(
+                        ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+                    me, hits = os.getpid(), []
+
+                    def cb(hwnd, _):
+                        try:
+                            pid = ctypes.c_ulong()
+                            user32.GetWindowThreadProcessId(
+                                hwnd, ctypes.byref(pid))
+                            if pid.value != me:
+                                return True
+                            if not user32.IsWindowVisible(hwnd):
+                                return True
+                            n = user32.GetWindowTextLengthW(hwnd)
+                            if n <= 0:
+                                return True
+                            buf = ctypes.create_unicode_buffer(n + 1)
+                            user32.GetWindowTextW(hwnd, buf, n + 1)
+                            if TITLE in buf.value:
+                                set_icon(hwnd)
+                                hits.append(hwnd)
+                        except Exception:
+                            pass
+                        return True
+
+                    user32.EnumWindows(EnumProc(cb), None)
+                    return len(hits)
+                except Exception:
+                    # EnumWindows unavailable — fall back to title lookup.
+                    try:
+                        hwnd = user32.FindWindowW(None, TITLE)
+                        if hwnd:
+                            set_icon(hwnd)
+                            return 1
+                    except Exception:
+                        pass
+                return 0
+
+            # Wait for the window (webview.start blocks the main thread),
+            # then re-apply once after init settles (recreation resets it).
             for _ in range(120):  # ~30 s grace
-                hwnd = user32.FindWindowW(None, TITLE)
-                if hwnd:
+                if apply_all():
                     break
                 time.sleep(0.25)
-            if hwnd:
-                set_icon(hwnd)
+            time.sleep(6.0)
+            apply_all()
             # The console window too (visible when the tray is off),
             # so both taskbar buttons match instead of mixing icons.
+            # Note: conhost owns this window and may ignore WM_SETICON —
+            # if its button keeps the Python icon, tick "Minimize to
+            # system tray" (default on) to hide the console entirely.
             try:
                 con = ctypes.windll.kernel32.GetConsoleWindow()
                 if con:
