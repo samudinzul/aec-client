@@ -7,15 +7,21 @@
 # Usage:  scripts/make-release-web.sh [version]  (default: APP_VERSION)
 #
 # Contract:
-#   release/AEC-Web-vX-win64/
-#     web/        (the app: start.bat, server, DSP, GUI)
-#     web/sounds/ (empty; users drop soundboard pads here)
-#     models/     (the two DTLN pairs + nkf.onnx — all three
-#                  profiles work offline; AEC3 needs no model file,
-#                  its pip package installs via requirements.txt)
-#     LICENSE
-#     README.txt  (end-user doc, version stamped)
-#   release/AEC-Web-vX-win64.zip  (single top folder)
+#   release/vX/
+#     AEC-Web-vX-win64/
+#       web/        (the app: start.bat, server, DSP, GUI)
+#       web/sounds/ (empty; users drop soundboard pads here)
+#       models/     (the two DTLN pairs + nkf.onnx — all three
+#                    profiles work offline; AEC3 needs no model file,
+#                    its pip package installs via requirements.txt)
+#       LICENSE
+#       README.txt  (end-user doc, version stamped)
+#     AEC-Web-vX-win64.zip  (single top folder)
+#
+# One version folder holds both assets' stages + zips (web here,
+# desktop next to it via make-release-desktop.sh); the zips
+# themselves keep the flat GitHub-asset layout (zip root = asset
+# folder).
 #
 # No .exe, no DLL, no .pyd, no .venv, no __pycache__ — not even
 # the optional local aec_dsp accelerator: a .pyd IS a PE binary
@@ -38,7 +44,13 @@ test -d web -a -d models -a -f web/start.bat || {
     echo "run from the repo root" >&2; exit 1; }
 command -v zip >/dev/null || { echo "zip not found" >&2; exit 1; }
 
-STAGE="release/AEC-Web-v${VER}-win64"
+RELDIR="release/v${VER}"
+mkdir -p "$RELDIR"
+# Drop legacy flat-layout leftovers of this version (pre-version-folder
+# runs staged straight under release/): a stale flat zip next to the
+# new folder could get uploaded to the wrong release by mistake.
+rm -rf "release/AEC-Web-v${VER}-win64" "release/AEC-Web-v${VER}-win64.zip"
+STAGE="${RELDIR}/AEC-Web-v${VER}-win64"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/models"
 
@@ -101,13 +113,13 @@ if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
 grep -q "v${VER}" "$STAGE/README.txt" || { echo "README.txt version stamp wrong" >&2; fail=1; }
 [ $fail -ne 0 ] && exit 1
 
-rm -f "release/AEC-Web-v${VER}-win64.zip"
-(cd release && zip -qr "AEC-Web-v${VER}-win64.zip" "AEC-Web-v${VER}-win64")
+rm -f "${RELDIR}/AEC-Web-v${VER}-win64.zip"
+(cd "$RELDIR" && zip -qr "AEC-Web-v${VER}-win64.zip" "AEC-Web-v${VER}-win64")
 
 # ---- zip asserts ----
 python3 -c "
 import zipfile, re
-names = zipfile.ZipFile('release/AEC-Web-v${VER}-win64.zip').namelist()
+names = zipfile.ZipFile('release/v${VER}/AEC-Web-v${VER}-win64.zip').namelist()
 roots = sorted({n.split('/')[0] for n in names})
 assert roots == ['AEC-Web-v${VER}-win64'], f'zip root layout wrong: {roots}'
 pat = re.compile(r'__pycache__|\.pyc$|\.venv|start\.log|\.exe$|\.dll$|\.pyd$|\.pdb$', re.I)
@@ -117,6 +129,6 @@ print(f'zip entries: {len(names)}, single root, no packed binaries, no caches')
 "
 
 echo "----"
-du -h "release/AEC-Web-v${VER}-win64.zip"
-sha256sum "release/AEC-Web-v${VER}-win64.zip"
+du -h "release/v${VER}/AEC-Web-v${VER}-win64.zip"
+sha256sum "release/v${VER}/AEC-Web-v${VER}-win64.zip"
 echo "RELEASE OK: $STAGE + zip (separate asset from AEC-Client-v${VER}-win64.zip)"

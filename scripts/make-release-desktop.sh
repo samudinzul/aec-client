@@ -4,15 +4,20 @@
 # Usage:  scripts/make-release-desktop.sh [version]  (default: APP_VERSION)
 #
 # Contract (matches v1.2.x precedent, enforced by asserts below):
-#   release/AEC-Client-vX-win64/
-#     aec_gui.exe + *.dll (runtime only) + libs/tensorflowlite_c.dll
-#   models/          (explicit allowlist: nkf, dtln pair)
-#     LICENSES/        (third-party credits)
-#     README.txt       (end-user doc, version stamped)
-#     wallpapers/      (empty; users bring their own)
-#     sounds/          (empty; users drop soundboard pads here)
-#   release/AEC-Client-vX-win64.zip  (top folder only — no releases/
-#     subfolder, no imgui.ini, no aec_config.txt, no .pdb, no junk)
+#   release/vX/
+#     AEC-Client-vX-win64/
+#       aec_gui.exe + *.dll (runtime only) + libs/tensorflowlite_c.dll
+#       models/        (explicit allowlist: nkf, dtln pair)
+#       LICENSES/      (third-party credits)
+#       README.txt     (end-user doc, version stamped)
+#       wallpapers/    (empty; users bring their own)
+#       sounds/        (empty; users drop soundboard pads here)
+#     AEC-Client-vX-win64.zip  (top folder only — no releases/
+#       subfolder, no imgui.ini, no aec_config.txt, no .pdb, no junk)
+#
+# One version folder holds both assets' stages + zips (desktop here,
+# web next to it via make-release-web.sh); the zips themselves keep
+# the flat GitHub-asset layout (zip root = asset folder).
 #
 # release/ is gitignored; run from the repo root in MSYS2 bash.
 set -euo pipefail
@@ -36,7 +41,13 @@ fi
 test -x build/aec_gui.exe || { echo "build/aec_gui.exe missing; build first" >&2; exit 1; }
 command -v zip >/dev/null || { echo "zip not found (pacman -S zip)" >&2; exit 1; }
 
-STAGE="release/AEC-Client-v${VER}-win64"
+RELDIR="release/v${VER}"
+mkdir -p "$RELDIR"
+# Drop legacy flat-layout leftovers of this version (pre-version-folder
+# runs staged straight under release/): a stale flat zip next to the
+# new folder could get uploaded to the wrong release by mistake.
+rm -rf "release/AEC-Client-v${VER}-win64" "release/AEC-Client-v${VER}-win64.zip"
+STAGE="${RELDIR}/AEC-Client-v${VER}-win64"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/models" "$STAGE/LICENSES" "$STAGE/wallpapers" "$STAGE/sounds"
 
@@ -120,13 +131,13 @@ if [ "${AEC_SIGN:-0}" = "1" ]; then
     echo "signed aec_gui.exe"
 fi
 
-rm -f "release/AEC-Client-v${VER}-win64.zip"
-(cd release && zip -qr "AEC-Client-v${VER}-win64.zip" "AEC-Client-v${VER}-win64")
+rm -f "${RELDIR}/AEC-Client-v${VER}-win64.zip"
+(cd "$RELDIR" && zip -qr "AEC-Client-v${VER}-win64.zip" "AEC-Client-v${VER}-win64")
 
 # ---- zip asserts ----
 python3 -c "
 import zipfile, re, sys
-names = zipfile.ZipFile('release/AEC-Client-v${VER}-win64.zip').namelist()
+names = zipfile.ZipFile('release/v${VER}/AEC-Client-v${VER}-win64.zip').namelist()
 assert len(names) > 15, f'zip suspiciously small ({len(names)})'
 roots = sorted({n.split('/')[0] for n in names})
 assert roots == ['AEC-Client-v${VER}-win64'], f'zip root layout wrong: {roots}'
@@ -137,6 +148,6 @@ print(f'zip entries: {len(names)}, single root OK, no strays')
 "
 
 echo "----"
-du -h "release/AEC-Client-v${VER}-win64.zip"
-sha256sum "release/AEC-Client-v${VER}-win64.zip"
+du -h "release/v${VER}/AEC-Client-v${VER}-win64.zip"
+sha256sum "release/v${VER}/AEC-Client-v${VER}-win64.zip"
 echo "RELEASE OK: $STAGE + zip, no releases folder, no strays"
