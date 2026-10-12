@@ -220,7 +220,7 @@ def set_prefs(body: dict):
 @app.get("/api/sounds")
 def sounds():
     return {"sounds": board.list(), "playing": board.playing,
-            "dir": board.sounds_dir, "decoders": decoders_available()}
+            "dir": board.display_dir, "decoders": decoders_available()}
 
 
 @app.post("/api/sounds/refresh")
@@ -228,7 +228,7 @@ def refresh_sounds():
     # Stop-only, like the desktop Refresh button: the running voice
     # holds indices into the loaded list, which must not move.
     return {"sounds": board.scan(), "playing": board.playing,
-            "dir": board.sounds_dir, "decoders": decoders_available()}
+            "dir": board.display_dir, "decoders": decoders_available()}
 
 
 @app.post("/api/soundboard")
@@ -381,7 +381,7 @@ def main():
     # shows them, like the desktop's launch-time ScanSounds().
     try:
         n = len(board.scan())
-        print(f"Soundboard: dir={board.sounds_dir} "
+        print(f"Soundboard: dir={board.display_dir} "
               f"decoders={decoders_available()} loaded={n}",
               flush=True)
     except Exception as e:  # pragma: no cover - never block startup

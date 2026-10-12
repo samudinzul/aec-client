@@ -175,6 +175,24 @@ class SoundBoard:
         return [{"index": i, "name": s["name"], "path": s["path"]}
                 for i, s in enumerate(self.sounds)]
 
+    @property
+    def display_dir(self):
+        """Path label for the UI — relative, never absolute.
+
+        The full path was leaking to the browser (and into the "drop
+        files into …" hint), which exposed the dev machine's layout
+        (C:\\aec-opencode\\web\\sounds). The desktop never does this —
+        it just says "sounds/ folder next to the exe". Show the dir
+        relative to the package, falling back to its basename, so an
+        end user extracting the release elsewhere sees a sensible
+        label instead of a host path.
+        """
+        try:
+            rel = os.path.relpath(self.sounds_dir, PKG)
+        except ValueError:
+            rel = os.path.basename(self.sounds_dir)
+        return rel if not rel.startswith("..") else os.path.basename(self.sounds_dir)
+
     # ----------------------------------------------------------
     #  Triggering (any thread)
     # ----------------------------------------------------------

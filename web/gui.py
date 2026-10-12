@@ -81,7 +81,7 @@ def _serve():
         pass  # /api/start surfaces the error
     try:
         n = len(board.scan())
-        print(f"Soundboard: dir={board.sounds_dir} "
+        print(f"Soundboard: dir={board.display_dir} "
               f"decoders={decoders_available()} loaded={n}",
               flush=True)
     except Exception as e:
