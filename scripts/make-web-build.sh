@@ -17,8 +17,9 @@
 #      web/**/__pycache__ first, like make-desktop-build.sh
 #      --fresh wiping build/).
 #   3. pip install the requirement set (quiet no-op when satisfied).
-#   4. Byte-compile every web/*.py (syntax over the whole backend).
-#   5. Run the offline engine smoke (all available engines).
+#   4. Ensure runtime dirs exist (web/sounds/ for the soundboard).
+#   5. Byte-compile every web/*.py (syntax over the whole backend).
+#   6. Run the offline engine smoke (all available engines).
 #
 # The venv layout differs per OS (.venv/Scripts on Windows,
 # .venv/bin elsewhere); everything here resolves through a
@@ -84,14 +85,22 @@ if ! "$VPY" -m pip install -q --disable-pip-version-check -r web/requirements.tx
     exit 1
 fi
 
-# ---- 4. byte-compile the backend ----
+# ---- 4. runtime dirs ----
+# The soundboard scans web/sounds/ on startup; the folder is where
+# users drop their own pads. Make sure it exists even on a checkout
+# where it was never created — an absent folder silently yields an
+# empty pad list instead of an error.
+echo "-- runtime dirs"
+mkdir -p web/sounds
+
+# ---- 5. byte-compile the backend ----
 echo "-- compile check"
 if ! "$VPY" -m compileall -q web; then
     echo "compile check FAILED" >&2; exit 1
 fi
 echo "   compile OK"
 
-# ---- 5. offline engine smoke ----
+# ---- 6. offline engine smoke ----
 echo "-- engine smoke"
 if "$VPY" -m web.test_offline --smoke; then
     echo "WEB BUILD OK (.venv + packages + smoke)"
@@ -99,7 +108,7 @@ else
     echo "engine smoke FAILED" >&2; exit 1
 fi
 
-# ---- 6. launch (opt-in --run, like make-desktop-build.sh) ----
+# ---- 7. launch (opt-in --run, like make-desktop-build.sh) ----
 if [ "$RUN" -ne 0 ]; then
     echo ""
     # Detached, terminal stays free (pywebview window owns its
