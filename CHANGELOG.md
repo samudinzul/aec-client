@@ -103,6 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Desktop: `?` glyphs in UI text.** The bundled font has no em-dash,
   so user-facing strings containing one rendered as `?`. All UI
   literals now use ASCII (` - `).
+- **Release: web script nested `web/` inside `web/`.**
+  `make-release-web.sh` pre-created `release/.../web/sounds` before
+  `cp -r web`, so the target already existed and cp copied the app one
+  level down (`web/web/...`, `start.bat` missing at the asserted
+  path). The contract asserts failed closed — no bad bundle could
+  ship — but no web release could build at all. Staging now copies
+  first and guarantees the (empty) `sounds/` dir after; the asserts
+  additionally cover the main `imgui_web.html` page, its CSS,
+  `requirements.txt`, all five model files, and an existing-but-empty
+  `sounds/`.
 
 ### Changed
 

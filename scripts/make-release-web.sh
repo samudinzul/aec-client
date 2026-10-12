@@ -40,11 +40,17 @@ command -v zip >/dev/null || { echo "zip not found" >&2; exit 1; }
 
 STAGE="release/AEC-Web-v${VER}-win64"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/models" "$STAGE/web/sounds"
+mkdir -p "$STAGE/models"
 
-# The app, minus caches and local junk.
+# The app, minus caches and local junk. cp runs BEFORE any mkdir
+# under $STAGE/web: pre-creating $STAGE/web/sounds first makes the
+# target exist, and `cp -r web` then nests web/ inside web/
+# ($STAGE/web/web/...) instead of copying it as $STAGE/web.
 cp -r web "$STAGE/web"
-rm -rf "$STAGE/web/__pycache__" "$STAGE/web/.venv"
+# The sounds/ folder is guaranteed to exist even if the checkout
+# has none (cp copies nothing then) — it ships EMPTY, see below.
+mkdir -p "$STAGE/web/sounds"
+rm -rf "$STAGE/web/__pycache__"
 rm -f  "$STAGE/web/start.log"
 find "$STAGE/web" -name '*.pyc' -delete
 
@@ -72,13 +78,19 @@ sed "s/%%VERSION%%/${VER}/g" scripts/templates/README-web.txt > "$STAGE/README.t
 fail=0
 for f in web/start.bat web/server.py web/chain.py \
          web/audio.py web/aec3.py web/nkf.py web/gui.py \
-         web/ui/index.html web/ui/imgui_web.js \
+         web/requirements.txt \
+         web/ui/index.html web/ui/imgui_web.html \
+         web/ui/imgui_web.js web/ui/imgui_web.css \
          web/ui/favicon.ico \
-         models/dtln_aec_128_1.tflite \
-         models/dtln_ns_128_2.tflite models/nkf.onnx \
+         models/dtln_aec_128_1.tflite models/dtln_aec_128_2.tflite \
+         models/dtln_ns_128_1.tflite models/dtln_ns_128_2.tflite \
+         models/nkf.onnx \
          README.txt LICENSE; do
     test -f "$STAGE/$f" || { echo "missing: $f" >&2; fail=1; }
 done
+# sounds/ ships as an EXISTING, EMPTY dir (pads are user content).
+test -d "$STAGE/web/sounds" || { echo "missing: web/sounds/" >&2; fail=1; }
+test -z "$(ls -A "$STAGE/web/sounds")" || { echo "web/sounds/ not empty" >&2; fail=1; }
 # Zero PE binaries, no exceptions (see contract header): .pyd
 # included — a shipped accelerator would flag the whole zip.
 bad=$(find "$STAGE" \( -name '*.exe' -o -name '*.dll' \
