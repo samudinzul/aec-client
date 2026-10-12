@@ -307,7 +307,7 @@ static int FindSystemDefaultIndex(const std::vector<ma_device_info>& list) {
 static HICON LoadAppIcon() {
     HMODULE hMod = GetModuleHandleW(nullptr);
     HICON h = hMod ? LoadIconW(hMod, MAKEINTRESOURCEW(101)) : nullptr;
-    if (!h) h = LoadIconW(nullptr, IDI_APPLICATION);
+    if (!h) h = LoadIconW(nullptr, MAKEINTRESOURCEW(32512)); // IDI_APPLICATION
     return h;
 }
 
