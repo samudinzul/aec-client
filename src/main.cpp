@@ -1620,17 +1620,22 @@ void DrawDevicesSection() {
     FilteredDeviceCombo("Speaker Reference", "The speakers whose sound gets removed from your mic",
                         g_refIndex, g_playbackDevices, g_refDisplayIndices);
 
-    // Hidden while Listen-to-myself reroutes to Your speakers:
-    // showing it would suggest it still does something.
-    if (!g_listenToSelf) {
-        DrawInlineDot(!g_outDisplayIndices.empty());
-        ImGui::SameLine();
-        ImGui::TextUnformatted("Send cleaned sound to");
-        ImGui::SameLine(labelCol);
-        FilteredDeviceCombo("Output", "Where your cleaned voice goes. CABLE Input is picked automatically\n"
-                                      "so voice apps can use it as your microphone",
-                            g_outIndex, g_playbackDevices, g_outDisplayIndices);
-    }
+    // Shown in both modes: with Listen-to-myself the destination is
+    // derived from the Speaker Reference loopback, and when that name
+    // doesn't map to a playback endpoint the audio went nowhere with no
+    // clue why. Keeping the row visible and editable (relabeled) makes
+    // the destination explicit instead of hiding it — same as the web
+    // build now does.
+    DrawInlineDot(!g_outDisplayIndices.empty());
+    ImGui::SameLine();
+    ImGui::TextUnformatted(g_listenToSelf
+                           ? "Listen to myself — send to"
+                           : "Send cleaned sound to");
+    ImGui::SameLine(labelCol);
+    FilteredDeviceCombo("Output", "Where your cleaned voice goes. CABLE Input is picked automatically\n"
+                                  "so voice apps can use it as your microphone. With Listen to myself\n"
+                                  "ticked this is the speakers you hear yourself through.",
+                        g_outIndex, g_playbackDevices, g_outDisplayIndices);
 
     if (!CableInputPresent()) {
         ImGui::Spacing();
