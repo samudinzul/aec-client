@@ -296,6 +296,21 @@ static int FindSystemDefaultIndex(const std::vector<ma_device_info>& list) {
 // ============================================================
 #ifdef _WIN32
 
+// App icon shared by the tray and the window (taskbar). Must match the
+// numeric ID in version.rc. Two gotchas this exists for:
+// - hInstance must be our own module: LoadIcon(NULL, ...) only finds
+//   stock icons (IDI_*), so a NULL handle always misses our resource.
+// - version.rc must use a numeric ID: an undefined word like IDR_ICON1
+//   is stored as a *string* name, which Explorer ignores and
+//   MAKEINTRESOURCE(101) can never find (verified in the built exe:
+//   RT_GROUP_ICON held the string 'IDR_ICON1', no integer 101).
+static HICON LoadAppIcon() {
+    HMODULE hMod = GetModuleHandleW(nullptr);
+    HICON h = hMod ? LoadIconW(hMod, MAKEINTRESOURCEW(101)) : nullptr;
+    if (!h) h = LoadIconW(nullptr, IDI_APPLICATION);
+    return h;
+}
+
 void ShowTrayIcon() {
     if (g_trayIconActive || !g_hwnd) return;
     ZeroMemory(&g_nid, sizeof(g_nid));
@@ -304,13 +319,10 @@ void ShowTrayIcon() {
     g_nid.uID = 1;
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    // Same icon as the .exe itself (resources/app.ico, embedded as
-    // IDR_ICON1 in version.rc), so the tray doesn't show the stock
-    // Windows application icon next to an app that has its own.
-    // Fall back to IDI_APPLICATION if the resource is somehow
-    // missing — a broken LoadIcon is worse than the default.
-    g_nid.hIcon = LoadIconA(nullptr, MAKEINTRESOURCEA(101));
-    if (!g_nid.hIcon) g_nid.hIcon = LoadIconA(nullptr, IDI_APPLICATION);
+    // Same icon as the .exe itself (resources/app.ico). Shared icon
+    // from LoadAppIcon — do not DestroyIcon it. Falls back to the
+    // stock application icon if the resource is missing.
+    g_nid.hIcon = LoadAppIcon();
     wcscpy_s(g_nid.szTip, L"AEC Client - running");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     g_trayIconActive = true;
@@ -401,6 +413,17 @@ void SetupTray(GLFWwindow* window) {
     if (!g_hwnd) return;
     g_originalWndProc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC,
                                                     (LONG_PTR)CustomWndProc);
+    // GLFW builds its window class with the stock IDI_APPLICATION icon,
+    // so the running taskbar button shows the generic Windows icon even
+    // when the .exe file itself has the right one. Point the window at
+    // our embedded icon (shared handle from LoadAppIcon — do not destroy).
+    {
+        HICON hIcon = LoadAppIcon();
+        if (hIcon) {
+            SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+            SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+        }
+    }
     // Note: tray icon visibility is decided by UpdateTrayIcon() after settings load.
 }
 

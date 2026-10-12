@@ -13,7 +13,11 @@
 // APP_VERSION in src/main.cpp (enforced by the desktop release
 // script's asserts: a mismatch fails the build, not the upload).
 
-IDR_ICON1 ICON DISCARDABLE "resources/app.ico"
+// Numeric ID on purpose (no resource.h): windres stores an undefined
+// word like IDR_ICON1 as a *string* name, which Explorer ignores and
+// LoadIcon(101) can never find. 101 must match MAKEINTRESOURCEW(101)
+// in src/main.cpp.
+101 ICON DISCARDABLE "resources/app.ico"
 
 1 VERSIONINFO
 FILEVERSION     1,13,0,0
