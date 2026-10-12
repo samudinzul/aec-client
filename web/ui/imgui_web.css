@@ -43,6 +43,15 @@ body {
     padding: 0;
 }
 
+/* Hint / helper text — smaller than body (14px) so it reads as
+   secondary without shrinking every paragraph. index.html's
+   classic fallback uses 12px; match it here so both UIs agree. */
+.hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
 /* Main canvas for Dear ImGui rendering */
 #web-imgui-canvas {
     position: fixed !important;
