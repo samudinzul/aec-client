@@ -64,6 +64,7 @@ No more headphones. No more echo. No dead-air noise.
 - **Live level meters** (meters show the post-stage signal, i.e. what Discord hears)
 - **Clock-drift correction** — stable over long calls
 - **Wallpaper customization**
+- **Soundboard** — drop `.wav` / `.mp3` / `.flac` / `.ogg` files into the `sounds/` folder and play them on top of your voice (one pad at a time; a new click takes over). A separate monitor stream lets you hear the pads locally while voice apps still get them via CABLE. A **Soundboard** tab holds the pad grid, gain, monitor device and a Stop-all.
 - **Auto-save settings** to `aec_config.txt`
 - **Single-instance protection** — launching twice brings the existing window to front
 

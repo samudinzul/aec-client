@@ -54,6 +54,19 @@ QUICK START
    mic-to-speaker loop forever (the NKF profile trims a
    sustained howl instead of feeding it).
 
+SOUNDBOARD
+----------
+Drop .wav / .mp3 / .flac / .ogg sound files into the
+web\sounds\ folder (refresh the Soundboard tab to
+load them). Click a pad to play a sound on top of your
+voice - one pad at a time, a new click takes over from
+whatever is still playing. The Soundboard tab also has
+a gain slider, a "play to my speakers" monitor toggle
+and a device dropdown (so you hear the pads locally
+while voice apps still get them through CABLE), and a
+Stop-all button. Files are decoded once at startup, so
+a pad click never touches the disk.
+
 6. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:  CABLE Output (VB-Audio Virtual Cable)
    - Input Profile: Voice Isolation (Discord's own noise

@@ -112,6 +112,17 @@ TIPS
   models/dtln_ns_128_2.tflite (bundled) for noise suppression;
   without them it reports the NS error and passes audio through.
 
+SOUNDBOARD
+----------
+Drop .wav / .mp3 / .flac / .ogg sound files into the sounds\ folder
+(refresh the Soundboard tab to load them). Click a pad to play a
+sound on top of your voice - one pad at a time, a new click takes
+over from whatever is still playing. The Soundboard tab also has a
+gain slider, a "play to my speakers" monitor toggle with a device
+dropdown (so you hear the pads locally while voice apps still get
+them through CABLE), and a Stop-all button. Files are decoded once
+at startup, so a pad click never touches the disk.
+
 TROUBLESHOOTING
 ---------------
 - "No devices found": click Refresh in the Devices section.

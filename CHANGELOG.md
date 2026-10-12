@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Soundboard (v1.13.0).** Drop `.wav` / `.mp3` / `.flac` / `.ogg` files
+  into the `sounds/` folder and play them on top of your voice — one
+  pad at a time, a new click takes over. Desktop (`src/main.cpp`) and
+  web (`web/soundboard.py`) both scan the folder at startup, decode
+  once into mono float32, and mix into the output before the shared
+  limiter so mic + sounds can never clip each other. A separate
+  monitor stream lets you hear the pads locally while voice apps
+  still get them via CABLE; **Listen to myself** routes the whole
+  mix to your speakers instead. A **Soundboard** tab holds the pad
+  grid, gain, monitor device and a Stop-all. MP3/FLAC/OGG decode via
+  the optional `soundfile` package; stdlib `wave` handles PCM WAV.
+- **Web UI: Dear ImGui port.** The web UI now renders through a pure
+  JavaScript Dear ImGui port (tabs, cards, live controls, dark
+  theme) instead of the classic HTML fallback — matching the desktop
+  window's look and behaviour exactly, with the classic page still
+  reachable at `/classic`.
+
+### Fixed
+
+- **Web: output hard-clip → soft limiter.** The desktop runs the final
+  mix through `SoftLimit` (linear to -3 dBFS, tanh knee above); the
+  web build hard-clipped at 0 dBFS — and clipped twice (once in the
+  pump, again in both output callbacks). With mic gain up to 4× and
+  soundboard gain up to 2× the sum routinely exceeds 1.0, and a hard
+  clip is square-wave distortion. `dsp.soft_limit` now mirrors
+  `main.cpp` exactly and runs **once**, after resampling, as the last
+  step before the device.
+- **Web: Stop all didn't stop.** `board.playing` was a mutable list
+  that only the pump thread cleared, so a Stop-all request stayed lit
+  until the pump consumed it — and stayed lit even longer when the
+  pump was starved on a silent mic. `mix()` also re-lit it after a
+  Stop had cleared it. `playing` is now a property over the voice, and
+  `stop_all()`/`stop()`/`reset()` null the voice directly, so a stop
+  clears the pad highlight on the next read, not the next pump tick.
+- **Web: Listen to myself routed audio nowhere.** The desktop hides
+  the Output row while Listen to myself is on, on the theory that
+  "showing it would suggest it still does something" — but that
+  assumes the destination is obvious. The web build derived it from
+  the Speaker Reference loopback name, and when that name didn't map
+  to a playback endpoint the audio went nowhere: ticked, no sound,
+  no clue why. The Output row is now shown in both modes and relabelled
+  ("Listen to myself — send to"), and the server prefers the derived
+  speaker with the explicit pick as fallback.
+- **Web: soundboard dir path leaked to the browser.** The REST
+  endpoints returned the absolute `sounds_dir` and the UI printed it
+  in the "drop files into …" hint, exposing the dev machine layout
+  (`C:\aec-opencode\web\sounds`). The desktop never does this — it
+  just says "sounds/ folder next to the exe". `SoundBoard.display_dir`
+  now serves a path relative to the package dir.
+- **Web build: ensure `web/sounds/` exists.** `make-web-build.sh`
+  never created the folder, so a fresh checkout or stripped release
+  had none and the soundboard silently scanned nothing — an empty
+  pad list with no error. Added a `mkdir -p` step.
+- **Release: ship an empty `web/sounds/` folder.** `make-release-web.sh`
+  did `cp -r web` into the stage, dragging the dev machine's demo
+  mp3s into the release bundle. The contract says the folder ships
+  empty — users drop their own pads in — so the fixtures are stripped
+  after the copy. The desktop release script already did this.
+
+### Changed
+
+- **Web: first-run soundboard defaults.** Soundboard gain and monitor
+  volume defaulted to 100% — far too hot out of the box (a pad at full
+  gain into the monitor stream clips hard). Lowered to **8%** and
+  **30%**, kept in sync across the server prefs, the sliders, and the
+  `AudioRunner` fallbacks.
+- **Web: smaller hint text.** `imgui_web.css` had no `.hint` rule, so
+  helper text rendered at the browser default (~16px) — larger than
+  the 14px body text. Added a 12px rule matching `index.html`'s
+  classic fallback, so both UIs agree and hints read as secondary.
+
 ## [1.12.0] - 2026-10-09
 
 ### Changed
