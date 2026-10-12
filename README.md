@@ -601,7 +601,6 @@ aec-client/
 │   ├── test.sh                     Offline test suite (native + web)
 │   ├── make-release-desktop.sh     Desktop release bundle + zip builder
 │   ├── make-release-web.sh         Web release bundle + zip builder
-│   ├── standardize-releases.sh     Version-keyed release notes writer
 │   └── templates/                  End-user doc templates (%%VERSION%%)
 ├── README.md                       This file
 ├── LICENSE                         MIT

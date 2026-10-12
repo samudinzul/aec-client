@@ -6,8 +6,8 @@ Run everything from the **repo root** in MSYS2 UCRT64 bash.
 
 - **Tools** (this folder): `make-desktop-build.sh`,
   `make-web-build.sh`, `test.sh`, `make-release-desktop.sh`,
-  `make-release-web.sh`, `standardize-releases.sh` — plus this
-  file, the only `.md` here, which documents them.
+  `make-release-web.sh` — plus this file, the only `.md` here,
+  which documents them.
 - **`templates/`**: release *inputs*, not docs — end-user README
   sources (`README-desktop.txt`, `README-web.txt`) and the GitHub
   notes template (`release-template.md`). The release scripts stamp
@@ -30,7 +30,6 @@ scripts/test.sh                        # offline tests (native + web)
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
 | `make-release-desktop.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release-desktop.sh` (version defaults to `APP_VERSION`) |
 | `make-release-web.sh [ver]` | Stage + zip the web release (separate asset) | `scripts/make-release-web.sh` |
-| `standardize-releases.sh` | Align GitHub release titles/notes (needs `gh auth login`) | `scripts/standardize-releases.sh` |
 
 `templates/` holds the inputs (`release-template.md`,
 `README-desktop.txt`, `README-web.txt`): the release scripts stamp
