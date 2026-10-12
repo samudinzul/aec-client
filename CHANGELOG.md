@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   theme) instead of the classic HTML fallback — matching the desktop
   window's look and behaviour exactly, with the classic page still
   reachable at `/classic`.
+- **Web: app icon.** The browser tab now shows `app.ico` as favicon
+  (both pages, plus a `/favicon.ico` route for the browser's default
+  request), and the system-tray icon loads the same file instead of
+  the drawn green square — same brand as the desktop exe/tray. The
+  drawn icon stays as fallback when the file is missing. The native
+  window/taskbar button keeps Python's icon: the web build ships no
+  binary of its own, and adding one would defeat the no-exe AV
+  posture the web build exists for.
 
 ### Fixed
 

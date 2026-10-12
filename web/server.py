@@ -79,6 +79,15 @@ def imgui_css():
                         media_type="text/css")
 
 
+@app.get("/favicon.ico")
+def favicon():
+    # Browsers request /favicon.ico by default; the pages also
+    # reference /static/favicon.ico explicitly. Both serve the
+    # same file (web/ui/favicon.ico, a copy of resources/app.ico).
+    return FileResponse(os.path.join(UI_DIR, "favicon.ico"),
+                        media_type="image/x-icon")
+
+
 @app.get("/classic")
 def classic():
     # Keep the old plain-HTML UI reachable for fallback/debug.

@@ -149,10 +149,22 @@ def _console_restore():
 
 
 def _tray_icon():
-    """Draw the tray icon at runtime (green square +
-    waveform bars, the UI's palette) — no image
-    asset to ship."""
-    from PIL import Image, ImageDraw
+    """App icon (web/ui/favicon.ico, a copy of resources/app.ico)
+    when available — same brand as the desktop exe/tray — else the
+    drawn green-square fallback, so the tray never depends on an
+    image asset being present."""
+    from PIL import Image
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (os.path.join(here, "ui", "favicon.ico"),
+                 os.path.join(here, "..", "resources", "app.ico")):
+        try:
+            if os.path.isfile(cand):
+                img = Image.open(cand)
+                img.load()
+                return img.convert("RGBA").resize((64, 64), Image.LANCZOS)
+        except Exception:
+            pass
+    from PIL import ImageDraw
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([4, 4, 60, 60], radius=14,

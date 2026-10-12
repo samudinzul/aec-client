@@ -73,6 +73,7 @@ fail=0
 for f in web/start.bat web/server.py web/chain.py \
          web/audio.py web/aec3.py web/nkf.py web/gui.py \
          web/ui/index.html web/ui/imgui_web.js \
+         web/ui/favicon.ico \
          models/dtln_aec_128_1.tflite \
          models/dtln_ns_128_2.tflite models/nkf.onnx \
          README.txt LICENSE; do
