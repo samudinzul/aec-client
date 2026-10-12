@@ -13,7 +13,7 @@ decision below follows from that rule.
   tab (8 LOW + 10 INFO, zero dropped files / C2 / persistence).
   The bundled runtimes are legitimate; the *profile* (unsigned +
   uncommon + ML code) is what fires, never the behavior.
-- v1.12.0 record: both release ZIPs scan 0 detections. Standalone
+- v1.13.0 record: both release ZIPs scan 0 detections. Standalone
   `aec_gui.exe`: SecureAge only (Defender, Bitdefender, Kaspersky,
   ESET clean).
 - One Bitdefender-family container heuristic fired on an interim web
