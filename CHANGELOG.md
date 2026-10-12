@@ -32,8 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drawn icon stays as fallback when the file is missing. The native
   window/taskbar button gets the same icon at runtime via WM_SETICON
   (pywebview exposes no icon parameter, so a watcher thread sets it
-  once the window exists; the console window too, when visible) —
-  stdlib ctypes only, still no binary of our own.
+  on every matching window once it exists, plus class icons and a
+  delayed re-apply; the console window too, when visible) and the
+  process sets its own AppUserModelID so the taskbar labels the
+  button "AEC Web" instead of "Python 3.12 (64-bit)" — stdlib ctypes
+  only, still no binary of our own.
 
 ### Fixed
 

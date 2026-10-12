@@ -358,6 +358,17 @@ def _watch_prefs():
 
 def main():
     global _window
+    if sys.platform == "win32":
+        # Own taskbar identity: without this the taskbar button is
+        # labeled "Python 3.12 (64-bit)" (python.exe's version resource)
+        # and grouped with any other Python window — no WM_SETICON can
+        # change that. Must run before any window exists. Fail-open.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "AECClient.AECWeb")
+        except Exception:
+            pass
     owned = not _port_answers()
     server_thread = None
     if owned:
