@@ -5,4 +5,4 @@
 
 pywebview>=5.0        # native window (Edge WebView2, preinstalled on Windows 10/11); browser fallback
 pystray>=0.19         # system-tray icon (minimize-to-tray; pure ctypes on Windows)
-Pillow>=10            # draws the tray icon at runtime (mainstream wheel)
+Pillow>=10            # tray icon: loads web/ui/favicon.ico, drawn fallback (mainstream wheel)
