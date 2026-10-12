@@ -143,7 +143,7 @@ class WebImGuiUI {
             '<div id="ig-devhint" class="hint" style="color:#ffd75e"></div>' +
             '<label class="chkline"><input type="checkbox" id="ig-listen">Listen to myself</label>' +
             '<div class="hint">Hear yourself through your speakers instead of sending to voice apps — for testing. ' +
-            'Applies after Stop -&gt; Start; the Output row above is hidden while on.</div>';
+            'Applies after Stop -&gt; Start; the Output row above picks the destination in both modes.</div>';
         p.appendChild(rows);
 
         // --- More (Processing + Levels, like the desktop CollapsingHeader) ---

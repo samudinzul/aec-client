@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-12
+
 ### Added
 
-- **Soundboard (v1.13.0).** Drop `.wav` / `.mp3` / `.flac` / `.ogg` files
+- **Soundboard.** Drop `.wav` / `.mp3` / `.flac` / `.ogg` files
   into the `sounds/` folder and play them on top of your voice — one
   pad at a time, a new click takes over. Desktop (`src/main.cpp`) and
   web (`web/soundboard.py`) both scan the folder at startup, decode

@@ -2,9 +2,10 @@
 
 > Real-time acoustic echo cancellation for Windows — use speakers and a microphone at the same time in Discord, Zoom, Teams, or any other voice app.
 
-![AEC Client — desktop app (left) and web UI (right), same Running state](screenshots/desktop-and-web.png)
+![AEC Client v1.13.0 desktop app](screenshots/main.png)
+![AEC Web v1.13.0 native window](screenshots/web-ui.png)
 
-*Left: desktop `aec_gui.exe`. Right: web UI served from this repo (`web/start.bat`). Same three profiles, same chain, same telemetry — pick the window you prefer.*
+*Top: desktop `aec_gui.exe`. Bottom: web UI in its native window (`web/start.bat`). Same three profiles, same chain, same telemetry — pick the window you prefer.*
 
 **Built entirely with open-source tools.** No proprietary SDKs. No cloud dependencies. No telemetry.
 
@@ -164,7 +165,7 @@ Done. Talk normally with speakers on.
 > Every release is built straight from the public source in this repo
 > — audit it, rebuild it, or scan the ZIP on VirusTotal if unsure.
 >
-> **VirusTotal record (v1.12.0, pre-publish scans).** Both release
+> **VirusTotal record (v1.13.0, pre-publish scans).** Both release
 > ZIPs scan **0 detections**. The standalone `aec_gui.exe` draws one
 > flag — SecureAge only (unsigned-file reputation); Defender,
 > Bitdefender, Kaspersky and ESET are clean, and its behavior tab is
@@ -588,7 +589,8 @@ aec-client/
 │   └── README.md               Web UI docs
 │
 ├── screenshots/
-│   └── main.png                    README image
+│   ├── main.png                    Desktop README image
+│   └── web-ui.png                  Web UI README image
 │
 ├── wallpapers/                     User-supplied backgrounds
 │
