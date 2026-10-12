@@ -30,9 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request), and the system-tray icon loads the same file instead of
   the drawn green square — same brand as the desktop exe/tray. The
   drawn icon stays as fallback when the file is missing. The native
-  window/taskbar button keeps Python's icon: the web build ships no
-  binary of its own, and adding one would defeat the no-exe AV
-  posture the web build exists for.
+  window/taskbar button gets the same icon at runtime via WM_SETICON
+  (pywebview exposes no icon parameter, so a watcher thread sets it
+  once the window exists; the console window too, when visible) —
+  stdlib ctypes only, still no binary of our own.
 
 ### Fixed
 

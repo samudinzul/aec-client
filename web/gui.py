@@ -148,6 +148,70 @@ def _console_restore():
         pass
 
 
+def _set_window_icon():
+    """Point the native window (and console) at app.ico via WM_SETICON.
+
+    pywebview exposes no icon parameter, so the window otherwise shows
+    python.exe's icon in the taskbar. A background thread waits for the
+    top-level window by title, then sets the big (taskbar) and small
+    (title-bar) icons from web/ui/favicon.ico. Fail-open: any error
+    (or a missing file) leaves the Python icon in place. The icon
+    handles stay alive for the life of the process (never destroyed).
+    Windows only.
+    """
+    if sys.platform != "win32":
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    ico = os.path.join(here, "ui", "favicon.ico")
+    if not os.path.isfile(ico):
+        ico = os.path.join(here, "..", "resources", "app.ico")
+    ico = os.path.abspath(ico)
+    if not os.path.isfile(ico):
+        return
+
+    def worker():
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            WM_SETICON, ICON_SMALL, ICON_BIG = 0x80, 0, 1
+            IMAGE_ICON, LR_LOADFROMFILE = 1, 0x0010
+
+            def set_icon(hwnd):
+                try:
+                    h_big = user32.LoadImageW(
+                        None, ico, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+                    h_small = user32.LoadImageW(
+                        None, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+                    if h_big:
+                        user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_big)
+                    if h_small:
+                        user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
+                except Exception:
+                    pass
+
+            # The pywebview window (taskbar button + title bar).
+            hwnd = None
+            for _ in range(120):  # ~30 s grace
+                hwnd = user32.FindWindowW(None, TITLE)
+                if hwnd:
+                    break
+                time.sleep(0.25)
+            if hwnd:
+                set_icon(hwnd)
+            # The console window too (visible when the tray is off),
+            # so both taskbar buttons match instead of mixing icons.
+            try:
+                con = ctypes.windll.kernel32.GetConsoleWindow()
+                if con:
+                    set_icon(con)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True, name="window-icon").start()
+
+
 def _tray_icon():
     """App icon (web/ui/favicon.ico, a copy of resources/app.ico)
     when available — same brand as the desktop exe/tray — else the
@@ -277,6 +341,10 @@ def main():
             hide_timer.start()
         threading.Thread(target=_watch_prefs, daemon=True,
                          name="prefs").start()
+        # Runtime window icon (taskbar + title bar): pywebview has no
+        # icon parameter, so a watcher thread sets WM_SETICON once the
+        # window exists. Fail-open — Python's icon stays on any error.
+        _set_window_icon()
         webview.start()
     except Exception as e:
         if hide_timer is not None:
