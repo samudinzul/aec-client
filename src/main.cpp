@@ -305,7 +305,7 @@ void ShowTrayIcon() {
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
     g_nid.hIcon = LoadIconA(NULL, IDI_APPLICATION);
-    wcscpy_s(g_nid.szTip, L"AEC Client — running");
+    wcscpy_s(g_nid.szTip, L"AEC Client - running");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     g_trayIconActive = true;
 }
@@ -1629,7 +1629,7 @@ void DrawDevicesSection() {
     DrawInlineDot(!g_outDisplayIndices.empty());
     ImGui::SameLine();
     ImGui::TextUnformatted(g_listenToSelf
-                           ? "Listen to myself — send to"
+                           ? "Listen to myself - send to"
                            : "Send cleaned sound to");
     ImGui::SameLine(labelCol);
     FilteredDeviceCombo("Output", "Where your cleaned voice goes. CABLE Input is picked automatically\n"
@@ -1731,7 +1731,7 @@ void DrawEngineSection() {
             ImGui::SetTooltip(
                 "Delay lock: how far the speaker reference lags the mic\n"
                 "(playback chain). Locked = aligned reference lets NKF cancel.\n"
-                "During a mic-test loop the engine keeps adapting — it must\n"
+                "During a mic-test loop the engine keeps adapting - it must\n"
                 "cancel the speaker pickup continuously or the loop howls.");
     }
 }
@@ -1818,12 +1818,12 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
             const char* be[] = { "off", "TFLite", "ONNX" };
             char line[256];
             snprintf(line, sizeof line,
-                     "DTLN-NS: %s  ring=%d  dropped=%d  in=%.4f out=%.4f  %s",
+                     "DTLN-NS: %s ring=%d dropped=%d in=%.4f out=%.4f %s",
                      be[st.backend], st.rCount, st.dropped,
                      st.inRms, st.outRms, DtnsLastError(g_engine.ns));
             if (st.dropped > 0)
                 snprintf(line + strlen(line), sizeof line - strlen(line),
-                         "  [ring overflow!]");
+                         " [ring overflow!]");
             ImGui::TextDisabled("%s", line);
         }
     }
@@ -1885,7 +1885,7 @@ void DrawAppearanceTab() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "When ON:  X hides the window, tray icon stays active\n"
+            "When ON: X hides the window, tray icon stays active\n"
             "When OFF: X closes the app completely");
 
     if (g_minimizeToTray) {
@@ -1915,7 +1915,7 @@ void DrawAppearanceTab() {
         ImGui::SetTooltip(
             "Off (default): the profile list shows DTLN-AEC 128 only.\n"
             "On: also shows WebRTC AEC3 and NKF-AEC. These are real\n"
-            "engines but less tested than the default — switch back to\n"
+            "engines but less tested than the default - switch back to\n"
             "DTLN-AEC 128 to hide them again.");
 }
 
@@ -2039,7 +2039,7 @@ void DrawSoundboardTab() {
         ImGui::SetTooltip("Silence every sound currently playing");
 
     ImGui::SameLine();
-    ImGui::TextDisabled("%d sound(s)  -  put .wav / .mp3 / .flac / .ogg in the sounds/ folder",
+    ImGui::TextDisabled("%d sound(s) - put .wav / .mp3 / .flac / .ogg in the sounds/ folder",
                         (int)g_sounds.size());
 
     if (g_sounds.empty()) {
@@ -2111,16 +2111,16 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Credits");
-    ImGui::BulletText("WebRTC AP     - Google (BSD-3)");
-    ImGui::BulletText("NKF-AEC       - Jiang et al. (ICASSP 2023, MIT)");
-    ImGui::BulletText("DTLN-AEC      - Westhausen & Meyer (ICASSP 2021, MIT)");
-    ImGui::BulletText("DTLN-NS       - networkedaudio port of breizhn/DTLN denoise (MIT)");
-    ImGui::BulletText("ONNX Runtime  - Microsoft (MIT)");
-    ImGui::BulletText("Dear ImGui    - Omar Cornut (MIT)");
-    ImGui::BulletText("miniaudio     - David Reid (MIT-0)");
-    ImGui::BulletText("GLFW          - Marcus Geelnard / Camilla Berglund (zlib)");
-    ImGui::BulletText("stb_image     - Sean Barrett (public domain)");
-    ImGui::BulletText("pocketfft     - Max-Planck-Society (BSD-3)");
+    ImGui::BulletText("WebRTC AP - Google (BSD-3)");
+    ImGui::BulletText("NKF-AEC - Jiang et al. (ICASSP 2023, MIT)");
+    ImGui::BulletText("DTLN-AEC - Westhausen & Meyer (ICASSP 2021, MIT)");
+    ImGui::BulletText("DTLN-NS - networkedaudio port of breizhn/DTLN denoise (MIT)");
+    ImGui::BulletText("ONNX Runtime - Microsoft (MIT)");
+    ImGui::BulletText("Dear ImGui - Omar Cornut (MIT)");
+    ImGui::BulletText("miniaudio - David Reid (MIT-0)");
+    ImGui::BulletText("GLFW - Marcus Geelnard / Camilla Berglund (zlib)");
+    ImGui::BulletText("stb_image - Sean Barrett (public domain)");
+    ImGui::BulletText("pocketfft - Max-Planck-Society (BSD-3)");
 
     ImGui::Spacing();
     ImGui::TextDisabled("Made with C++ and MinGW-w64");
@@ -2149,7 +2149,7 @@ void DrawUI() {
     DrawStatusDot(g_isRunning);
     ImGui::SameLine();
     if (g_isRunning)
-        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Running  %s", FormatUptime().c_str());
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Running %s", FormatUptime().c_str());
     else
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Idle");
 
@@ -2193,7 +2193,7 @@ void DrawUI() {
 
     {
         std::string startLabel = g_isRunning
-            ? ("Stop   " + FormatUptime())
+            ? ("Stop " + FormatUptime())
             : std::string("Start");
 
         if (g_isRunning) {
@@ -2239,7 +2239,7 @@ void DrawUI() {
             ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
                                "Reference: receiving speaker audio");
         else
-            ImGui::TextDisabled("Reference: silent (normal if nothing is playing  - \n"
+            ImGui::TextDisabled("Reference: silent (normal if nothing is playing - \n"
                                 "if speakers ARE playing, re-check Your speakers above)");
 
         ImGui::Spacing();
