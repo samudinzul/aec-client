@@ -304,7 +304,13 @@ void ShowTrayIcon() {
     g_nid.uID = 1;
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon = LoadIconA(NULL, IDI_APPLICATION);
+    // Same icon as the .exe itself (resources/app.ico, embedded as
+    // IDR_ICON1 in version.rc), so the tray doesn't show the stock
+    // Windows application icon next to an app that has its own.
+    // Fall back to IDI_APPLICATION if the resource is somehow
+    // missing — a broken LoadIcon is worse than the default.
+    g_nid.hIcon = LoadIconA(nullptr, MAKEINTRESOURCEA(101));
+    if (!g_nid.hIcon) g_nid.hIcon = LoadIconA(nullptr, IDI_APPLICATION);
     wcscpy_s(g_nid.szTip, L"AEC Client - running");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     g_trayIconActive = true;
