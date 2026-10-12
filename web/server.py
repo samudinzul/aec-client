@@ -34,8 +34,8 @@ prefs = {"mic": None, "ref": None, "out": None,
          "nsEnabled": True, "micGain": 1.0,
          "trayEnabled": True, "listenToSelf": False,
          "profile": 0, "experimentalEngines": False,
-         "soundboardGain": 1.0, "monitorEnabled": True,
-         "monitorGain": 1.0, "monitorDevice": None}
+         "soundboardGain": 0.08, "monitorEnabled": True,
+         "monitorGain": 0.30, "monitorDevice": None}
 
 
 def monitor_output_index():
@@ -308,9 +308,9 @@ def start():
         try:
             runner = AudioRunner(chain, prefs["mic"], prefs["ref"], out_idx,
                                  soundboard=board,
-                                 sb_gain=prefs.get("soundboardGain", 1.0),
+                                 sb_gain=prefs.get("soundboardGain", 0.08),
                                  monitor_idx=mon_idx,
-                                 monitor_gain=prefs.get("monitorGain", 1.0),
+                                 monitor_gain=prefs.get("monitorGain", 0.30),
                                  monitor_enabled=prefs.get("monitorEnabled", True))
             runner.start()
         except Exception as e:

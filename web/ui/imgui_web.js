@@ -197,8 +197,8 @@ class WebImGuiUI {
         lvl.innerHTML =
             '<span class="flabel">Soundboard gain</span>' +
             '<div class="fgrow" style="display:flex;gap:8px;align-items:center">' +
-            '<input type="range" id="ig-sbGain" min="0" max="200" step="1" value="100" style="flex:1">' +
-            '<span id="ig-sbGainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">100%</span>' +
+            '<input type="range" id="ig-sbGain" min="0" max="200" step="1" value="8" style="flex:1">' +
+            '<span id="ig-sbGainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">8%</span>' +
             '</div>';
         p.appendChild(lvl);
         p.appendChild(this.mk('div', 'hint',
@@ -220,8 +220,8 @@ class WebImGuiUI {
         monVol.innerHTML =
             '<span class="flabel">Monitor volume</span>' +
             '<div class="fgrow" style="display:flex;gap:8px;align-items:center">' +
-            '<input type="range" id="ig-monGain" min="0" max="200" step="1" value="100" style="flex:1">' +
-            '<span id="ig-monGainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">100%</span>' +
+            '<input type="range" id="ig-monGain" min="0" max="200" step="1" value="30" style="flex:1">' +
+            '<span id="ig-monGainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">30%</span>' +
             '</div>';
         p.appendChild(monVol);
         const monHint = this.mk('div', 'hint');
