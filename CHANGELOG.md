@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start without draining stale zeros first); backend probes cache
   for 5 s instead of re-scanning `sys.path` on every 10 Hz meter
   tick. TFLite invokes are untouched (still the dominant cost).
+- **Web: float32 FIR resamplers.** The 61-tap up/downsamplers ran in
+  float64 (with a float64 zero-stuff buffer and per-call converts),
+  while the desktop resamples in float32. Tables and convolves are
+  now float32 end to end — halves the resampler memory traffic. The
+  ~1e-7 difference is inaudible; smoke `out_rms`/`peak` verified
+  identical A/B on hardware.
 
 ## [1.13.0] - 2026-10-12
 
