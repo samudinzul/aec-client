@@ -55,7 +55,7 @@ No more headphones. No more echo. No dead-air noise.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on every path.
 - **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting.
-- **Low CPU usage** — engines typically well under 2% per stream on a typical desktop; the post stages add a fraction of a percent.
+- **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC is the lightest engine.
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
 - **Selectable sample rate** (16 / 48 kHz)
@@ -70,9 +70,9 @@ No more headphones. No more echo. No dead-air noise.
 
 ### Weak Hardware (low CPU / low RAM)
 
-All engines run well under 2% CPU on a typical desktop and the models
-are tiny (NKF is 45 KB; the DTLN pairs are a few MB), so RAM is rarely
-the bottleneck. If your machine is very low-end, in order of impact:
+The models are tiny (NKF is 45 KB; the DTLN pairs are a few MB), so RAM is rarely
+the bottleneck — CPU depends on your machine (check Task Manager during a
+call). If your machine is very low-end, in order of impact:
 
 1. **Pick the NKF-AEC profile** — smallest engine, designed for weak
    CPUs. Reveal it by ticking **Show experimental engines** on the
