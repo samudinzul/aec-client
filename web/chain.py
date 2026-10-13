@@ -21,6 +21,7 @@ Notes on fidelity vs the desktop app:
 
 import importlib.util
 import threading
+import time
 
 import numpy as np
 
@@ -38,6 +39,15 @@ PROFILES = (
 )
 
 
+# Backend probe cache: state() calls engine_available() for every
+# profile on every 10 Hz meter tick (plus REST polls), and each miss
+# re-scans sys.path. Backends only appear via (re)install, so a 5 s
+# TTL is indistinguishable from live probing at a fraction of the
+# stat() traffic.
+_PROBE_TTL = 5.0
+_probe_cache = {}  # name -> (deadline_monotonic, result)
+
+
 def engine_available(name):
     """Backend presence probe — finds the module spec WITHOUT
     importing it, so probing never pulls the native libraries
@@ -45,7 +55,25 @@ def engine_available(name):
     the engine is actually selected (set_engine), i.e. DTLN-only
     sessions never pay for backends they don't use. A stale/broken
     install (spec present, import fails) still fails closed with
-    a clear error at set_engine."""
+    a clear error at set_engine. Results are cached for _PROBE_TTL
+    (see above); a backend installed mid-run shows up a few seconds
+    later instead of instantly."""
+    try:
+        now = time.monotonic()
+    except Exception:
+        now = 0.0
+    hit = _probe_cache.get(name)
+    if hit is not None and now < hit[0]:
+        return hit[1]
+    result = _probe(name)
+    try:
+        _probe_cache[name] = (time.monotonic() + _PROBE_TTL, result)
+    except Exception:
+        pass
+    return result
+
+
+def _probe(name):
     if name == "dtln":
         return True  # LiteRT import failure surfaces at load, not here
     try:

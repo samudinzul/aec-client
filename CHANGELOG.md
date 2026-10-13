@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Web: less Python overhead in the audio path (same output).**
+  Four provably-identical cuts, no numeric changes: the output and
+  monitor callbacks no longer `.astype(np.float32)` frames the pump
+  already queued as float32 (same-dtype astype copies); the FIR
+  resamplers short-circuit all-zero frames to zeros (filtering
+  silence yields silence — the idle loopback ref and idle monitor
+  hit this constantly); the pump stops queueing zero-frames to the
+  idle monitor (a starved callback emits the same silence, and pads
+  start without draining stale zeros first); backend probes cache
+  for 5 s instead of re-scanning `sys.path` on every 10 Hz meter
+  tick. TFLite invokes are untouched (still the dominant cost).
+
 ## [1.13.0] - 2026-10-12
 
 ### Added

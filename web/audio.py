@@ -400,8 +400,11 @@ class AudioRunner:
                     frame = self._out_q.get_nowait()
                 except queue.Empty:
                     break
+                # No astype: the pump only queues float32 (chain output
+                # converted once in _pump), and resample_from_16k accepts
+                # any dtype anyway — astype on float32 copies every frame.
                 carry = np.concatenate([carry, resample_from_16k(
-                    frame.astype(np.float32), rate)])
+                    frame, rate)])
             if len(carry) >= frame_count:
                 out = carry[:frame_count]
                 self._out_carry = carry[frame_count:]
@@ -432,8 +435,9 @@ class AudioRunner:
                     frame = self._mon_q.get_nowait()
                 except queue.Empty:
                     break
+                # No astype (same float32-only-queue argument as _on_out).
                 carry = np.concatenate([carry, resample_from_16k(
-                    frame.astype(np.float32), rate)])
+                    frame, rate)])
             if len(carry) >= frame_count:
                 out = carry[:frame_count]
                 self._mon_carry = carry[frame_count:]
@@ -476,17 +480,15 @@ class AudioRunner:
         if sb is not None:
             out = out + sb * self.sb_gain
         # Monitor gets the soundboard alone — never the mic, or you
-        # would hear yourself on top of the pads. This runs every
-        # frame regardless of whether a pad is sounding: sb is None
-        # when idle, so feed silence and keep the monitor stream
-        # draining (the callback would otherwise starve).
-        if self.monitor_idx is not None and self.monitor_enabled:
+        # would hear yourself on top of the pads. Nothing is queued
+        # while idle (sb is None): a starved callback emits the same
+        # silence the zero-frames carried, so skipping them only removes
+        # queue traffic + resampling — and a pad starts playing
+        # immediately instead of behind a drain of stale zeros.
+        if (self.monitor_idx is not None and self.monitor_enabled
+                and sb is not None):
             try:
-                if sb is not None:
-                    self._mon_q.put_nowait(sb * self.monitor_gain)
-                else:
-                    self._mon_q.put_nowait(
-                        np.zeros(FRAME_SIZE, dtype=np.float32))
+                self._mon_q.put_nowait(sb * self.monitor_gain)
             except queue.Full:
                 pass
 

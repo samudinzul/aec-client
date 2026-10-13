@@ -209,6 +209,15 @@ def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
     """
     if _rs is not None:
         return _rs.fir_decimate_3(_c(x, np.float32))
+    x = np.asarray(x)
+    if x.size and not np.any(x):
+        # Silence fast path: filtering zeros yields zeros (0*x=0,
+        # sums of signed zeros stay zero through the int16 emission
+        # and RMS downstream), without the float64 convolve. Length
+        # replicates convolve(mode="same") exactly: max(len, taps),
+        # then every 3rd. The idle-loopback ref hits this constantly.
+        return np.zeros((max(x.size, _FIR.size) + 2) // 3,
+                        dtype=np.float32)
     y = np.convolve(x.astype(np.float64), _FIR, mode="same")
     return y[::3].astype(np.float32)
 
@@ -222,6 +231,14 @@ def _fir_interpolate_3(x: np.ndarray) -> np.ndarray:
     """
     if _rs is not None:
         return _rs.fir_interpolate_3(_c(x, np.float32))
+    x = np.asarray(x)
+    if x.size and not np.any(x):
+        # Silence fast path (same exactness argument as decimate):
+        # zero-stuffing zeros then convolving is zeros out, without
+        # the zero buffer + float64 convolve. Length replicates
+        # convolve(mode="same") exactly: max(3*len, taps). The idle
+        # monitor stream used to burn a full FIR here every frame.
+        return np.zeros(max(x.size * 3, _FIR_UP.size), dtype=np.float32)
     up = np.zeros(x.size * 3, dtype=np.float64)
     up[::3] = np.asarray(x, dtype=np.float64)
     y = np.convolve(up, _FIR_UP, mode="same")
