@@ -55,7 +55,7 @@ No more headphones. No more echo. No dead-air noise.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on every path.
 - **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting.
-- **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC is the lightest engine.
+- **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC has the lightest engine core, but with Noise suppression on, all chains cost about the same (every chain runs the NS pair).
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
 - **Selectable sample rate** (16 / 48 kHz)
@@ -260,9 +260,9 @@ One combo at the top of the Audio tab selects the engine. The label shows the en
 |--------|------------|--------------|-----|----------------|
 | **DTLN-AEC 128** *(default)* | Sounds natural | Very good | Moderate | **Start here.** Cleanest overall; also removes background noise. |
 | **WebRTC AEC3** | Can sound a bit processed | Strongest | Moderate | Echo still getting through (loud speakers, echoey room). |
-| **NKF-AEC** | Usually natural | Good (linear-only) | Small | Busy PC; or natural voice with a light cleanup chain. |
+| **NKF-AEC** | Usually natural | Good (linear-only) | Small core (≈Moderate with NS) | Busy PC; or natural voice with a light cleanup chain. |
 
-**Voice** = how natural you sound when both sides talk at once. **Echo** = how much of the other person’s speaker sound is cancelled out.
+**Voice** = how natural you sound when both sides talk at once. **Echo** = how much of the other person’s speaker sound is cancelled out. With **Noise suppression** on (the default), every chain also runs the NS pair — total CPU lands roughly the same on all three; the engine gap shows with NS off.
 
 **Quick pick:**
 1. Stay on **DTLN-AEC 128** unless something is wrong.
