@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [1.13.0] - 2026-10-12
+
+### Changed (web asset refreshed 2026-10-13, same version)
 
 - **Web: Windows audio QoS for the pump (fewer glitches).** The pump
   thread now runs under MMCSS "Pro Audio" at time-critical priority
@@ -16,11 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NORMAL on Stop) — so the pump stops losing scheduling fights to
   the browser and background apps. Reverted on thread exit; all
   fail-open stdlib `ctypes`, no dependency, no binary.
-
-## [1.13.0] - 2026-10-12
-
-### Changed (web asset refreshed 2026-10-13, same version)
-
 - **Web: desktop-agility meters.** The meters ticked at 10 Hz with a
   ~1 s release fall and quarter-height scaling next to the desktop
   window. Now: the WS loop ships `refRms` too (Mic/**Ref**/Out, like
