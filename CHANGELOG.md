@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Web: desktop-agility meters.** The meters ticked at 10 Hz with a
+  ~1 s release fall and quarter-height scaling next to the desktop
+  window. Now: the WS loop ships `refRms` too (Mic/**Ref**/Out, like
+  the desktop) at ~30 Hz; a `requestAnimationFrame` loop redraws all
+  three every frame from smoothed values (WS only moves targets);
+  instant attack with a ~140 ms release; scale x11 to match the
+  desktop's `/3000` sensitivity (full scale at -21 dBFS, not -12).
+  2D contexts cached. The `/classic` fallback shares the faster tick
+  (its hint updated).
+
 - **Web: less Python overhead in the audio path (same output).**
   Four provably-identical cuts, no numeric changes: the output and
   monitor callbacks no longer `.astype(np.float32)` frames the pump

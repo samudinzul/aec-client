@@ -353,6 +353,7 @@ class AudioRunner:
         self._streams = []
         self.in_rms = 0.0
         self.out_rms = 0.0
+        self.ref_rms = 0.0
         # Output resampler state — touched ONLY by the
         # PortAudio callback thread, so no lock is needed.
         # Linear stream buffers (dsp._StreamBuf): appends copy into
@@ -492,6 +493,7 @@ class AudioRunner:
                 pass
 
         self.in_rms = rms(mic_i16.astype(np.float32) / 32768.0)
+        self.ref_rms = rms(ref_i16.astype(np.float32) / 32768.0)
         self.out_rms = rms(out)
         try:
             self._out_q.put_nowait(out)

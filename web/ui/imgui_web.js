@@ -176,6 +176,7 @@ class WebImGuiUI {
         levels.innerHTML =
             '<div class="sep">Live Levels</div>' +
             '<div class="frow"><span class="flabel">Mic</span><canvas id="ig-mIn" class="meter" width="420" height="26"></canvas></div>' +
+            '<div class="frow"><span class="flabel">Ref</span><canvas id="ig-mRef" class="meter" width="420" height="26"></canvas></div>' +
             '<div class="frow"><span class="flabel">Out</span><canvas id="ig-mOut" class="meter" width="420" height="26"></canvas></div>';
         p.appendChild(levels);
         this.el.levels = levels;
@@ -330,7 +331,7 @@ class WebImGuiUI {
         this.el.start = q('ig-startBtn'); this.el.reset = q('ig-resetBtn');
         this.el.status = q('ig-status');
         this.el.err = q('ig-err'); this.el.devhint = q('ig-devhint');
-        this.el.mIn = q('ig-mIn'); this.el.mOut = q('ig-mOut');
+        this.el.mIn = q('ig-mIn'); this.el.mRef = q('ig-mRef'); this.el.mOut = q('ig-mOut');
         this.el.rescan = q('ig-rescan');
         this.el.cablewarn = q('ig-cablewarn');
         this.el.dotMic = q('ig-dotMic'); this.el.dotRef = q('ig-dotRef'); this.el.dotOut = q('ig-dotOut');
@@ -824,6 +825,13 @@ class WebImGuiUI {
         this.running = on;
         st = st || {};
         if (on) this.startStamp = Date.now();
+        if (on && !this._meterLoopOn) {
+            this._meterLoopOn = true;
+            this.micSmoothed = this.refSmoothed = this.outSmoothed = 0;
+            this.micTarget = this.refTarget = this.outTarget = 0;
+            requestAnimationFrame(() => this.meterLoop());
+        }
+        if (on) this.startStamp = Date.now();
         this.paintStartBtn();
         this.setDot(this.el.dot, on);
         this.el.runstate.textContent = on ? ('Running  ' + this.uptime()) : 'Idle';
@@ -841,32 +849,51 @@ class WebImGuiUI {
             this.el.devhint.textContent = '';
             this.el.status.textContent = 'Stopped.';
             this.updatePads([]);
-            this.micSmoothed = 0;
-            this.outSmoothed = 0;
+            this.micSmoothed = this.refSmoothed = this.outSmoothed = 0;
+            this.micTarget = this.refTarget = this.outTarget = 0;
         } else {
             this.el.status.textContent = 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')';
         }
         this.showMonitor();
     }
 
-    meter(canvas, v) {
-        const g = canvas.getContext('2d');
-        const w = canvas.width, h = canvas.height;
-        let key = null;
-        if (canvas.id === 'ig-mIn') key = 'micSmoothed';
-        else if (canvas.id === 'ig-mOut') key = 'outSmoothed';
-        if (key) {
-            if (this[key] === undefined) this[key] = 0;
-            const target = Math.min(1, Math.max(0, v * 4));
-            if (target >= this[key]) {
-                this[key] = target;
-            } else {
-                this[key] = this[key] * 0.9 + target * 0.1;
+    // Meter scale matches the desktop DrawLevelMeter(..., 3000.0f):
+    // int16 RMS / 3000 == float RMS * 32768/3000 (~x11, full scale at
+    // -21 dBFS). The old x4 needed -12 dBFS for full scale, so normal
+    // speech parked at quarter height next to the desktop window.
+    meterScale(v) {
+        return Math.min(1, Math.max(0, v * 11));
+    }
+
+    // Render loop: redraws the meters every animation frame from the
+    // smoothed values while running; WS ticks only move the targets,
+    // so motion is 60 fps even though data arrives at ~30 Hz. Attack
+    // snaps like the desktop's raw reads; release decays ~140 ms so
+    // syllable gaps read instead of flicker. Started once from
+    // setRunning; a missing canvas never kills the loop.
+    meterLoop() {
+        try {
+            if (this.running) {
+                const pairs = [
+                    [this.el.mIn, 'micSmoothed', 'micTarget'],
+                    [this.el.mRef, 'refSmoothed', 'refTarget'],
+                    [this.el.mOut, 'outSmoothed', 'outTarget'],
+                ];
+                for (const [c, sk, tk] of pairs) {
+                    if (!c) continue;
+                    const t = this[tk] || 0;
+                    const v = this[sk] || 0;
+                    this[sk] = t >= v ? t : v + (t - v) * 0.3;
+                    this.drawMeter(c, this[sk]);
+                }
             }
-            v = this[key];
-        } else {
-            v = Math.min(1, Math.max(0, v * 4));
-        }
+        } catch (e) { /* keep the loop alive */ }
+        requestAnimationFrame(() => this.meterLoop());
+    }
+
+    drawMeter(canvas, v) {
+        const g = canvas._ctx || (canvas._ctx = canvas.getContext('2d'));
+        const w = canvas.width, h = canvas.height;
         g.clearRect(0, 0, w, h);
         const bw = Math.floor(v * w);
         g.fillStyle = '#2a9d5c';
@@ -915,7 +942,7 @@ class WebImGuiUI {
                 this.paintStartBtn();
             }
             // Guard every WS-driven form update with activeElement:
-            // the 10 Hz tick must not fight the user mid-drag/mid-click
+            // the 30 Hz tick must not fight the user mid-drag/mid-click
             // (the slider was snapping back while being dragged).
             if (st.nsEnabled !== undefined && !!+st.nsEnabled !== this.el.ns.checked
                 && document.activeElement !== this.el.ns)
@@ -939,8 +966,10 @@ class WebImGuiUI {
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }
             }
             if (!st.running) return;
-            this.meter(this.el.mIn, st.inRms || 0);
-            this.meter(this.el.mOut, st.outRms || 0);
+            // Targets only — the rAF meterLoop renders them at 60 fps.
+            this.micTarget = this.meterScale(st.inRms || 0);
+            this.refTarget = this.meterScale(st.refRms || 0);
+            this.outTarget = this.meterScale(st.outRms || 0);
             this.el.status.textContent =
                 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ') · NS ' + ((st.ns && st.ns.backend) || '?') +
                 (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '');

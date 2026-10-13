@@ -365,13 +365,14 @@ async def ws_meters(ws: WebSocket):
             r = runner
             if r is not None:
                 st["inRms"] = r.in_rms
+                st["refRms"] = r.ref_rms
                 st["outRms"] = r.out_rms
             await ws.send_text(json.dumps({"type": "state", **st}))
         except WebSocketDisconnect:
             break
         except Exception:
             pass  # transient: keep the meter stream alive
-        await asyncio.sleep(0.1)  # ~10 Hz meters
+        await asyncio.sleep(0.033)  # ~30 Hz meters (localhost JSON is cheap)
 
 
 def main():
