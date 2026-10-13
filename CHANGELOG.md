@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [1.13.0] - 2026-10-12
+
+### Changed (web asset refreshed 2026-10-13, same version)
 
 - **Web: desktop-agility meters.** The meters ticked at 10 Hz with a
   ~1 s release fall and quarter-height scaling next to the desktop
@@ -44,8 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and compacts/grows only when the tail runs out. Same samples in
   and out; live Start/Stop to verify (no offline test covers the
   PortAudio callbacks).
-
-## [1.13.0] - 2026-10-12
 
 ### Added
 
