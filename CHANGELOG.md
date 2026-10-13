@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Web: Windows audio QoS for the pump (fewer glitches).** The pump
+  thread now runs under MMCSS "Pro Audio" at time-critical priority
+  (same treatment PortAudio gives its own callback threads), and the
+  server process sits at ABOVE_NORMAL while audio runs (back to
+  NORMAL on Stop) — so the pump stops losing scheduling fights to
+  the browser and background apps. Reverted on thread exit; all
+  fail-open stdlib `ctypes`, no dependency, no binary.
+
 ## [1.13.0] - 2026-10-12
 
 ### Changed (web asset refreshed 2026-10-13, same version)

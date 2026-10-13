@@ -29,6 +29,7 @@ emits silence.
 """
 
 import queue
+import sys
 import threading
 
 import numpy as np
@@ -43,6 +44,66 @@ from .dsp import (FRAME_SIZE, SAMPLE_RATE, resample_from_16k,
 from . import dsp  # soft_limit (tanh knee) is referenced as dsp.soft_limit
 
 _Q_DEPTH = 64
+
+
+def _pump_qos():
+    """Real-time scheduling for the calling (pump) thread, Windows only.
+
+    Mirrors what PortAudio does for its own callback threads: MMCSS
+    "Pro Audio" task + time-critical priority, so the pump is scheduled
+    like an audio thread instead of a normal Python worker fighting
+    the browser, the WS loop, and whatever else is open. Returns a
+    revert callable (call it when the thread exits, releasing the
+    MMCSS slot) or None when QoS is unavailable. Fail-open everywhere:
+    no QoS is always safe, just less glitch-resistant. Stdlib ctypes
+    only — no new dependency, no binary, SECURITY.md-clean.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        avrt = ctypes.windll.avrt
+        task_index = ctypes.c_ulong(0)
+        handle = avrt.AvSetMmThreadCharacteristicsW(
+            "Pro Audio", ctypes.byref(task_index))
+        if not handle:
+            return None
+        try:
+            kernel32.SetThreadPriority(
+                kernel32.GetCurrentThread(), 15)  # TIME_CRITICAL
+        except Exception:
+            pass
+
+        def _revert():
+            try:
+                avrt.AvRevertMmThreadCharacteristics(handle)
+            except Exception:
+                pass
+        return _revert
+    except Exception:
+        return None
+
+
+def _process_qos(high):
+    """Nudge the whole server process class while audio runs.
+
+    ABOVE_NORMAL (not HIGH: never starve the system on a weak
+    machine) on start, back to NORMAL on stop — best-effort, Windows
+    only. The pump thread itself gets MMCSS separately (_pump_qos);
+    this just keeps the GUI/WS threads from losing scheduling fights
+    during a call.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetPriorityClass(
+            kernel32.GetCurrentProcess(),
+            0x00008000 if high else 0x00000020)  # ABOVE_NORMAL / NORMAL
+    except Exception:
+        pass
 
 
 def _need_pa():
@@ -506,40 +567,49 @@ class AudioRunner:
         # appends copy into spare capacity, frames pop a head view.
         mic_buf = dsp._StreamBuf()
         ref_buf = dsp._StreamBuf()
-        while not self._stop.is_set():
-            try:
-                raw_mic = self._in_q.get(timeout=0.05)
-            except queue.Empty:
-                continue
-            # Loopback starves while the speakers are idle
-            # (WASAPI delivers no frames until something
-            # plays), so never stall the mic path on it:
-            # a missing ref reads as digital silence,
-            # which is exactly what "nothing playing"
-            # means to the AEC. Same as the desktop's
-            # ref-ring underflow path (main.cpp
-            # output_callback) — without this, a fresh
-            # start with no audio playing looked dead:
-            # mic chunks were dropped waiting for a ref
-            # that never came, until Discord opened and
-            # woke the loopback.
-            try:
-                raw_ref = self._ref_q.get_nowait()
-            except queue.Empty:
-                n_ref = max(1, int(round(
-                    len(raw_mic) * self._ref_rate
-                    / self._mic_rate)))
-                raw_ref = np.zeros(n_ref, dtype=np.int16)
-            mic_buf.append(resample_to_16k(raw_mic, self._mic_rate))
-            ref_buf.append(resample_to_16k(raw_ref, self._ref_rate))
-            while len(mic_buf) >= FRAME_SIZE and len(ref_buf) >= FRAME_SIZE:
-                mic_i16 = (mic_buf.pop(FRAME_SIZE)
-                           * 32767.0).astype(np.int16)
-                ref_i16 = (ref_buf.pop(FRAME_SIZE)
-                           * 32767.0).astype(np.int16)
-                self._pump(mic_i16, ref_i16)
+        qos_revert = _pump_qos()
+        try:
+            while not self._stop.is_set():
+                self._work_step(mic_buf, ref_buf)
+        finally:
+            if qos_revert is not None:
+                qos_revert()
+
+    def _work_step(self, mic_buf, ref_buf):
+        try:
+            raw_mic = self._in_q.get(timeout=0.05)
+        except queue.Empty:
+            return
+        # Loopback starves while the speakers are idle
+        # (WASAPI delivers no frames until something
+        # plays), so never stall the mic path on it:
+        # a missing ref reads as digital silence,
+        # which is exactly what "nothing playing"
+        # means to the AEC. Same as the desktop's
+        # ref-ring underflow path (main.cpp
+        # output_callback) — without this, a fresh
+        # start with no audio playing looked dead:
+        # mic chunks were dropped waiting for a ref
+        # that never came, until Discord opened and
+        # woke the loopback.
+        try:
+            raw_ref = self._ref_q.get_nowait()
+        except queue.Empty:
+            n_ref = max(1, int(round(
+                len(raw_mic) * self._ref_rate
+                / self._mic_rate)))
+            raw_ref = np.zeros(n_ref, dtype=np.int16)
+        mic_buf.append(resample_to_16k(raw_mic, self._mic_rate))
+        ref_buf.append(resample_to_16k(raw_ref, self._ref_rate))
+        while len(mic_buf) >= FRAME_SIZE and len(ref_buf) >= FRAME_SIZE:
+            mic_i16 = (mic_buf.pop(FRAME_SIZE)
+                       * 32767.0).astype(np.int16)
+            ref_i16 = (ref_buf.pop(FRAME_SIZE)
+                       * 32767.0).astype(np.int16)
+            self._pump(mic_i16, ref_i16)
 
     def start(self):
+        _process_qos(True)
         self._pa = pa_patch.PyAudio()
         self._mic_rate = int(self._pa.get_device_info_by_index(
             self.mic_idx).get("defaultSampleRate", 48000) or 48000)
@@ -617,3 +687,4 @@ class AudioRunner:
                     q.get_nowait()
                 except queue.Empty:
                     break
+        _process_qos(False)
