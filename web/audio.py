@@ -355,12 +355,15 @@ class AudioRunner:
         self.out_rms = 0.0
         # Output resampler state — touched ONLY by the
         # PortAudio callback thread, so no lock is needed.
+        # Linear stream buffers (dsp._StreamBuf): appends copy into
+        # spare tail capacity and consumption advances the head, so
+        # the per-callback concatenate + slice-copy churn is gone.
         self._mic_rate = 48000
         self._ref_rate = 48000
         self._out_rate = 48000
-        self._out_carry = np.zeros(0, dtype=np.float32)
+        self._out_carry = dsp._StreamBuf()
         self._mon_rate = 48000
-        self._mon_carry = np.zeros(0, dtype=np.float32)
+        self._mon_carry = dsp._StreamBuf()
 
     # -------------------------------------------------------
     #  PortAudio callbacks (run on PortAudio's thread;
@@ -403,18 +406,16 @@ class AudioRunner:
                 # No astype: the pump only queues float32 (chain output
                 # converted once in _pump), and resample_from_16k accepts
                 # any dtype anyway — astype on float32 copies every frame.
-                carry = np.concatenate([carry, resample_from_16k(
-                    frame, rate)])
-            if len(carry) >= frame_count:
-                out = carry[:frame_count]
-                self._out_carry = carry[frame_count:]
+                carry.append(resample_from_16k(frame, rate))
+            n = min(len(carry), frame_count)
+            if n == frame_count:
+                out = carry.pop(n)
             else:
                 # Starved: pad with silence so the cable never
                 # underruns audibly (main.cpp output_callback).
                 out = np.zeros(frame_count, dtype=np.float32)
-                if len(carry):
-                    out[:len(carry)] = carry
-                self._out_carry = np.zeros(0, dtype=np.float32)
+                if n:
+                    out[:n] = carry.pop(n)
             # Soft limiter (tanh knee at -3 dBFS), not a hard clip at 0 dBFS:
             # the resampled mix can crest past 1.0 and a hard clip is
             # square-wave distortion. Mirrors main.cpp SoftLimit.
@@ -436,16 +437,14 @@ class AudioRunner:
                 except queue.Empty:
                     break
                 # No astype (same float32-only-queue argument as _on_out).
-                carry = np.concatenate([carry, resample_from_16k(
-                    frame, rate)])
-            if len(carry) >= frame_count:
-                out = carry[:frame_count]
-                self._mon_carry = carry[frame_count:]
+                carry.append(resample_from_16k(frame, rate))
+            n = min(len(carry), frame_count)
+            if n == frame_count:
+                out = carry.pop(n)
             else:
                 out = np.zeros(frame_count, dtype=np.float32)
-                if len(carry):
-                    out[:len(carry)] = carry
-                self._mon_carry = np.zeros(0, dtype=np.float32)
+                if n:
+                    out[:n] = carry.pop(n)
             # Soft limiter (tanh knee at -3 dBFS), not a hard clip at 0 dBFS:
             # the resampled mix can crest past 1.0 and a hard clip is
             # square-wave distortion. Mirrors main.cpp SoftLimit.
@@ -500,8 +499,11 @@ class AudioRunner:
             pass
 
     def _work(self):
-        mic_buf = np.zeros(0, dtype=np.float32)   # 16 kHz domain
-        ref_buf = np.zeros(0, dtype=np.float32)
+        # Linear stream buffers (16 kHz domain): the old
+        # concatenate-per-chunk + slice-copy-per-frame churn is gone;
+        # appends copy into spare capacity, frames pop a head view.
+        mic_buf = dsp._StreamBuf()
+        ref_buf = dsp._StreamBuf()
         while not self._stop.is_set():
             try:
                 raw_mic = self._in_q.get(timeout=0.05)
@@ -526,18 +528,14 @@ class AudioRunner:
                     len(raw_mic) * self._ref_rate
                     / self._mic_rate)))
                 raw_ref = np.zeros(n_ref, dtype=np.int16)
-            mic_buf = np.concatenate(
-                [mic_buf, resample_to_16k(raw_mic, self._mic_rate)])
-            ref_buf = np.concatenate(
-                [ref_buf, resample_to_16k(raw_ref, self._ref_rate)])
+            mic_buf.append(resample_to_16k(raw_mic, self._mic_rate))
+            ref_buf.append(resample_to_16k(raw_ref, self._ref_rate))
             while len(mic_buf) >= FRAME_SIZE and len(ref_buf) >= FRAME_SIZE:
-                mic_i16 = (mic_buf[:FRAME_SIZE]
+                mic_i16 = (mic_buf.pop(FRAME_SIZE)
                            * 32767.0).astype(np.int16)
-                ref_i16 = (ref_buf[:FRAME_SIZE]
+                ref_i16 = (ref_buf.pop(FRAME_SIZE)
                            * 32767.0).astype(np.int16)
                 self._pump(mic_i16, ref_i16)
-                mic_buf = mic_buf[FRAME_SIZE:]
-                ref_buf = ref_buf[FRAME_SIZE:]
 
     def start(self):
         self._pa = pa_patch.PyAudio()
@@ -547,7 +545,7 @@ class AudioRunner:
             self.ref_idx).get("defaultSampleRate", 48000) or 48000)
         self._out_rate = int(self._pa.get_device_info_by_index(
             self.out_idx).get("defaultSampleRate", 48000) or 48000)
-        self._out_carry = np.zeros(0, dtype=np.float32)
+        self._out_carry = dsp._StreamBuf()
         mic_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._mic_rate, input=True,
                               input_device_index=self.mic_idx,
@@ -568,7 +566,7 @@ class AudioRunner:
             try:
                 self._mon_rate = int(self._pa.get_device_info_by_index(
                     self.monitor_idx).get("defaultSampleRate", 48000) or 48000)
-                self._mon_carry = np.zeros(0, dtype=np.float32)
+                self._mon_carry = dsp._StreamBuf()
                 while not self._mon_q.empty():
                     try:
                         self._mon_q.get_nowait()

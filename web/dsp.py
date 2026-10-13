@@ -108,6 +108,63 @@ class _Ring:
         return out.copy()
 
 
+class _StreamBuf:
+    """Append-at-tail / consume-from-head float32 buffer with no
+    per-op allocations.
+
+    Replaces the np.concatenate-per-append + slice-copy-per-consume
+    pattern in the pump and output callbacks: appends copy into spare
+    tail capacity, consumption only advances the head, and the live
+    window is compacted (one memmove) only when the tail runs out —
+    then the buffer grows instead if compaction is not enough (it
+    never shrinks back). Values in/out are identical to the concat
+    version; only allocations and GC churn disappear.
+
+    pop() returns a VIEW into the buffer: use it immediately in the
+    calling expression (every caller does). A later append may
+    compact underneath a retained view — the view keeps its (now
+    stale) data, so never hold one across calls.
+    """
+
+    __slots__ = ("buf", "head", "tail")
+
+    def __init__(self, cap=4096):
+        self.buf = np.zeros(cap, dtype=np.float32)
+        self.head = 0
+        self.tail = 0
+
+    def __len__(self):
+        return self.tail - self.head
+
+    def append(self, x):
+        x = np.asarray(x, dtype=np.float32)  # no-op for float32 input
+        n = len(x)
+        if n == 0:
+            return
+        if self.tail + n > self.buf.size:
+            if self.head:
+                live = self.tail - self.head
+                self.buf[:live] = self.buf[self.head:self.tail]
+                self.tail = live
+                self.head = 0
+            if self.tail + n > self.buf.size:
+                grown = np.zeros(
+                    max(self.buf.size * 2, self.tail + n),
+                    dtype=np.float32)
+                grown[:self.tail] = self.buf[:self.tail]
+                self.buf = grown
+        self.buf[self.tail:self.tail + n] = x
+        self.tail += n
+
+    def pop(self, n):
+        """First-n-samples view; advances the head. Use immediately."""
+        out = self.buf[self.head:self.head + n]
+        self.head += n
+        if self.head == self.tail:
+            self.head = self.tail = 0  # drained: rewind, never walk far
+        return out
+
+
 BLOCK_LEN = 512
 BLOCK_SHIFT = 128
 BINS = 257  # rfft(512)

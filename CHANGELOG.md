@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now float32 end to end — halves the resampler memory traffic. The
   ~1e-7 difference is inaudible; smoke `out_rms`/`peak` verified
   identical A/B on hardware.
+- **Web: linear stream buffers, no per-callback churn.** The pump
+  frame buffers and both output carries grew by `concatenate` per
+  chunk and copied the tail on every consume — hundreds of small
+  allocations per second feeding GC pauses. `dsp._StreamBuf`
+  appends into spare tail capacity, consumes by advancing the head,
+  and compacts/grows only when the tail runs out. Same samples in
+  and out; live Start/Stop to verify (no offline test covers the
+  PortAudio callbacks).
 
 ## [1.13.0] - 2026-10-12
 
