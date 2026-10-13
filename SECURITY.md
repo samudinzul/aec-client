@@ -83,8 +83,12 @@ that is why the web build exists.
 
 ## Release hygiene
 
-- Never `--clobber` a published release with different code: every
-  version ships once, under a new tag, after the asserts pass.
+- Every version ships once, under a new tag, after the asserts pass.
+  Exception, used once (v1.13.0 web asset): a script/data-only refresh
+  under the same tag is allowed **iff** the bundle is rebuilt from the
+  tagged source, fully rescanned, and recorded — new hashes + links in
+  the release notes and a CHANGELOG addendum. Anything touching the
+  desktop `.exe` always takes a new version instead.
 - Before publishing, upload both zips to VirusTotal manually and
   record the verdict with the release notes. A single detection on
   a previously-clean build blocks the release until explained.

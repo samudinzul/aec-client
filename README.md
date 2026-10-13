@@ -54,7 +54,7 @@ No more headphones. No more echo. No dead-air noise.
   - AEC3 and NKF-AEC are **experimental** — hidden from the menu by default; tick **Show experimental engines** on the Appearance tab to reveal them.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on every path.
-- **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting; NKF keeps its divergence guard, staged exposure, loop brakes, no-cancel watchdog and loop-gated tracking notch (all self-releasing, all voice-safe by construction).
+- **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting.
 - **Low CPU usage** — engines typically well under 2% per stream on a typical desktop; the post stages add a fraction of a percent.
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
@@ -251,7 +251,6 @@ One combo at the top of the Audio tab selects the engine. The label shows the en
 - Sample rate (More → Processing), gains and devices are independent of the profile. Only the 16-kHz-only engines (DTLN, NKF) force the rate back to 16 kHz.
 - Status line shows the active chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - AEC3 and NKF-AEC are experimental: hidden by default, revealed by ticking **Show experimental engines** on the Appearance tab.
-- Old configs migrate automatically: the five v1.9 presets map onto these three, and an old *Manual* setup lands on the profile for its engine.
 
 ---
 
@@ -307,150 +306,29 @@ Your speakers  ───────────┘   (AEC3 / NKF / DTLN)
 ```
 
 1. **Capture** — the mic and the speaker output (loopback) are read at the same time.
-2. **Cancel** — the engine subtracts the speaker sound from the mic, leaving your voice.
-3. **Post stages** — the cleaned audio passes the post stage that actually runs for the engine (each with its own tick; meters show this stage — what Discord hears).
-4. **Deliver** — the signal runs through the soft limiter and output gain, goes to VB-CABLE; Discord uses that as its microphone.
+2. **Cancel** — the engine subtracts the speaker sound from the mic, leaving your voice; noise suppression cleans it further.
+3. **Deliver** — through the soft limiter to VB-CABLE; Discord uses that as its microphone (meters show this signal).
 
-Settings are saved automatically. Only one copy of the app runs at a time (opening it again focuses the existing window).
+Settings save automatically. Only one copy runs at a time (reopening focuses the existing window).
 
 ---
 
 ## Technical Stack
 
-### Languages
-
-| Language | Role |
-|----------|------|
-| **C++17** | Main application |
-| **Python** | Web UI (server, DSP, engines via LiteRT / pywebrtc-audio / onnxruntime) |
-| **C** | Third-party libraries (miniaudio, stb_image, GGML via NKF) |
-| **CMake** | Build system |
-| **Bash** | Build scripts |
-| **Markdown** | Documentation |
-
-### Build Toolchain
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| **GCC (MinGW-w64)** | 16.2.0 | C/C++ compiler |
-| **CMake** | 3.20+ | Build system generator |
-| **Ninja** | — | Fast build backend |
-| **ccache** | — | Compile caching |
-| **gendef / dlltool** | — | Generate MinGW import libraries |
-| **MSYS2 UCRT64** | — | Build environment |
-
-### AEC Engines
-
-| Engine | Type | Language | Source |
-|--------|------|----------|--------|
-| **WebRTC AEC3** | Advanced DSP | C++ | [MSYS2 package](https://packages.msys2.org/package/mingw-w64-ucrt-x86_64-webrtc-audio-processing-1) |
-| **NKF-AEC** | Neural (Kalman) | C++ | [William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC) |
-| **DTLN-AEC** | Neural (dual-LSTM) | C++ | [breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec) |
-| **DTLN-NS** | Neural (dual-LSTM) | ONNX/TFLite | `src/dtln_ns_wrapper.cpp` |
-
-### Libraries
-
-| Library | Language | Purpose |
-|---------|----------|---------|
-| **[miniaudio](https://github.com/mackron/miniaudio)** | C (single-header) | Cross-platform audio I/O |
-| **[Dear ImGui](https://github.com/ocornut/imgui)** | C++ | Immediate-mode GUI |
-| **[GLFW](https://www.glfw.org/)** | C | Window + OpenGL context |
-| **[OpenGL](https://www.opengl.org/)** | — | Rendering backend |
-| **[stb_image](https://github.com/nothings/stb)** | C (single-header) | Image loading for wallpapers |
-| **[ONNX Runtime](https://onnxruntime.ai/)** | C++ | Neural inference (NKF-AEC, DTLN-AEC ONNX fallback) |
-| **[pocketfft](https://github.com/mreineck/pocketfft)** | C++ (header) | FFT for NKF-AEC, DTLN-AEC |
-| **[AudioFile](https://github.com/adamstark/AudioFile)** | C++ (header) | WAV I/O for NKF-AEC |
-
-Web UI only (`web/`):
-
-| Library | Language | Purpose |
-|---------|----------|---------|
-| **[FastAPI](https://fastapi.tiangolo.com/) + uvicorn** | Python | REST + WebSocket server, serves the GUI |
-| **[ai-edge-litert](https://pypi.org/project/ai-edge-litert/)** (LiteRT) | Python | Runs the DTLN `.tflite` models |
-| **[pyaudiowpatch](https://pypi.org/project/pyaudiowpatch/)** | Python | PortAudio fork: mic in, WASAPI loopback, CABLE out |
-| **[numpy](https://numpy.org/)** | Python | DSP: rFFT/OLA, resampling, metering |
-
-### Windows APIs
-
-| API | Purpose |
-|-----|---------|
-| **WASAPI** (via miniaudio) | Audio capture, loopback, playback |
-| **Win32** (`windows.h`) | Native window handle manipulation |
-| **Shell** (`shellapi.h`) | System tray icon |
-| **COM** (`ole32`, `uuid`) | Underneath WASAPI |
-| **WinMM** (`winmm`) | Legacy audio support |
-| **shell32** | Tray icon functions |
-
-### DSP Concepts
-
-- Acoustic echo cancellation via adaptive subband filtering (AEC3)
-- Neural Kalman filtering (NKF-AEC) with delay alignment (TDC)
-- Dual-signal LSTM echo + noise cancellation (DTLN-AEC)
-- DTLN noise suppression after every engine (on/off tick)
-- Soft limiter (−3 dBFS tanh knee) + fail-open fade (never a click)
-- Frame buffering at 10–16 ms intervals
-- Lock-free SPSC ring buffers (audio thread ↔ UI thread)
-- Clock-drift correction (dynamic sample drop/duplicate)
-- RMS metering (live levels show the post-stage signal)
-- Self-monitor loop brakes (NKF: wire trim + escalation, loop-gated tracking notch, no-cancel watchdog — the engine keeps adapting underneath)
+Desktop: C++17 + Dear ImGui + miniaudio, built with MinGW-w64 GCC /
+CMake / Ninja on MSYS2 UCRT64. Web UI: Python (FastAPI + LiteRT +
+pyaudiowpatch + NumPy). Engines: WebRTC AEC3 (Google), NKF-AEC
+([William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC)),
+DTLN-AEC + DTLN-NS ([breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec)).
+Full credits in [Credits](#credits) and `LICENSES/THIRD-PARTY.txt`.
 
 ---
 
 ## About the Neural Engines
 
-### NKF-AEC
-
-NKF-AEC (Neural Kalman Filtering for Acoustic Echo Cancellation) is a research model published at **ICASSP 2023** by Jiang et al. It combines classical Kalman filtering with a small neural network.
-
-- **Model size**: 45 KB (~5.3K parameters — tiny *neural* core)
-- **Sample rate**: 16 kHz (auto-locked)
-- **Latency**: ~32 ms
-- **CPU**: Small for the NKF core alone (paper RTF 0.09). **Not** measured against AEC3 in this app. The linear Kalman core carries an intrinsic Wiener residual suppressor (per-bin gain from its own echo estimate — the **NKF-AEC** profile is Kalman + RES + DTLN-NS stacked). Monitor loops meet downstream brakes only (wire trim with escalation, loop-gated tracking notch, no-cancel watchdog): the engine never freezes or un-exposes, which field tests showed sustains howls.
-
-The wrapper at `src/nkf_wrapper.cpp` handles real-time streaming via the `ProcessBlock()` extension we added.
-
-The full source is patched in `third_party/REAL_TIME_NKF_AEC/` and compiled directly into `aec_gui.exe` (a standalone `libnkf_aec.dll` went stale against the header once — no separate DLL build anymore).
-
-### Post stage: noise suppression (all engines)
-
-One **Noise suppression (DTLN-NS)** tick shows for every engine — a second DTLN pair (same 512/128/257 DSP as the echo canceller, minus the loud-playback feed) that removes background noise after the engine. The WebRTC NS post-stage was retired; DTLN-NS replaces it everywhere. The tick is a global pref: switching engines never resets it.
-
-- **Fail-open**: a dead or mismatched stage passes audio straight through — it can never mute or blow up the stream. `src/dtln_ns_wrapper.cpp`.
-
-### DTLN-AEC 128
-
-DTLN-AEC (Dual-signal Transformation LSTM Network) by Westhausen & Meyer (**ICASSP 2021**, 3rd place in the Microsoft AEC Challenge) cancels echo **and** noise with a two-stage LSTM (separation mask + waveform refinement).
-
-- **Model size**: 1.8M parameters (128 LSTM units/layer), two files: `dtln_aec_128_1` + `dtln_aec_128_2` (lighter/faster than the upstream 512-unit pair; same 512-sample DSP block)
-- **Sample rate**: 16 kHz (auto-locked)
-- **DSP**: 512-sample block, 128-sample shift, 257-bin FFT, overlap-add
-- **Runtime (in probe order)**:
-  1. **TFLite** — drop `dtln_aec_128_1.tflite` + `dtln_aec_128_2.tflite` from [breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec) into `models/` plus a Windows `tensorflowlite_c.dll` next to `aec_gui.exe` (loaded at runtime, no rebuild needed)
-  2. **ONNX fallback** — `dtln_aec_128_1.onnx` + `dtln_aec_128_2.onnx` in `models/` (reuses the already-linked ONNX Runtime)
-- Without either pair the engine reports `Failed to load DTLN model` on Start; all other engines are unaffected.
-
-The wrapper at `src/dtln_wrapper.cpp` handles frame accumulation (128-sample shifts bridged to the 160-sample audio callback), int16 ↔ float conversion, LSTM state carry-over, and graceful fallback to mic on inference failure.
-
-### DTLN noise reduction (DTLN-NS)
-
-A second DTLN pair that removes background noise from the mic — same
-512-block / 128-shift / 257-bin DSP as the echo canceller, minus the
-loud-playback feed. Runs after the engine on every path
-(the WebRTC NS post-stage was retired).
-
-- **Runtime (in probe order)**:
-  1. **TFLite** — `dtln_ns_128_1.tflite` + `dtln_ns_128_2.tflite` from
-     [networkedaudio/Realtime_AudioDenoise_EchoCancellation](https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation)
-     (a port of breizhn/DTLN denoise) into `models/`, plus the same
-     `tensorflowlite_c.dll` next to `aec_gui.exe`
-  2. **ONNX fallback** — `dtln_ns_128_1.onnx` + `dtln_ns_128_2.onnx`
-     in `models/` (reuses the already-linked ONNX Runtime)
-- **Fail-open**: any inference error (bad tensor, model mismatch, DLL
-  issue) leaves the frame untouched — it never mutes the near-end
-  voice.
-- The wrapper is `src/dtln_ns_wrapper.cpp`; live diagnostics (backend,
-  ring fill, dropped samples, in/out RMS) show under the checkbox in
-  the More panel.
+- **NKF-AEC** (Jiang et al., ICASSP 2023) — tiny neural Kalman core (45 KB model, 16 kHz) for weak CPUs, with built-in residual suppression. Self-releasing loop protection underneath; never mutes.
+- **DTLN-AEC 128** (Westhausen & Meyer, ICASSP 2021) — dual-LSTM echo + noise canceller (1.8M params, 16 kHz). Needs `tensorflowlite_c.dll` next to the exe *or* the `.onnx` pair in `models/`; otherwise Start reports `Failed to load DTLN model` (other engines unaffected).
+- **Noise suppression (DTLN-NS)** — one tick for every engine: a second DTLN pair that removes background noise after the engine. Fail-open — a broken stage passes audio through, never mutes.
 
 ---
 
@@ -478,10 +356,19 @@ git clone https://github.com/samudinzul/aec-client.git
 cd aec-client
 ```
 
-### Build NKF-AEC Engine
+### Build the Main App
 
-No separate step: `third_party/REAL_TIME_NKF_AEC/c/NKFImpl.cpp` is part
-of the main `aec_gui` target and builds with the rest of the app.
+```bash
+cd /path/to/aec-client
+scripts/make-desktop-build.sh --fresh --run
+```
+
+First build: ~1 minute. Output: `build/aec_gui.exe` (launched by `--run`).
+Without the script: `cmake -B build -G Ninja && cmake --build build`,
+then run `build/aec_gui.exe`. See [scripts/README.md](scripts/README.md)
+for flags. NKF compiles in-tree — no separate engine step.
+
+---
 
 ### Download Models
 
@@ -509,34 +396,9 @@ curl -L -o models/dtln_ns_128_2.tflite \
 # Plus Windows tensorflowlite_c.dll next to aec_gui.exe (extract from a release ZIP),
 # or convert the pairs to models/dtln_aec_128_{1,2}.onnx and
 # models/dtln_ns_128_{1,2}.onnx (ONNX Runtime fallback).
-
-# Silero VAD was retired before any v2.0 release (the voice gate is gone).
-# The WPE / adaptive-notch post stages were retired after v1.10.1
-# (deleted sources; NKF now uses DTLN-NS like every other engine).
 ```
 
 See [MODELS.md](MODELS.md) for sizes and SHA-256 checks.
-
-### Build the Main App
-
-```bash
-cd /path/to/aec-client
-cmake -B build -G Ninja \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-cmake --build build
-```
-
-First build: ~1 minute. Subsequent builds with ccache: ~15 seconds.
-
-Output: `build/aec_gui.exe`.
-
-### Run
-
-```bash
-cd build
-./aec_gui.exe
-```
 
 ---
 
@@ -579,7 +441,7 @@ aec-client/
 │   ├── dtln.py / dtln_ns.py    DTLN-AEC / DTLN-NS engines (LiteRT)
 │   ├── aec3.py               WebRTC AEC3 engine (pywebrtc-audio)
 │   ├── nkf.py                NKF-AEC engine + stages (onnxruntime, NumPy port)
-│   ├── ui/index.html           The GUI
+│   ├── ui/imgui_web.html + imgui_web.js   The GUI (Dear ImGui port; index.html is the classic fallback)
 │   ├── test_offline.py         WAV-in → WAV-out fidelity harness
 │   ├── test_nkf_res.py       NKF RES regressions (T1–T3)
 │   ├── test_nkf_loop.py      NKF closed-loop regressions (L1–L8)
