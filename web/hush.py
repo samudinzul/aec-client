@@ -327,24 +327,39 @@ class HushNs:
         self._path = "none"
         self.last_error = ""
         self.in_rms = self.out_rms = 0.0
+        # HUSH_BACKEND=ctypes forces the DLL path (in-app A/B of the
+        # two Hush runtimes); default prefers onnx (no DLL needed).
+        prefer_ct = (os.environ.get("HUSH_BACKEND", "").lower()
+                     == "ctypes")
         onnx_error = ""
-        if os.path.isfile(model):
+
+        def _try_onnx():
+            if not os.path.isfile(model):
+                return None, "hush bundle missing"
             try:
                 from .hush_onnx import HushOnnxCore
-                self._impl = HushOnnxCore(model)
-                self._path = "onnx"
+                return HushOnnxCore(model), ""
             except Exception as e:
-                onnx_error = f"hush onnx path failed: {e}"
-                self._impl = None
-        if self._impl is None:
+                return None, f"hush onnx path failed: {e}"
+
+        def _try_ct():
             ct = _HushCt(lib_path=lib, model_path=model,
                          atten_lim_db=atten_lim_db)
-            if ct.ready:
-                self._impl = ct
-                self._path = "ctypes"
+            return (ct, "") if ct.ready else (None, ct.last_error)
+
+        first, second = (_try_ct, _try_onnx) if prefer_ct else (
+            _try_onnx, _try_ct)
+        self._impl, err = first()
+        if self._impl is not None:
+            self._path = "ctypes" if prefer_ct else "onnx"
+        else:
+            onnx_error = err
+            self._impl, err2 = second()
+            if self._impl is not None:
+                self._path = "onnx" if prefer_ct else "ctypes"
             else:
                 self.last_error = " / ".join(
-                    s for s in (onnx_error, ct.last_error) if s) or (
+                    s for s in (onnx_error, err2) if s) or (
                         "hush unavailable "
                         f"(lib={lib} model={model})")
 

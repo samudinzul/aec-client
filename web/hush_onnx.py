@@ -339,18 +339,21 @@ class _OnnxNet:
     def build_session(self):
         """Session from the (possibly rewired) graph.
 
-        HUSH_ORT_BASIC=1 selects basic optimization + no prepacking:
-        full optimization has been observed to silently neuter
-        state-override feeds (see selftest feed-authority). Default
-        stays FULL (fastest) until the probe says otherwise.
+        Default is BASIC optimization + no prepacking: that is the
+        validated configuration (all parity numbers were measured
+        with it). HUSH_ORT_FULL=1 opts into full optimization
+        (faster, different fusion — re-validate parity if set).
         """
         import io
         from onnxruntime import GraphOptimizationLevel
-        basic = bool(os.environ.get("HUSH_ORT_BASIC"))
+        full = bool(os.environ.get("HUSH_ORT_FULL"))
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
-        if basic:
+        if full:
+            opts.graph_optimization_level = (
+                GraphOptimizationLevel.ORT_ENABLE_ALL)
+        else:
             opts.graph_optimization_level = (
                 GraphOptimizationLevel.ORT_ENABLE_BASIC)
             try:
@@ -358,11 +361,8 @@ class _OnnxNet:
                     "session.disable_prepacking", "1")
             except Exception:
                 pass
-        else:
-            opts.graph_optimization_level = (
-                GraphOptimizationLevel.ORT_ENABLE_ALL)
         print(f"[hush_onnx] optimizer: "
-              f"{'BASIC+no-prepack' if basic else 'FULL'}")
+              f"{'FULL' if full else 'BASIC+no-prepack'}")
         buf = io.BytesIO()
         buf.write(self.proto.SerializeToString())
         self._sess = ort.InferenceSession(
