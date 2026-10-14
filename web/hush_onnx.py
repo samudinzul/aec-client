@@ -399,14 +399,15 @@ class HushOnnxCore:
         # Attenuation limit (dB), parity with the DLL session param
         # (weya_nc_session_create atten). Caps max suppression: ERB
         # gains floor at 10^(-atten/20), and the zero-gate emits the
-        # floor instead of silence. 100 = unlimited (DLL default).
-        # HUSH_ATTEN_DB overrides (e.g. 24 tames aggressive gating).
+        # floor instead of silence. Default 18: caps suppression at
+        # a natural noise floor (100 = unlimited, too aggressive).
+        # HUSH_ATTEN_DB overrides.
         if atten_lim_db is None:
             try:
                 atten_lim_db = float(
-                    os.environ.get("HUSH_ATTEN_DB", "100.0"))
+                    os.environ.get("HUSH_ATTEN_DB", "18.0"))
             except ValueError:
-                atten_lim_db = 100.0
+                atten_lim_db = 18.0
         self.atten_lim_db = float(atten_lim_db)
         self._gain_floor = np.float32(
             10.0 ** (-self.atten_lim_db / 20.0))

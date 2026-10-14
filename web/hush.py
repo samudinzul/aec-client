@@ -150,7 +150,7 @@ class _HushCt:
     """
 
     def __init__(self, lib_path=None, model_path=None, model_dir=None,
-                 atten_lim_db=100.0):
+                 atten_lim_db=18.0):
         self.lib_path, self.model_path = resolve_paths(
             lib_path, model_path, model_dir)
         self.atten_lim_db = float(atten_lim_db)
@@ -320,7 +320,7 @@ class HushNs:
     """
 
     def __init__(self, lib_path=None, model_path=None, model_dir=None,
-                 atten_lim_db=100.0):
+                 atten_lim_db=18.0):
         lib, model = resolve_paths(lib_path, model_path, model_dir)
         self.lib_path, self.model_path = lib, model
         self._impl = None
