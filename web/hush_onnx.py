@@ -517,22 +517,23 @@ class HushOnnxCore:
               ", ".join(f"{k}×{v}" for k, v in hist.most_common(8)))
         try:
             inferred = shape_inference.infer_shapes(proto)
-        except Exception as e:
-            raise RuntimeError(f"{tag}: shape inference failed ({e})")
+        except Exception:
+            inferred = None  # best-effort only; R-dims below are primary
         types = {}
-        for vi in (list(inferred.graph.value_info)
-                   + list(inferred.graph.output)):
-            if vi.type.HasField("tensor_type"):
-                tt = vi.type.tensor_type
-                dims = []
-                for d in tt.shape.dim:
-                    if d.HasField("dim_value"):
-                        dims.append(d.dim_value)
-                    elif d.dim_param:
-                        dims.append(d.dim_param)
-                    else:
-                        dims.append(-1)
-                types[vi.name] = tuple(dims)
+        if inferred is not None:
+            for vi in (list(inferred.graph.value_info)
+                       + list(inferred.graph.output)):
+                if vi.type.HasField("tensor_type"):
+                    tt = vi.type.tensor_type
+                    dims = []
+                    for d in tt.shape.dim:
+                        if d.HasField("dim_value"):
+                            dims.append(d.dim_value)
+                        elif d.dim_param:
+                            dims.append(d.dim_param)
+                        else:
+                            dims.append(-1)
+                    types[vi.name] = tuple(dims)
         inits = {}
         for init in proto.graph.initializer:
             inits[init.name] = tuple(init.dims)
@@ -570,29 +571,37 @@ class HushOnnxCore:
                 if hin in inits:
                     shape = inits[hin]
                     feed_name = hin
-                    print(f"[hush_onnx] {tag}: carry {hin} "
-                          f"{shape} -> {hout} (initializer override)")
+                    how = "initializer override"
                 else:
                     # State fed by another node (here: ConstantOfShape
-                    # zeros): rewire that edge to a new declared input
-                    # and declare the state output, then rebuild the
-                    # session from the mutated graph. Dangling producer
-                    # nodes are legal (pruned or kept by the optimizer).
-                    shape = types.get(hin)
-                    if (shape is None or not shape
-                            or any(not isinstance(d, int) or d <= 0
-                                   for d in shape)):
+                    # zeros, whose shape inference leaves symbolic).
+                    # Derive it from the recurrence matrix R instead:
+                    # GRU/LSTM R is [D, gates*H, H], so h/c are
+                    # [D, 1, H] (batch is fixed 1 in these exports,
+                    # like every data input). Then rewire that edge
+                    # to a new declared input and declare the state
+                    # output. Dangling producer nodes are legal.
+                    rdims = inits.get(ins[2] if len(ins) > 2 else "")
+                    if rdims is None or len(rdims) != 3 or rdims[0] < 1:
                         raise RuntimeError(
-                            f"{tag}: state '{hin}' has no concrete "
-                            f"shape ({shape}) — cannot carry")
+                            f"{tag}: cannot derive state shape for "
+                            f"'{hin}' (R dims {rdims})")
+                    shape = (rdims[0], 1, rdims[2])
+                    tshape = types.get(hin)
+                    if tshape is not None and all(
+                            isinstance(d, int) and d > 0 for d in tshape):
+                        if tuple(tshape) != tuple(shape):
+                            raise RuntimeError(
+                                f"{tag}: state '{hin}' shape conflict: "
+                                f"R says {tuple(shape)}, inference says "
+                                f"{tuple(tshape)}")
                     feed_name = f"hush_state_{tag}_{len(pairs)}"
                     renamed = False
-                    for SRC in (net.proto.graph.node,):
-                        for nd in SRC:
-                            for i, nm in enumerate(nd.input):
-                                if nm == hin:
-                                    nd.input[i] = feed_name
-                                    renamed = True
+                    for nd in net.proto.graph.node:
+                        for i, nm in enumerate(nd.input):
+                            if nm == hin:
+                                nd.input[i] = feed_name
+                                renamed = True
                     if not renamed:
                         raise RuntimeError(
                             f"{tag}: state edge '{hin}' not found")
@@ -602,10 +611,11 @@ class HushOnnxCore:
                     net.proto.graph.output.append(
                         helper.make_tensor_value_info(
                             hout, TensorProto.FLOAT, list(shape)))
-                    print(f"[hush_onnx] {tag}: carry {hin} "
-                          f"{shape} -> {hout} (rewired to {feed_name})")
+                    how = f"rewired to {feed_name}"
                 pairs[feed_name] = {"shape": shape, "out": hout,
                                     "arr": np.zeros(shape, dtype=np.float32)}
+                print(f"[hush_onnx] {tag}: carry {hin} "
+                      f"{tuple(shape)} -> {hout} ({how})")
         try:
             checker.check_model(net.proto)
         except Exception as e:
