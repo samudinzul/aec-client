@@ -730,19 +730,30 @@ class HushOnnxCore:
 
     @staticmethod
     def _to_642(co, coname):
-        """Flat coefs -> complex64[64,5,2], permutation-robust.
+        """Flat coefs -> complex64[64,5,2], layout-robust.
 
-        Drops size-1 dims; the rest must be {2,5,64} in some order
-        (transposed to canonical). Anything else fails closed —
-        a silently transposed filter would sound almost-right.
+        Drops size-1 dims; requires the 64-bin axis plus a
+        remainder multiplying to 10 — either (5,2) in order or a
+        single merged 10-dim (torch DfOutputReshapeMF splits it
+        2-minor, same as the runtime's [C,N,F,2]). Anything else
+        fails closed — a transposed filter sounds almost-right.
         """
+        _ = coname
         dims = tuple(d for d in co.shape if d != 1)
-        if sorted(dims) != [2, 5, 64] or co.size != NB_DF * DF_ORDER * 2:
+        i64 = [i for i, d in enumerate(dims) if d == 64]
+        if len(i64) != 1 or co.size != NB_DF * DF_ORDER * 2:
             raise RuntimeError(
                 f"df coefs shape {co.shape} is not a (64,5,2) "
                 f"permutation")
-        t = co.reshape(dims).transpose(
-            (dims.index(64), dims.index(5), dims.index(2)))
+        order = [i64[0]] + [j for j in range(len(dims)) if j != i64[0]]
+        t = co.reshape(dims).transpose(order)
+        if t.shape[1:] == (5, 2):
+            pass
+        elif t.shape[1:] == (10,):
+            t = t.reshape(NB_DF, DF_ORDER, 2)
+        else:
+            raise RuntimeError(
+                f"df coefs remainder {t.shape[1:]} is not (5,2)/(10,)")
         return (t[:, :, 0] + 1j * t[:, :, 1]).astype(np.complex64)
 
     def _arrange_spec(self, nspec, ishape):
