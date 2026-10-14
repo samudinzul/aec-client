@@ -610,7 +610,11 @@ class AudioRunner:
 
     def _work_step(self, mic_buf, ref_buf):
         try:
-            raw_mic = self._in_q.get(timeout=0.05)
+            # 10 ms poll (was 50 ms): a hiccuped mic stalls the pump
+            # one frame instead of five. Steady-state cost is nil —
+            # get() returns immediately when data flows; the timeout
+            # only bounds idle recovery. Cannot starve output.
+            raw_mic = self._in_q.get(timeout=0.01)
         except queue.Empty:
             return
         # Loopback starves while the speakers are idle
@@ -684,6 +688,7 @@ class AudioRunner:
                     format=pa_patch.paInt16, channels=1,
                     rate=self._mon_rate, output=True,
                     output_device_index=self.monitor_idx,
+                    frames_per_buffer=128,
                     stream_callback=self._on_mon))
             except Exception:
                 self.monitor_idx = None

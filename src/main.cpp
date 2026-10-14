@@ -1307,6 +1307,7 @@ void StartMonitor() {
     cfg.playback.channels  = 1;
     cfg.sampleRate         = sr;
     cfg.periodSizeInFrames = frameSizeForRate(sr);
+    cfg.performanceProfile = ma_performance_profile_low_latency;
     cfg.dataCallback       = monitor_callback;
     cfg.playback.pDeviceID = &g_playbackDevices[monIdx].id;
 
@@ -1495,6 +1496,7 @@ void StartAEC() {
     micCfg.capture.channels = 1;
     micCfg.sampleRate = sr;
     micCfg.periodSizeInFrames = fs;
+    micCfg.performanceProfile = ma_performance_profile_low_latency;
     micCfg.dataCallback = mic_callback;
     micCfg.capture.pDeviceID = &g_captureDevices[g_micIndex].id;
 
@@ -1503,6 +1505,7 @@ void StartAEC() {
     loopCfg.capture.channels = 1;
     loopCfg.sampleRate = sr;
     loopCfg.periodSizeInFrames = fs;
+    loopCfg.performanceProfile = ma_performance_profile_low_latency;
     loopCfg.dataCallback = loopback_callback;
     loopCfg.capture.pDeviceID = &g_playbackDevices[g_refIndex].id;
 
@@ -1511,6 +1514,7 @@ void StartAEC() {
     outCfg.playback.channels = 1;
     outCfg.sampleRate = sr;
     outCfg.periodSizeInFrames = fs;
+    outCfg.performanceProfile = ma_performance_profile_low_latency;
     outCfg.dataCallback = output_callback;
     outCfg.playback.pDeviceID = &g_playbackDevices[outIdx].id;
 
