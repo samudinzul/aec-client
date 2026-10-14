@@ -337,13 +337,32 @@ class _OnnxNet:
             for o in self.proto.graph.output]
 
     def build_session(self):
-        """Create the inference session from the (possibly rewired) graph."""
+        """Session from the (possibly rewired) graph.
+
+        HUSH_ORT_BASIC=1 selects basic optimization + no prepacking:
+        full optimization has been observed to silently neuter
+        state-override feeds (see selftest feed-authority). Default
+        stays FULL (fastest) until the probe says otherwise.
+        """
         import io
+        from onnxruntime import GraphOptimizationLevel
+        basic = bool(os.environ.get("HUSH_ORT_BASIC"))
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
-        opts.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
+        if basic:
+            opts.graph_optimization_level = (
+                GraphOptimizationLevel.ORT_ENABLE_BASIC)
+            try:
+                opts.add_session_config_entry(
+                    "session.disable_prepacking", "1")
+            except Exception:
+                pass
+        else:
+            opts.graph_optimization_level = (
+                GraphOptimizationLevel.ORT_ENABLE_ALL)
+        print(f"[hush_onnx] optimizer: "
+              f"{'BASIC+no-prepack' if basic else 'FULL'}")
         buf = io.BytesIO()
         buf.write(self.proto.SerializeToString())
         self._sess = ort.InferenceSession(
@@ -740,6 +759,21 @@ class HushOnnxCore:
             st["arr"] = np.asarray(got[st["out"]], dtype=np.float32)
         return got
 
+    def _enc_raw(self, erb, nspec):
+        """Encoder only: feats in, raw output dict out (probe helper).
+
+        Advances GRU/norm states like any frame (not side-effect
+        free) — callers re-warm around it.
+        """
+        iname = self._enc_in["erb"][0]
+        ishape = self._enc_in["erb"][1]
+        efeed = {iname: np.asarray(erb, dtype=np.float32).reshape(
+            _concrete_shape(ishape))}
+        iname = self._enc_in["spec"][0]
+        ishape = self._enc_in["spec"][1]
+        efeed[iname] = self._arrange_spec(nspec, ishape)
+        return self._feed(self.enc, efeed)
+
     def _infer(self, erb, nspec):
         # Encoder: erb[32] + spec[128] (+ carried states).
         iname = self._enc_in["erb"][0]
@@ -986,6 +1020,23 @@ def main(argv=None):
             o_absurd = core._run_frame160(tone[3])
             d_ab = float(np.abs(o_carry - o_absurd).max())
             print(f"carried-vs-absurd max_abs={d_ab:.6f}")
+            # (4) enc-level feed isolation: same fixed feats, zeroed
+            # vs absurd enc state — compares RAW encoder outputs
+            # (emb), skipping gates/masks/DF entirely. Identical here
+            # means the session ignores the override (optimizer), no
+            # matter what end-to-end numbers say.
+            _warmed()
+            f0 = tone[0]
+            spec = core._feats.analyze(f0)
+            erb = core._feats.erb_feats(spec)
+            nspec = core._feats.norm_spec(spec)
+            outs0 = core._enc_raw(erb, nspec)
+            for st in core.enc.states.values():
+                st["arr"].fill(10.0)
+            outs1 = core._enc_raw(erb, nspec)
+            de = float(np.abs(outs0["emb"] - outs1["emb"]).max())
+            print(f"enc emb zeroed-vs-absurd max_abs={de:.6f} "
+                  f"({'FEED DEAD at enc level' if de == 0.0 else 'enc feed live'})")
             return 0
         if a.wav is None:
             # Determinism probe: identical input twice -> identical out.
