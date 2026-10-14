@@ -1899,6 +1899,12 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "Hush - keyboards, mice and background talkers, slightly\n"
                 "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
         ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
+        // Error text only (telemetry row stays deleted): a failing
+        // stage is fail-open, so its message is all that's shown.
+        const char* nsErr = "";
+        if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
+        else if (g_engine.ns) nsErr = DtnsLastError(g_engine.ns);
+        if (nsErr && nsErr[0]) ImGui::TextDisabled("%s", nsErr);
     }
 
     ImGui::Spacing();
