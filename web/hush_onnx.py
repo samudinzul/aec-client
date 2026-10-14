@@ -516,8 +516,8 @@ class HushOnnxCore:
         from onnx import TensorProto, checker, helper, shape_inference
         proto = net.proto
         hist = Counter(n.op_type for n in proto.graph.node)
-        print(f"[hush_onnx] {tag}: top ops " +
-              ", ".join(f"{k}×{v}" for k, v in hist.most_common(8)))
+        print(f"[hush_onnx] {tag}: ops " +
+              ", ".join(f"{k}×{v}" for k, v in sorted(hist.items())))
         try:
             inferred = shape_inference.infer_shapes(proto)
         except Exception:
@@ -884,10 +884,47 @@ def main(argv=None):
     ap.add_argument("--out", default=None)
     ap.add_argument("--out-ct", default=None,
                     help="also write the ctypes reference output here")
+    ap.add_argument("--selftest", action="store_true",
+                    help="carry diagnostics: Y_h variability per frame + "
+                    "carried-vs-zeroed output diff (no ground truth needed)")
     a = ap.parse_args(argv)
     core = HushOnnxCore(a.bundle)
     try:
         print(core.spec_dump())
+        if a.selftest:
+            # Carry diagnostics without any ground truth:
+            # (1) fetched Y_h must VARY across frames (static = broken
+            # fetch); (2) carried-vs-zeroed states must CHANGE the
+            # output (identical = feed ignored, override dead).
+            rng = np.random.default_rng(11)
+            frames = [(rng.standard_normal(HOP) * 0.25).astype(np.float32)
+                      for _ in range(5)]
+            norms = []
+            for f in frames:
+                core._run_frame160(f)
+                norms.append(
+                    {k: float(np.sqrt((v["arr"] ** 2).mean()))
+                     for k, v in core.enc.states.items()})
+            print("enc Y_h rms per frame:")
+            for i, nd in enumerate(norms):
+                print(f"  f{i}: " + " ".join(f"{k}={v:.4f}"
+                                             for k, v in nd.items()))
+            static = all(
+                abs(nd[k] - norms[0][k]) < 1e-9
+                for nd in norms[1:] for k in nd)
+            print(f"carry fetch: {'STATIC (broken)' if static else 'live'}")
+            core.reset()
+            for f in frames[:3]:
+                core._run_frame160(f)
+            o_carry = core._run_frame160(frames[3])
+            for net in (core.enc, core.erb, core.df):
+                for st in net.states.values():
+                    st["arr"].fill(0)
+            o_zero = core._run_frame160(frames[3])
+            print(f"carried-vs-zeroed max_abs="
+                  f"{float(np.abs(o_carry - o_zero).max()):.6f} "
+                  f"({'FEED DEAD' if float(np.abs(o_carry - o_zero).max()) == 0.0 else 'feed live'})")
+            return 0
         if a.wav is None:
             # Determinism probe: identical input twice -> identical out.
             rng = np.random.default_rng(7)
