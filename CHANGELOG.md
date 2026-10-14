@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a broken stage fails open. DTLN-NS stays the default; the
   default path is bit-identical. A/B from the repo root:
   `python web/test_offline.py mic.wav ref.wav out.wav --ns-backend hush`.
+  Live-verified 2026-10-14: keyboard/mouse residue clearly better
+  than DTLN-NS, `t/k/p` onset sharpness at parity, CPU slightly
+  higher — stays optional, user's choice per call.
 
 ## [1.13.0] - 2026-10-12
 
