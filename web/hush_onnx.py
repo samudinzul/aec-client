@@ -198,7 +198,14 @@ class _DfFeats:
 
     def synthesize(self, spec):
         """161-bin complex spectrum -> 160 float samples."""
-        td = np.fft.irfft(np.asarray(spec), n=FFT).astype(np.float32)
+        # realfft's inverse (what the runtime uses) is UNSCALED, and
+        # wnorm=1/320 on analysis exactly compensates its x320 gain
+        # (roundtrip unity — verified by energy, NOT by correlation:
+        # correlation is gain-blind). numpy's irfft divides by N, so
+        # compensate explicitly — without this the entire output sits
+        # ~50 dB too low (found via 125x energy gap vs the DLL).
+        td = (np.fft.irfft(np.asarray(spec), n=FFT).astype(np.float32)
+              * np.float32(FFT))
         td *= self.win
         out = td[:HOP] + self.s_mem
         self.s_mem[:] = td[HOP:]
@@ -805,7 +812,13 @@ class HushOnnxCore:
         ishape = self._enc_in["spec"][1]
         efeed[iname] = self._arrange_spec(nspec, ishape)
         got = self._feed(self.enc, efeed)
-        lsnr = float(np.asarray(got[self._enc_out["lsnr"][0]]).ravel()[0])
+        ls = np.asarray(got[self._enc_out["lsnr"][0]])
+        if ls.size != 1:
+            # The DLL reads a scalar; any extra elements mean the
+            # wrong tensor is mapped (which element would be a guess).
+            raise RuntimeError(
+                f"lsnr tensor shape {ls.shape} is not scalar")
+        lsnr = float(ls.ravel()[0])
         parts = {}
         for role in ("e0", "e1", "e2", "e3", "emb", "c0"):
             n, _s = self._enc_out[role]
