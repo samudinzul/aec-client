@@ -142,8 +142,13 @@ class Chain:
     def set_ns_backend(self, name):
         """Select the NS stage backend (live — no reconfigure needed).
 
-        Unknown names and a hush pick without its files fail closed:
-        returns False and keeps the previous backend.
+        Unknown names, a hush pick without its files, and a hush
+        pick whose library fails to load all fail closed: returns
+        False and keeps the previous backend. A successful hush
+        pick loads the model immediately (under _load_lock, same
+        order as start()) so the switch takes effect mid-call —
+        deferring the load to the next Start left the pump
+        mislabelled and unprocessed in between.
         """
         if name not in NS_BACKENDS:
             self.last_error = f"unknown NS backend: {name}"
@@ -153,10 +158,17 @@ class Chain:
                 "hush files missing (weya_nc library + model bundle) — "
                 "see web/README.md; keeping " + self.ns_backend)
             return False
-        with self._swap_lock:
-            self.ns_backend = name
-            if name == "hush" and self.hush is not None:
-                self.hush.reset()
+        with self._load_lock:
+            if name == "hush":
+                self._ensure_hush()
+                if self.hush is None or not self.hush.ready:
+                    self.last_error = (self.hush_error
+                                       or "hush load failed")
+                    return False
+            with self._swap_lock:
+                self.ns_backend = name
+                if name == "hush" and self.hush is not None:
+                    self.hush.reset()
         return True
 
     def _load_engines(self):
