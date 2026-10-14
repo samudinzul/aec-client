@@ -129,13 +129,13 @@ Open http://localhost:8000 — that page IS the GUI.
 - **DTLN-NS** (`models/dtln_ns_128_*.tflite`) after the engine,
   fail-open — missing/broken models pass audio through, never mute.
   Default NS backend; the radio also offers **Off** and **Hush**.
-- **Hush** (optional NS backend, user-supplied files, never shipped)
+- **Hush** (optional NS backend — model bundle ships in `models/`,
+  only the library is user-supplied, never shipped)
   — pulp-vision/Hush via its `weya_nc` shared library (stdlib
-  `ctypes`, no new dependency). Download `weya_nc.dll` + the ONNX
-  bundle (`advanced_dfnet16k_model_best_onnx.tar.gz`) from the Hush
-  releases into `%LOCALAPPDATA%\aec-web\hush\` (or set `WEYA_NC_LIB`
-  / `WEYA_NC_MODEL` env vars), then pick the Hush radio. The radio
-  disables itself while the files are absent; a mid-run load
+  `ctypes`, no new dependency). Put `weya_nc.dll` in
+  `%LOCALAPPDATA%\aec-web\hush\` (or set `WEYA_NC_LIB` /
+  `WEYA_NC_MODEL` env vars), then pick the Hush radio. The radio
+  disables itself while the DLL is absent; a mid-run load
   failure passes audio through with the error in state (same
   fail-open contract as DTLN-NS).
 - **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%

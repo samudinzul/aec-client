@@ -2,17 +2,16 @@
 
 Hush (pulp-vision/Hush, Apache-2.0: a DeepFilterNet3 fork with a
 background-speaker auxiliary loss) denoises 16 kHz mono float audio
-through a prebuilt shared library + ONNX bundle that the USER
-supplies — nothing of Hush's ships in this repo or any release zip:
-
-- Library + model live OUTSIDE the repo (explicit paths, env vars,
-  or a per-user data dir — see _default_paths). The web release
-  asserts ban every .dll/.pyd, so bundling Hush would fail the
-  build by design. Stdlib ctypes only: no new dependency.
+through a prebuilt shared library + ONNX bundle. Only the LIBRARY
+is user-supplied (never shipped, never staged — the release asserts
+ban every .dll/.pyd): the MODEL bundle ships in models/ like the
+DTLN pairs and NKF (data, allowlisted), resolved via an explicit
+path, env, the chain's models dir, or the per-user data dir, in
+that order. Stdlib ctypes only: no new dependency.
 - Backend selection is fail-closed (Chain.set_ns_backend refuses
-  "hush" while the files are absent); a mid-run load failure is
-  fail-open (passthrough + the error rides along in state, the
-  same contract as a missing DTLN-NS pair).
+  "hush" while library + bundle are both unresolvable); a mid-run
+  load failure is fail-open (passthrough + the error rides along
+  in state, the same contract as a missing DTLN-NS pair).
 
 Frame bridge: the chain pumps 128-sample frames (the DTLN DSP
 geometry), Hush consumes fixed 160-sample frames (10 ms @ 16 kHz,
@@ -37,7 +36,12 @@ BACKEND_HUSH = 2
 
 _MODEL_ENV = ("WEYA_NC_MODEL", "WEYA_NC_MODEL_PATH")
 _LIB_ENV = "WEYA_NC_LIB"
-_BUNDLE_NAME = "advanced_dfnet16k_model_best_onnx.tar.gz"
+# Bundle filenames, in lookup priority: the repo/release copy was
+# renamed (the desktop release asserts ban any staged filename
+# containing "dfn"); the per-user data dir keeps the upstream name
+# users download from Hugging Face.
+_BUNDLE_NAMES = ("hush_16k_onnx.tar.gz",
+                 "advanced_dfnet16k_model_best_onnx.tar.gz")
 
 
 def _lib_name():
@@ -50,7 +54,10 @@ def _lib_name():
 
 
 def _data_dir():
-    """Per-user, per-machine folder for the Hush files (never the repo)."""
+    """Per-user folder for user-supplied Hush files. The LIBRARY only
+    ever resolves here or under env paths (never shipped, never the
+    repo); the model additionally resolves from the chain's models
+    dir (release bundles ship it, like the DTLN pairs)."""
     if platform.system() == "Windows":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         return os.path.join(base, "aec-web", "hush")
@@ -58,18 +65,39 @@ def _data_dir():
                         "aec-web", "hush")
 
 
+def _find_bundle(d):
+    """Best bundle candidate inside dir d (either known name, else
+    newest *.tar.gz) — or None. Keeps working when upstream renames
+    the file again."""
+    if not d or not os.path.isdir(d):
+        return None
+    for name in _BUNDLE_NAMES:
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand):
+            return cand
+    try:
+        cands = sorted(f for f in os.listdir(d) if f.endswith(".tar.gz"))
+    except OSError:
+        cands = []
+    return os.path.join(d, cands[-1]) if cands else None
+
+
 def _default_paths():
     """(lib_path, model_path) under the per-user data dir (may not exist)."""
     d = _data_dir()
-    return os.path.join(d, _lib_name()), os.path.join(d, _BUNDLE_NAME)
+    found = _find_bundle(d)
+    return (os.path.join(d, _lib_name()),
+            found if found is not None
+            else os.path.join(d, _BUNDLE_NAMES[-1]))
 
 
-def resolve_paths(lib_path=None, model_path=None):
+def resolve_paths(lib_path=None, model_path=None, model_dir=None):
     """Where the Hush library + bundle SHOULD be (existence not checked).
 
-    Order: explicit args, env (WEYA_NC_LIB / WEYA_NC_MODEL[_PATH]),
-    per-user data dir. A lone directory for the model is accepted
-    (exact bundle name inside it, else newest *.tar.gz there).
+    Model order: explicit path, env (WEYA_NC_MODEL[_PATH]), the
+    chain's models dir (release bundles ship it there, like the
+    DTLN pairs), per-user data dir. A lone directory is accepted
+    for either (known bundle names win, else newest *.tar.gz).
     """
     if lib_path is None:
         lib_path = os.environ.get(_LIB_ENV)
@@ -78,30 +106,23 @@ def resolve_paths(lib_path=None, model_path=None):
             model_path = os.environ.get(key)
             if model_path:
                 break
+    if model_path is None and model_dir is not None:
+        model_path = _find_bundle(model_dir)
     def_lib, def_model = _default_paths()
     if not lib_path:
         lib_path = def_lib
     if not model_path:
         model_path = def_model
     elif os.path.isdir(model_path):
-        exact = os.path.join(model_path, _BUNDLE_NAME)
-        if os.path.isfile(exact):
-            model_path = exact
-        else:
-            try:
-                cands = sorted(
-                    f for f in os.listdir(model_path)
-                    if f.endswith(".tar.gz"))
-            except OSError:
-                cands = []
-            if cands:
-                model_path = os.path.join(model_path, cands[-1])
+        found = _find_bundle(model_path)
+        if found is not None:
+            model_path = found
     return lib_path, model_path
 
 
-def hush_available(lib_path=None, model_path=None):
+def hush_available(lib_path=None, model_path=None, model_dir=None):
     """Files present (cheap stat only — no library load, no model read)."""
-    lib, model = resolve_paths(lib_path, model_path)
+    lib, model = resolve_paths(lib_path, model_path, model_dir)
     return os.path.isfile(lib) and os.path.isfile(model)
 
 
@@ -114,8 +135,10 @@ class HushNs:
     mute the voice path).
     """
 
-    def __init__(self, lib_path=None, model_path=None, atten_lim_db=100.0):
-        self.lib_path, self.model_path = resolve_paths(lib_path, model_path)
+    def __init__(self, lib_path=None, model_path=None, model_dir=None,
+                 atten_lim_db=100.0):
+        self.lib_path, self.model_path = resolve_paths(
+            lib_path, model_path, model_dir)
         self.atten_lim_db = float(atten_lim_db)
         self.last_error = ""
         self.in_rms = 0.0

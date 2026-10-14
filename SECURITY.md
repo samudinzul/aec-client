@@ -66,11 +66,12 @@ that is why the web build exists.
 - Pure script + data only. `scripts/make-release-web.sh` asserts
   **twice** (staging + zip contents) that no `.exe`, `.dll`, `.pyd`,
   cache, or venv is present — the build fails otherwise. No
-  exceptions. The optional Hush NS backend (`web/hush.py`) loads a
-  USER-supplied `weya_nc` library + model bundle from outside the
-  repo via stdlib `ctypes` — those files must never be committed
-  or staged; selection is fail-closed while they are absent, so a
-  stock install behaves exactly as if Hush did not exist.
+  exceptions. The optional Hush NS backend (`web/hush.py`) pairs
+  the SHIPPED model bundle (`models/hush_16k_onnx.tar.gz`, data
+  like the DTLN pairs) with a USER-supplied `weya_nc` library from
+  outside the repo via stdlib `ctypes` — the DLL must never be
+  committed or staged; selection is fail-closed while it is absent,
+  so a stock install behaves exactly as if Hush did not exist.
 - Dependencies are mainstream PyPI wheels installed on the user's
   machine by the launchers. Never freeze with PyInstaller/Nuitka —
   that reintroduces the packed-binary target.

@@ -53,10 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stdlib `ctypes`, bridging the chain's 128-sample frames to Hush's
   160-sample frames with a small FIFO (same priming-passthrough
   convention as DTLN-NS). The library + ONNX bundle are
-  user-supplied files outside the repo (per-user data dir or
-  `WEYA_NC_LIB` / `WEYA_NC_MODEL` env) — nothing ships in the
-  release zip, selection is fail-closed while the files are absent,
-  and a broken stage fails open. DTLN-NS stays the default; the
+  user-supplied files outside the repo — see web/README.md; nothing
+  but the data bundle ships in the release zip, selection is
+  fail-closed while the DLL is absent, and a broken stage fails
+  open. DTLN-NS stays the default; the
   default path is bit-identical. A/B from the repo root:
   `python web/test_offline.py mic.wav ref.wav out.wav --ns-backend hush`.
   Live-verified 2026-10-14: keyboard/mouse residue clearly better

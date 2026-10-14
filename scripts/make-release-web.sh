@@ -11,9 +11,11 @@
 #     AEC-Web-vX-win64/
 #       web/        (the app: start.bat, server, DSP, GUI)
 #       web/sounds/ (empty; users drop soundboard pads here)
-#       models/     (the two DTLN pairs + nkf.onnx — all three
-#                    profiles work offline; AEC3 needs no model file,
-#                    its pip package installs via requirements.txt)
+#       models/     (the two DTLN pairs + nkf.onnx + hush bundle —
+#                    all three profiles work offline; AEC3 needs no
+#                    model file, its pip package installs via
+#                    requirements.txt; Hush needs only its DLL
+#                    user-supplied — data ships, PE never does)
 #       LICENSE
 #       README.txt  (end-user doc, version stamped)
 #     AEC-Web-vX-win64.zip  (single top folder)
@@ -73,12 +75,16 @@ find "$STAGE/web" -name '*.pyc' -delete
 find "$STAGE/web/sounds" -mindepth 1 -delete
 
 # Models: the two DTLN pairs + the NKF model (the NKF-AEC
-# profile fails closed at Start without it).
+# profile fails closed at Start without it) + the Hush NS bundle
+# (data like the rest — only its weya_nc.dll stays user-supplied
+# and must never be staged; the asserts below fail the build on
+# any PE).
 for m in models/dtln_aec_128_1.tflite \
          models/dtln_aec_128_2.tflite \
          models/dtln_ns_128_1.tflite \
          models/dtln_ns_128_2.tflite \
-         models/nkf.onnx; do
+         models/nkf.onnx \
+         models/hush_16k_onnx.tar.gz; do
     test -f "$m" || { echo "missing model: $m" >&2; exit 1; }
     cp "$m" "$STAGE/models/"
 done
@@ -97,7 +103,7 @@ for f in web/start.bat web/server.py web/chain.py \
          web/ui/favicon.ico \
          models/dtln_aec_128_1.tflite models/dtln_aec_128_2.tflite \
          models/dtln_ns_128_1.tflite models/dtln_ns_128_2.tflite \
-         models/nkf.onnx \
+         models/nkf.onnx models/hush_16k_onnx.tar.gz \
          README.txt LICENSE; do
     test -f "$STAGE/$f" || { echo "missing: $f" >&2; fail=1; }
 done

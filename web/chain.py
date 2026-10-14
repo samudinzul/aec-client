@@ -153,7 +153,7 @@ class Chain:
         if name not in NS_BACKENDS:
             self.last_error = f"unknown NS backend: {name}"
             return False
-        if name == "hush" and not hush_available():
+        if name == "hush" and not hush_available(model_dir=self.model_dir):
             self.last_error = (
                 "hush files missing (weya_nc library + model bundle) — "
                 "see web/README.md; keeping " + self.ns_backend)
@@ -201,7 +201,7 @@ class Chain:
         if self.hush is not None:
             return
         try:
-            self.hush = HushNs()
+            self.hush = HushNs(model_dir=self.model_dir)
             self.hush_error = "" if self.hush.ready else self.hush.last_error
         except Exception as e:
             self.hush = None
@@ -390,7 +390,9 @@ class Chain:
                 # assume present until the load says otherwise).
                 "dtln": (dtln_obj.backend != 0)
                         if dtln_obj is not None else True,
-                "hush": hush_available(),
+                # The model ships in models/ (release) or the data dir;
+                # only the DLL stays user-supplied.
+                "hush": hush_available(model_dir=self.model_dir),
             },
             "micGain": self.mic_gain,
             "sampleRate": 16000,

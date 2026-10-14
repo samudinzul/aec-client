@@ -5,10 +5,11 @@
 #
 # AV note: every package here is a mainstream, reputable wheel.
 # Nothing we write is a PE binary. The optional Hush NS backend
-# (web/hush.py) loads a USER-supplied weya_nc library + model bundle
-# from outside the repo via stdlib ctypes — those files must NEVER
-# be committed or staged (scripts/make-release-web.sh asserts zero
-# .dll/.pyd and fails the build otherwise).
+# (web/hush.py) pairs the shipped data bundle
+# (models/hush_16k_onnx.tar.gz) with a USER-supplied weya_nc
+# library from outside the repo via stdlib ctypes — the DLL must
+# NEVER be committed or staged (scripts/make-release-web.sh asserts
+# zero .dll/.pyd and fails the build otherwise).
 # Do NOT freeze this into a PyInstaller/Nuitka exe — that
 # reintroduces the exact problem this project exists to dodge.
 
