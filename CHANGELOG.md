@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Web: voice-path fidelity vs desktop (echoey static, scratchy
+  tails).** Two deviations from the desktop chain, neither in the
+  neural math (rFFT paths match pocketfft to ~1e-6 — inaudible):
+  (1) the 61-tap linear-phase edge resamplers smeared transients
+  with ~0.6 ms of pre-ringing per pass over three passes
+  (mic/ref down, cable up) — replaced with linear interpolation,
+  matching the desktop (miniaudio converts linearly; main.cpp
+  resamples SFX linearly); cheaper too. (2) starved output/
+  monitor callbacks and AEC ring underflows hard-cut to zero —
+  now fade from the last frame / hold last value (desktop
+  `EmitFading` parity). AEC overlap-add itself verified
+  shift-for-shift against `src/dtln_wrapper.cpp` — identical.
+
 ### Added
 
 - **Web: optional Hush NS backend (Off / DTLN-NS / Hush radio).**

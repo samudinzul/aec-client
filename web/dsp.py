@@ -14,27 +14,16 @@ in framing semantics:
 import numpy as np
 
 
-# Cached 61-tap FIR lowpass (fc ~7 kHz, normalized), reused on
-# every resample call — building it (sinc + Hann) on each call
-# was wasted work in the hot audio path. float32, not float64:
-# the desktop resamples in float32 too, halves the convolve memory
-# traffic, and drops the float64->float32 converts per call; the
-# ~1e-7 coefficient/output difference is inaudible and the smoke
-# RMS/peak figures are unchanged (verified A/B on hardware).
-_FIR = None
-_FIR_UP = None
-
-
-def _build_fir():
-    taps = 61
-    n = np.arange(taps) - taps // 2
-    fc = 7000.0 / 48000.0
-    h = np.sinc(2 * fc * n) * (0.54 - 0.46 * np.cos(2 * np.pi * (n + taps // 2) / (taps - 1)))
-    return h / h.sum()
-
-
-_FIR = _build_fir().astype(np.float32)
-_FIR_UP = (_FIR * np.float32(3.0)).astype(np.float32)  # upsampling gain x3
+# Edge resampling is LINEAR interpolation — desktop parity. The
+# desktop opens devices at the chain rate and lets miniaudio convert
+# (linear), and main.cpp resamples SFX linearly ("Linear
+# interpolation is plenty"). A 61-tap linear-phase FIR tried here
+# earlier measured cleaner on aliasing but smeared transients with
+# ~0.6 ms of pre-ringing per pass (three passes on the voice path:
+# mic down, ref down, cable up), heard as a faint 1-5 ms pre-echo /
+# static on speech — so it goes. Linear has no pre-ring; its mild HF
+# rolloff matches the desktop. Bonus: no per-chunk convolve, so this
+# is cheaper than the FIR it replaces.
 
 
 class _Ring:
@@ -231,47 +220,45 @@ def soft_limit(x: np.ndarray) -> np.ndarray:
     return np.clip(out, -32768.0, 32767.0).astype(np.float32)
 
 
-def _fir_decimate_3(x: np.ndarray) -> np.ndarray:
-    """48000 -> 16000: symmetric FIR lowpass (fc ~7 kHz) + take every 3rd.
+def _linear_decimate_3(x: np.ndarray) -> np.ndarray:
+    """48000 -> 16000: linear interpolation, ~1 sample per 3 in.
 
-    Coefficients: windowed sinc, 61 taps, ~60 dB stopband. Reference
-    quality only needs aliasing below audibility-vs-AEC tolerance, and
-    this is far beyond that. Coefficients are computed once at import.
+    Stateless per chunk: the pump feeds consecutive native-rate
+    chunks, so keeping it stateless avoids cross-thread filter
+    state (and any phase memory a stateful filter would carry).
     """
-    x = np.asarray(x)
-    if x.size and not np.any(x):
-        # Silence fast path: filtering zeros yields zeros (0*x=0,
-        # sums of signed zeros stay zero through the int16 emission
-        # and RMS downstream), without the float32 convolve. Length
-        # replicates convolve(mode="same") exactly: max(len, taps),
-        # then every 3rd. The idle-loopback ref hits this constantly.
-        return np.zeros((max(x.size, _FIR.size) + 2) // 3,
-                        dtype=np.float32)
-    y = np.convolve(np.asarray(x, dtype=np.float32), _FIR, mode="same")
-    # copy=False: no-op when convolve already yields float32, converts
-    # only if the platform returns something else — never a spare copy.
-    return y[::3].astype(np.float32, copy=False)
+    x = np.asarray(x, dtype=np.float32)
+    want = int(round(x.size / 3.0))
+    if want <= 0:
+        return np.zeros(0, dtype=np.float32)
+    if not np.any(x):
+        # Silence fast path: interpolating zeros yields zeros,
+        # without the linspace/interp work. The idle-loopback ref
+        # hits this constantly.
+        return np.zeros(want, dtype=np.float32)
+    src = np.linspace(0, 1, x.size)
+    dst = np.linspace(0, 1, want)
+    return np.interp(dst, src, x).astype(np.float32)
 
 
-def _fir_interpolate_3(x: np.ndarray) -> np.ndarray:
-    """16000 -> 48000: zero-stuff x3 + the same 61-tap lowpass, gain x3.
+def _linear_interpolate_3(x: np.ndarray) -> np.ndarray:
+    """16000 -> 48000: linear interpolation, 3 samples per 1 in.
 
-    Stateless per chunk (same convention as _fir_decimate_3): the
-    cable-output callback feeds consecutive frames, so keeping it
-    stateless avoids cross-thread filter state.
+    Stateless per chunk (same convention as _linear_decimate_3):
+    the cable-output callback feeds consecutive frames, so keeping
+    it stateless avoids cross-thread filter state.
     """
-    x = np.asarray(x)
-    if x.size and not np.any(x):
-        # Silence fast path (same exactness argument as decimate):
-        # zero-stuffing zeros then convolving is zeros out, without
-        # the zero buffer + float32 convolve. Length replicates
-        # convolve(mode="same") exactly: max(3*len, taps). The idle
-        # monitor stream used to burn a full FIR here every frame.
-        return np.zeros(max(x.size * 3, _FIR_UP.size), dtype=np.float32)
-    up = np.zeros(x.size * 3, dtype=np.float32)
-    up[::3] = np.asarray(x, dtype=np.float32)
-    y = np.convolve(up, _FIR_UP, mode="same")
-    return y.astype(np.float32, copy=False)
+    x = np.asarray(x, dtype=np.float32)
+    want = x.size * 3
+    if want <= 0:
+        return np.zeros(0, dtype=np.float32)
+    if not np.any(x):
+        # Silence fast path (same exactness argument as decimate).
+        # The idle monitor stream used to burn a full FIR here.
+        return np.zeros(want, dtype=np.float32)
+    src = np.linspace(0, 1, x.size)
+    dst = np.linspace(0, 1, want)
+    return np.interp(dst, src, x).astype(np.float32)
 
 
 def resample_to_16k(pcm_i16: np.ndarray, rate: int) -> np.ndarray:
@@ -280,8 +267,8 @@ def resample_to_16k(pcm_i16: np.ndarray, rate: int) -> np.ndarray:
     if rate == SAMPLE_RATE or x.size == 0:
         return x
     if rate == 48000:
-        return _fir_decimate_3(x)
-    # Generic fallback: linear interpolation (reference-grade only).
+        return _linear_decimate_3(x)
+    # Other rates: same linear math with an exact ratio.
     want = int(round(x.size * SAMPLE_RATE / rate))
     if want <= 0:
         return np.zeros(0, dtype=np.float32)
@@ -296,8 +283,7 @@ def resample_from_16k(frame_f32: np.ndarray, rate: int) -> np.ndarray:
     if rate == SAMPLE_RATE or x.size == 0:
         return x
     if rate == 48000:
-        # x3 polyphase: zero-stuff + the same 61-tap lowpass, gain x3.
-        return _fir_interpolate_3(x)
+        return _linear_interpolate_3(x)
     want = int(round(x.size * rate / SAMPLE_RATE))
     if want <= 0:
         return np.zeros(0, dtype=np.float32)
