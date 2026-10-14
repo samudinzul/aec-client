@@ -376,6 +376,9 @@ class HushOnnxCore:
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
         self.ready = True
+        # LSNR trace (probe/diagnostic only — gated, never production).
+        self._trace_lsnr = False
+        self._lsnr_trace = []
 
     def spec_dump(self):
         return self._dump
@@ -631,6 +634,7 @@ class HushOnnxCore:
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
         self.in_rms = self.out_rms = 0.0
+        self._lsnr_trace = []
         for net in (self.enc, self.erb, self.df):
             for st in net.states.values():
                 st["arr"].fill(0)
@@ -639,7 +643,10 @@ class HushOnnxCore:
         """One native 160-sample float frame in/out."""
         frame = np.asarray(frame, dtype=np.float32)
         if float(np.mean(frame * frame)) < float(_SILENCE_MS):
-            # Runtime silence shortcut: states freeze, zeros out.
+            # Runtime silence shortcut: states freeze, zeros out
+            # (tract returns lsnr -15 there — record the same).
+            if self._trace_lsnr:
+                self._lsnr_trace.append(-15.0)
             return np.zeros(HOP, dtype=np.float32)
         spec = self._feats.analyze(frame)
         self._rolling.append(spec.copy())
@@ -647,6 +654,8 @@ class HushOnnxCore:
         erb = self._feats.erb_feats(spec)
         nspec = self._feats.norm_spec(spec)
         lsnr, mask, coefs = self._infer(erb, nspec)
+        if self._trace_lsnr:
+            self._lsnr_trace.append(lsnr)
         if lsnr < float(MIN_DB):
             # Noise only: zero mask, no DF (bins<64 AND >=64 zeroed,
             # like apply_mask over the full spec).
@@ -894,6 +903,8 @@ def main(argv=None):
             return 0 if same else 1
         pcm = _read_wav16(a.wav)
         x = pcm.astype(np.float32) / 32768.0
+        if a.dll is not None:
+            core._trace_lsnr = True  # before processing (per-frame log)
         t0 = time.perf_counter()
         o = core.process(x)
         dt = time.perf_counter() - t0
@@ -906,12 +917,28 @@ def main(argv=None):
             ct = _HushCt(lib_path=a.dll, model_path=a.bundle)
             assert ct.ready, ct.last_error
             ct.reset()
+            ct.trace_lsnr = True
             c = ct.process(x)
             d = np.abs(o - c)
             print(f"parity vs ctypes: max_abs={d.max():.6f} "
                   f"mean_abs={d.mean():.6f} "
                   f"onnx_rms={float(np.sqrt(np.mean(o.astype(float)**2))):.4f} "
                   f"ct_rms={float(np.sqrt(np.mean(c.astype(float)**2))):.4f}")
+            lo = np.asarray(core._lsnr_trace, dtype=np.float64)
+            lc = np.asarray(ct._lsnr_trace, dtype=np.float64)
+            m = min(len(lo), len(lc))
+            if m:
+                dd = np.abs(lo[:m] - lc[:m])
+                # Gate classes per frame: 0 zero-mask, 1 full, 2 bypass.
+                def _cls(v):
+                    return 0 if v < -15.0 else (2 if v > 35.0 else 1)
+                agree = sum(_cls(aa) == _cls(bb)
+                            for aa, bb in zip(lo[:m], lc[:m])) / m
+                print(f"lsnr: frames={m} mean_abs={dd.mean():.3f}dB "
+                      f"max_abs={dd.max():.3f}dB gate_agree={agree:.3f}")
+                print("  first 8 pairs (onnx / ct): " +
+                      " ".join(f"{aa:.1f}/{bb:.1f}"
+                               for aa, bb in zip(lo[:8], lc[:8])))
             # Per-2s windows: transient-localized diffs (clicks/onsets)
             # vs spread-everywhere (systematic port error) read
             # completely differently.

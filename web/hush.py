@@ -163,6 +163,9 @@ class _HushCt:
         self._frame_len = 0
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
+        # LSNR trace (probe/diagnostic only — gated, never in production).
+        self.trace_lsnr = False
+        self._lsnr_trace = []
         try:
             self._load()
         except Exception as e:
@@ -246,6 +249,7 @@ class _HushCt:
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
         self.in_rms = self.out_rms = 0.0
+        self._lsnr_trace = []
         if self._lib is not None and self._session is not None:
             try:
                 self._lib.weya_nc_reset(self._session)
@@ -276,10 +280,12 @@ class _HushCt:
             chunk = np.ascontiguousarray(self._in_carry[:fl])
             self._in_carry = self._in_carry[fl:]
             out = np.zeros(fl, dtype=np.float32)
-            self._lib.weya_nc_process_frame(
+            lsnr = float(self._lib.weya_nc_process_frame(
                 self._session,
                 chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)))
+                out.ctypes.data_as(ctypes.POINTER(ctypes.c_float))))
+            if self.trace_lsnr:
+                self._lsnr_trace.append(lsnr)
             self._out_carry = np.concatenate([self._out_carry, out])
         out = np.empty(n, dtype=np.float32)
         avail = min(len(self._out_carry), n)
