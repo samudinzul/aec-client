@@ -1138,16 +1138,16 @@ def main(argv=None):
                 best = (0, -1.0)
                 for lag in range(-3, 4):
                     if lag < 0:
-                        a, b = lo[:lag], lc[-lag:]
+                        la, lb = lo[:lag], lc[-lag:]
                     elif lag > 0:
-                        a, b = lo[lag:], lc[:m - lag]
+                        la, lb = lo[lag:], lc[:m - lag]
                     else:
-                        a, b = lo, lc
-                    n = min(len(a), len(b))
+                        la, lb = lo, lc
+                    n = min(len(la), len(lb))
                     if n < 10:
                         continue
-                    a, b = a[:n], b[:n]
-                    da, db = a - a.mean(), b - b.mean()
+                    la, lb = la[:n], lb[:n]
+                    da, db = la - la.mean(), lb - lb.mean()
                     denom = np.sqrt((da * da).sum() * (db * db).sum())
                     corr = float((da * db).sum() / denom) if denom else 0.0
                     if corr > best[1]:
