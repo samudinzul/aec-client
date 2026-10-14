@@ -1131,6 +1131,29 @@ def main(argv=None):
                 print("  first 8 pairs (onnx / ct): " +
                       " ".join(f"{aa:.1f}/{bb:.1f}"
                                for aa, bb in zip(lo[:8], lc[:8])))
+                # Lag scan: a constant frame offset between the two
+                # traces (priming/buffering asymmetry) looks exactly
+                # like a systematic value gap at lag 0. Correlate at
+                # -3..+3; a sharp peak off zero is alignment, not math.
+                best = (0, -1.0)
+                for lag in range(-3, 4):
+                    if lag < 0:
+                        a, b = lo[:lag], lc[-lag:]
+                    elif lag > 0:
+                        a, b = lo[lag:], lc[:m - lag]
+                    else:
+                        a, b = lo, lc
+                    n = min(len(a), len(b))
+                    if n < 10:
+                        continue
+                    a, b = a[:n], b[:n]
+                    da, db = a - a.mean(), b - b.mean()
+                    denom = np.sqrt((da * da).sum() * (db * db).sum())
+                    corr = float((da * db).sum() / denom) if denom else 0.0
+                    if corr > best[1]:
+                        best = (lag, corr)
+                print(f"lsnr lag scan: best lag={best[0]} corr={best[1]:.3f} "
+                      f"(off-zero peak = alignment artifact)")
             # Per-2s windows: transient-localized diffs (clicks/onsets)
             # vs spread-everywhere (systematic port error) read
             # completely differently.
