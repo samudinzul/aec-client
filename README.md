@@ -52,7 +52,7 @@ No more headphones. No more echo. No dead-air noise.
   - **WebRTC AEC3** — the same canceller Chrome and Google Meet use: strongest canceller.
   - **NKF-AEC** — tiny neural Kalman core (ICASSP 2023, 45 KB model), for weak CPUs.
   - AEC3 and NKF-AEC are **experimental** — hidden from the menu by default; tick **Show experimental engines** on the Appearance tab to reveal them.
-- **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
+- **What you see is what runs** — the profile label always reads `engine`, `engine → NS`, or `engine → Hush`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - **Noise suppression** — Off / DTLN-NS / Hush radio after the engine on every path. **DTLN-NS** *(default)* is a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. **Hush** (pulp-vision/Hush) kills keyboards, mice and background talkers better at slightly more CPU.
 - **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting.
 - **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC has the lightest engine core, but with Noise suppression on, all chains cost about the same (every chain runs one NS stage).
@@ -150,7 +150,7 @@ Full docs: [web/README.md](web/README.md).
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
    - **Input Profile**: **Voice Isolation** — one tap that turns on
      Discord's noise cleanup. Echo and hiss are already removed by
-     this app (DTLN-NS handles noise on every path).
+     this app (the NS stage handles noise on every path).
    - Prefer manual control? Pick the **Custom** profile instead:
      Echo Cancellation **OFF** (this app does it — two cancellers
      stacked fight each other), Noise Suppression **Krisp**
@@ -243,11 +243,11 @@ One combo at the top of the Audio tab selects the engine. The label shows the en
 
 | Label | Chain | Rate | Post stages | What it is for |
 |-------|-------|------|-------------|----------------|
-| **DTLN-AEC 128** *(default)* | DTLN-128 → NS | 16 kHz | DTLN-NS | Best echo + noise handling; DTLN-NS removes background noise. |
-| **WebRTC AEC3** | WebRTC AEC3 → NS | 16 kHz (48 kHz optional) | DTLN-NS | Reliable, well-tested baseline: strongest canceller + noise suppression. |
-| **NKF-AEC** | NKF → NS | 16 kHz | DTLN-NS | Weak CPUs: cheap canceller, same post stage. |
+| **DTLN-AEC 128** *(default)* | DTLN-128 → NS | 16 kHz | DTLN-NS (Hush optional) | Best echo + noise handling; DTLN-NS removes background noise. |
+| **WebRTC AEC3** | WebRTC AEC3 → NS | 16 kHz (48 kHz optional) | DTLN-NS (Hush optional) | Reliable, well-tested baseline: strongest canceller + noise suppression. |
+| **NKF-AEC** | NKF → NS | 16 kHz | DTLN-NS (Hush optional) | Weak CPUs: cheap canceller, same post stage. |
 
-- The **Noise suppression (DTLN-NS)** tick shows for every engine. Switching engines never resets it.
+- The **Noise suppression** radio (Off / DTLN-NS / Hush) shows for every engine. Switching engines never resets it.
 - Sample rate (More → Processing), gains and devices are independent of the profile. Only the 16-kHz-only engines (DTLN, NKF) force the rate back to 16 kHz.
 - Status line shows the active chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
 - AEC3 and NKF-AEC are experimental: hidden by default, revealed by ticking **Show experimental engines** on the Appearance tab.
@@ -284,12 +284,14 @@ The release ZIP bundles all required DLLs:
 | `onnxruntime.dll` | ~16 MB | Neural inference (NKF, DTLN ONNX fallback; official MS build, uncompressed) |
 | `msvcp140/vcruntime140*.dll` | ~900 KB | VC++ 14 runtime (required by onnxruntime.dll) |
 | `tensorflowlite_c.dll` | ~4.5 MB | TFLite runtime for DTLN (primary path) |
+| `weya_nc.dll` | ~14 MB | Hush NS backend runtime (loads at Start when picked) |
 | `libwinpthread-1.dll` | ~63 KB | MinGW thread runtime |
 | `libgcc_s_seh-1.dll` | ~150 KB | GCC runtime |
 | `libstdc++-6.dll` | ~2.6 MB | C++ standard library |
 | `models/nkf.onnx` | ~45 KB | NKF model |
 | `models/dtln_aec_128_{1,2}.tflite` | ~7 MB | DTLN-AEC 128 pair (default profile) |
 | `models/dtln_ns_128_{1,2}.tflite` | ~4 MB | DTLN noise reduction pair |
+| `models/hush_16k_onnx.tar.gz` | ~8 MB | Hush NS bundle (optional backend) |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
 
@@ -301,7 +303,7 @@ How audio flows through the app:
 
 ```
 Your microphone  ─────────┐
-                            ├─→  Engine  ─→  DTLN-NS  ─→  VB-CABLE  ─→  Discord / Zoom
+                            ├─→  Engine  ─→  NS  ─→  VB-CABLE  ─→  Discord / Zoom
 Your speakers  ───────────┘   (AEC3 / NKF / DTLN)
 ```
 
@@ -319,7 +321,8 @@ Desktop: C++17 + Dear ImGui + miniaudio, built with MinGW-w64 GCC /
 CMake / Ninja on MSYS2 UCRT64. Web UI: Python (FastAPI + LiteRT +
 pyaudiowpatch + NumPy). Engines: WebRTC AEC3 (Google), NKF-AEC
 ([William1617/REAL_TIME_NKF_AEC](https://github.com/William1617/REAL_TIME_NKF_AEC)),
-DTLN-AEC + DTLN-NS ([breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec)).
+DTLN-AEC + DTLN-NS ([breizhn/DTLN-aec](https://github.com/breizhn/DTLN-aec)),
+Hush ([pulp-vision/Hush](https://github.com/pulp-vision/Hush)).
 Full credits in [Credits](#credits) and `LICENSES/THIRD-PARTY.txt`.
 
 ---
@@ -328,7 +331,7 @@ Full credits in [Credits](#credits) and `LICENSES/THIRD-PARTY.txt`.
 
 - **NKF-AEC** (Jiang et al., ICASSP 2023) — tiny neural Kalman core (45 KB model, 16 kHz) for weak CPUs, with built-in residual suppression. Self-releasing loop protection underneath; never mutes.
 - **DTLN-AEC 128** (Westhausen & Meyer, ICASSP 2021) — dual-LSTM echo + noise canceller (1.8M params, 16 kHz). Needs `tensorflowlite_c.dll` next to the exe *or* the `.onnx` pair in `models/`; otherwise Start reports `Failed to load DTLN model` (other engines unaffected).
-- **Noise suppression (DTLN-NS)** — one tick for every engine: a second DTLN pair that removes background noise after the engine. Fail-open — a broken stage passes audio through, never mutes.
+- **Noise suppression** — Off / DTLN-NS / Hush radio for every engine: DTLN-NS *(default)* is a second DTLN pair that removes background noise after the engine; **Hush** kills keyboards, mice and background talkers better at slightly more CPU. Fail-open — a broken stage passes audio through, never mutes.
 
 ---
 
@@ -412,6 +415,7 @@ aec-client/
 │   ├── nkf_wrapper.cpp/.h          NKF-AEC C wrapper
 │   ├── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
 │   ├── dtln_ns_wrapper.cpp/.h       DTLN noise reduction (TFLite/ONNX)
+│   ├── hush_wrapper.cpp/.h          Hush NS backend (prebuilt weya_nc, LoadLibrary)
 │
 ├── include/
 │   ├── miniaudio.h                 Audio I/O
@@ -419,6 +423,7 @@ aec-client/
 │
 ├── libs/
 │   └── tensorflowlite_c.dll        TFLite runtime for DTLN (bundled in release)
+│   └── weya_nc.dll                Hush NS runtime (bundled in release)
 │
 ├── third_party/
 │   ├── imgui/                      Dear ImGui source
@@ -430,6 +435,7 @@ aec-client/
 │   ├── nkf.onnx                    NKF model (45 KB)
 │   ├── dtln_aec_128_{1,2}.tflite   DTLN-AEC 128 pair (default profile)
 │   └── dtln_ns_128_{1,2}.tflite    DTLN noise reduction pair
+│   └── hush_16k_onnx.tar.gz        Hush NS bundle (optional backend)
 │
 ├── web/                        Pure-Python web UI (no .exe — see above)
 │   ├── start.bat               One-click launcher (venv + packages + native window)
@@ -437,8 +443,9 @@ aec-client/
 │   ├── server.py               FastAPI REST + WebSocket, serves ui/
 │   ├── chain.py                DTLN → NS (port of the C++ frame pump)
 │   ├── audio.py                pyaudiowpatch callback-mode mic/loopback/CABLE I/O
-│   ├── dsp.py                  rFFT/OLA framing, resampling, meters (+ optional Rust ext/)
+│   ├── dsp.py                  rFFT/OLA framing, resampling, meters
 │   ├── dtln.py / dtln_ns.py    DTLN-AEC / DTLN-NS engines (LiteRT)
+│   ├── hush.py                 Hush NS backend (user-supplied weya_nc lib, ctypes)
 │   ├── aec3.py               WebRTC AEC3 engine (pywebrtc-audio)
 │   ├── nkf.py                NKF-AEC engine + stages (onnxruntime, NumPy port)
 │   ├── ui/imgui_web.html + imgui_web.js   The GUI (Dear ImGui port; index.html is the classic fallback)
@@ -496,6 +503,7 @@ Third-party credits in [LICENSES/THIRD-PARTY.txt](LICENSES/THIRD-PARTY.txt).
 - **AudioFile** — Adam Stark (MIT)
 - **VB-CABLE** — VB-Audio (free for personal use)
 - **DTLN noise reduction (DTLN-NS)** — networkedaudio, port of breizhn/DTLN denoise (MIT)
+- **Hush** — pulp-vision ([Hush](https://github.com/pulp-vision/Hush), Apache-2.0)
 
 ---
 

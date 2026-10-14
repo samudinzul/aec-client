@@ -2181,7 +2181,7 @@ void DrawAboutTab() {
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
     ImGui::BulletText("Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC)");
-    ImGui::BulletText("DTLN-NS noise suppression on every engine (on/off)");
+    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush)");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -2194,6 +2194,7 @@ void DrawAboutTab() {
     ImGui::BulletText("NKF-AEC - Jiang et al. (ICASSP 2023, MIT)");
     ImGui::BulletText("DTLN-AEC - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("DTLN-NS - networkedaudio port of breizhn/DTLN denoise (MIT)");
+    ImGui::BulletText("Hush - pulp-vision (Apache-2.0)");
     ImGui::BulletText("ONNX Runtime - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio - David Reid (MIT-0)");

@@ -323,7 +323,7 @@ class WebImGuiUI {
         p.appendChild(this.sep('Features'));
         const f = this.mk('div');
         f.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
-            '<li>Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC) + DTLN-NS noise reduction (16 kHz)</li>' +
+            '<li>Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC) + noise suppression (Off / DTLN-NS / Hush, 16 kHz)</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
             '<li>Live level meters</li>' +
@@ -335,6 +335,7 @@ class WebImGuiUI {
         c.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
             '<li>DTLN-AEC — Westhausen &amp; Meyer (ICASSP 2021, MIT)</li>' +
             '<li>DTLN-NS — networkedaudio port of breizhn/DTLN denoise (MIT)</li>' +
+            '<li>Hush — pulp-vision (Apache-2.0)</li>' +
             '<li>Dear ImGui — Omar Cornut (MIT) — layout reference for this page</li>' +
             '<li>FastAPI, uvicorn, pywebview, pystray, numpy, ai-edge-litert</li>' +
             '</ul><div class="hint">Made with Python · source: github.com/samudinzul/aec-client</div>';
