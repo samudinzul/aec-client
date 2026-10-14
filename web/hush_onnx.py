@@ -873,6 +873,8 @@ def main(argv=None):
     ap.add_argument("--wav", default=None)
     ap.add_argument("--dll", default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--out-ct", default=None,
+                    help="also write the ctypes reference output here")
     a = ap.parse_args(argv)
     core = HushOnnxCore(a.bundle)
     try:
@@ -907,7 +909,26 @@ def main(argv=None):
             c = ct.process(x)
             d = np.abs(o - c)
             print(f"parity vs ctypes: max_abs={d.max():.6f} "
-                  f"mean_abs={d.mean():.6f}")
+                  f"mean_abs={d.mean():.6f} "
+                  f"onnx_rms={float(np.sqrt(np.mean(o.astype(float)**2))):.4f} "
+                  f"ct_rms={float(np.sqrt(np.mean(c.astype(float)**2))):.4f}")
+            # Per-2s windows: transient-localized diffs (clicks/onsets)
+            # vs spread-everywhere (systematic port error) read
+            # completely differently.
+            w = 16000 * 2
+            for s in range(0, len(x), w):
+                seg = d[s:s + w]
+                if len(seg):
+                    print(f"  [{s/16000:4.1f}s] max_abs={seg.max():.6f}")
+            if a.out_ct is not None:
+                v = np.clip(np.rint(c * 32768.0),
+                            -32768.0, 32767.0).astype(np.int16)
+                with wave.open(a.out_ct, "wb") as wv:
+                    wv.setframerate(16000)
+                    wv.setnchannels(1)
+                    wv.setsampwidth(2)
+                    wv.writeframes(v.tobytes())
+                print(f"wrote {a.out_ct}")
         if a.out is not None:
             v = np.clip(np.rint(o * 32768.0),
                         -32768.0, 32767.0).astype(np.int16)
