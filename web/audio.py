@@ -406,8 +406,12 @@ class AudioRunner:
         self.monitor_enabled = bool(monitor_enabled)
         self._in_q = queue.Queue(maxsize=_Q_DEPTH)
         self._ref_q = queue.Queue(maxsize=_Q_DEPTH)
-        self._out_q = queue.Queue(maxsize=_Q_DEPTH)
-        self._mon_q = queue.Queue(maxsize=_Q_DEPTH)
+        # Output queues are shallower than input: each holds 8 ms
+        # 16 kHz frames, so 8 deep = 64 ms of slack. 4 deep caps
+        # the output leg at ~32 ms; underruns fade (EmitFading
+        # parity) instead of stalling, so tighter is safer here.
+        self._out_q = queue.Queue(maxsize=4)
+        self._mon_q = queue.Queue(maxsize=4)
         self._stop = threading.Event()
         self._threads = []
         self._pa = None
@@ -610,7 +614,10 @@ class AudioRunner:
 
     def _work_step(self, mic_buf, ref_buf):
         try:
-            raw_mic = self._in_q.get(timeout=0.05)
+            # 10 ms poll matches the frame cadence (128 @ 16 kHz =
+            # 8 ms); the old 50 ms timeout stalled the pump a full
+            # 5 frames whenever the mic hiccuped.
+            raw_mic = self._in_q.get(timeout=0.01)
         except queue.Empty:
             return
         # Loopback starves while the speakers are idle
@@ -684,6 +691,7 @@ class AudioRunner:
                     format=pa_patch.paInt16, channels=1,
                     rate=self._mon_rate, output=True,
                     output_device_index=self.monitor_idx,
+                    frames_per_buffer=128,
                     stream_callback=self._on_mon))
             except Exception:
                 self.monitor_idx = None
