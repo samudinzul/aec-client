@@ -282,8 +282,19 @@ def _tray_icon():
                  os.path.join(here, "..", "resources", "app.ico")):
         try:
             if os.path.isfile(cand):
-                img = Image.open(cand)
-                img.load()
+                import warnings
+                # app.ico is multi-resolution: its directory sizes
+                # disagree with the embedded PNG, so Pillow warns
+                # (not fails) on load. Silence exactly that warning —
+                # real load errors still raise into the fallback below.
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="Image was not the expected size",
+                        category=UserWarning,
+                        module="PIL\\.IcoImagePlugin")
+                    img = Image.open(cand)
+                    img.load()
                 return img.convert("RGBA").resize((64, 64), Image.LANCZOS)
         except Exception:
             pass
