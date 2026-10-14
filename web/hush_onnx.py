@@ -242,8 +242,25 @@ def _concrete_shape(shape):
     return tuple(1 if _is_time_dim(d) else int(d) for d in shape)
 
 
+def _vi_shape(vi):
+    """ValueInfoProto shape -> tuple (ints, symbolic params, or -1)."""
+    dims = []
+    try:
+        shape = vi.type.tensor_type.shape
+    except Exception:
+        return ()
+    for d in shape.dim:
+        if d.HasField("dim_value"):
+            dims.append(d.dim_value)
+        elif d.dim_param:
+            dims.append(d.dim_param)
+        else:
+            dims.append(-1)
+    return tuple(dims)
+
+
 class _OnnxNet:
-    """One .onnx file: session + graph proto + carried GRU states."""
+    """One .onnx file: graph proto, session, carried GRU states."""
 
     def __init__(self, path):
         if ort is None:
@@ -255,19 +272,45 @@ class _OnnxNet:
             raise RuntimeError("onnx is not installed (GRU graph "
                                "inspection — pip install -r "
                                "web/requirements-engines.txt)")
+        self._onnx = onnx
+        self.proto = onnx.load(path)
+        self._path = path
+        self._sess = None
+        self.ins = []
+        self.outs = []
+        self.states = {}  # h_in name -> {shape, out, arr}
+
+    def proto_io(self):
+        """I/O listing straight from the graph (pre/post-surgery).
+
+        Initializers listed as inputs are excluded (they're weights,
+        not feeds). Shapes use dim values, symbolic params, or -1.
+        """
+        inits = {i.name for i in self.proto.graph.initializer}
+        self.ins = [
+            (i.name, _vi_shape(i), f"tensor({i.type.tensor_type.elem_type})")
+            for i in self.proto.graph.input if i.name not in inits]
+        self.outs = [
+            (o.name, _vi_shape(o), f"tensor({o.type.tensor_type.elem_type})")
+            for o in self.proto.graph.output]
+
+    def build_session(self):
+        """Create the inference session from the (possibly rewired) graph."""
+        import io
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
         opts.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
+        buf = io.BytesIO()
+        buf.write(self.proto.SerializeToString())
         self._sess = ort.InferenceSession(
-            path, sess_options=opts, providers=["CPUExecutionProvider"])
+            buf.getvalue(), sess_options=opts,
+            providers=["CPUExecutionProvider"])
         self.ins = [(i.name, tuple(i.shape), i.type)
                     for i in self._sess.get_inputs()]
         self.outs = [(o.name, tuple(o.shape), o.type)
                      for o in self._sess.get_outputs()]
-        self.proto = onnx.load(path)
-        self.states = {}  # h_in name -> {shape, out, arr}
 
     def spec_lines(self, tag):
         lines = [f"[{tag}]"]
@@ -309,11 +352,24 @@ class HushOnnxCore:
         self.enc = _OnnxNet(_part("enc.onnx"))
         self.erb = _OnnxNet(_part("erb_dec.onnx"))
         self.df = _OnnxNet(_part("df_dec.onnx"))
+        # Data mapping runs on the pristine graphs (no state tensors
+        # in I/O at all); state surgery rewires protos next; sessions
+        # build last so they see the final graphs.
+        for net in (self.enc, self.erb, self.df):
+            net.proto_io()
+        self._map_all()
+        for net in (self.enc, self.erb, self.df):
+            net.build_session()
+            net.proto_io()
         self._dump = "\n".join(
             self.enc.spec_lines("enc")
             + self.erb.spec_lines("erb_dec")
             + self.df.spec_lines("df_dec"))
-        self._map_all()
+        # Load-time proof the spec layout is decidable (raises here,
+        # not mid-call, when ambiguous).
+        self._arrange_spec(np.zeros(NB_DF, np.complex64),
+                           self._enc_in["spec"][1])
+        print(self._dump)
         self._feats = _DfFeats()
         self._rolling = [np.zeros(N_FREQ, dtype=np.complex64)
                          for _ in range(DF_ORDER)]
@@ -431,11 +487,6 @@ class HushOnnxCore:
         self._df_in, self._df_out = self._map_decoder(
             self.df, "df_dec", {"emb": 128, "c0": 1024},
             ("coefs", NB_DF * DF_ORDER * 2))
-        # Load-time proof the spec layout is decidable (raises here,
-        # not mid-call, when ambiguous).
-        self._arrange_spec(np.zeros(NB_DF, np.complex64),
-                           self._enc_in["spec"][1])
-        print(self._dump)
 
     def _map_decoder(self, net, tag, in_roles, out_role):
         data = self._assign_roles(
@@ -453,17 +504,35 @@ class HushOnnxCore:
 
         The exports carry no state tensors in I/O (recurrence lives
         inside, pulsed by tract) — so per-frame carry overrides each
-        recurrent node's initial-state initializer and fetches its
-        state-output intermediate. Both are mainstream onnxruntime
-        features (feed-by-initializer-name, fetch-intermediate).
-        Anything else (no recurrent nodes is fine — pure conv;
-        missing initializers, non-forward direction) fails closed.
+        recurrent node's initial-state initializer, or rewires a
+        node-fed state edge to a declared input, and fetches the
+        state-output intermediate. All mainstream onnxruntime
+        features. Anything else fails closed.
         """
         from collections import Counter
+        from onnx import TensorProto, checker, helper, shape_inference
         proto = net.proto
         hist = Counter(n.op_type for n in proto.graph.node)
         print(f"[hush_onnx] {tag}: top ops " +
               ", ".join(f"{k}×{v}" for k, v in hist.most_common(8)))
+        try:
+            inferred = shape_inference.infer_shapes(proto)
+        except Exception as e:
+            raise RuntimeError(f"{tag}: shape inference failed ({e})")
+        types = {}
+        for vi in (list(inferred.graph.value_info)
+                   + list(inferred.graph.output)):
+            if vi.type.HasField("tensor_type"):
+                tt = vi.type.tensor_type
+                dims = []
+                for d in tt.shape.dim:
+                    if d.HasField("dim_value"):
+                        dims.append(d.dim_value)
+                    elif d.dim_param:
+                        dims.append(d.dim_param)
+                    else:
+                        dims.append(-1)
+                types[vi.name] = tuple(dims)
         inits = {}
         for init in proto.graph.initializer:
             inits[init.name] = tuple(init.dims)
@@ -495,17 +564,52 @@ class HushOnnxCore:
                     raise RuntimeError(
                         f"{tag}: {node.op_type} '{node.name}' without "
                         f"carryable state (in={ins} out={outs})")
-                if hin not in inits:
-                    raise RuntimeError(
-                        f"{tag}: state '{hin}' is not an overridable "
-                        "initializer")
                 if hin in pairs:
                     raise RuntimeError(
                         f"{tag}: state '{hin}' shared by two nodes")
-                pairs[hin] = {"shape": inits[hin], "out": hout,
-                              "arr": np.zeros(inits[hin], dtype=np.float32)}
-                print(f"[hush_onnx] {tag}: carry {hin} "
-                      f"{inits[hin]} -> {hout}")
+                if hin in inits:
+                    shape = inits[hin]
+                    feed_name = hin
+                    print(f"[hush_onnx] {tag}: carry {hin} "
+                          f"{shape} -> {hout} (initializer override)")
+                else:
+                    # State fed by another node (here: ConstantOfShape
+                    # zeros): rewire that edge to a new declared input
+                    # and declare the state output, then rebuild the
+                    # session from the mutated graph. Dangling producer
+                    # nodes are legal (pruned or kept by the optimizer).
+                    shape = types.get(hin)
+                    if (shape is None or not shape
+                            or any(not isinstance(d, int) or d <= 0
+                                   for d in shape)):
+                        raise RuntimeError(
+                            f"{tag}: state '{hin}' has no concrete "
+                            f"shape ({shape}) — cannot carry")
+                    feed_name = f"hush_state_{tag}_{len(pairs)}"
+                    renamed = False
+                    for SRC in (net.proto.graph.node,):
+                        for nd in SRC:
+                            for i, nm in enumerate(nd.input):
+                                if nm == hin:
+                                    nd.input[i] = feed_name
+                                    renamed = True
+                    if not renamed:
+                        raise RuntimeError(
+                            f"{tag}: state edge '{hin}' not found")
+                    net.proto.graph.input.append(
+                        helper.make_tensor_value_info(
+                            feed_name, TensorProto.FLOAT, list(shape)))
+                    net.proto.graph.output.append(
+                        helper.make_tensor_value_info(
+                            hout, TensorProto.FLOAT, list(shape)))
+                    print(f"[hush_onnx] {tag}: carry {hin} "
+                          f"{shape} -> {hout} (rewired to {feed_name})")
+                pairs[feed_name] = {"shape": shape, "out": hout,
+                                    "arr": np.zeros(shape, dtype=np.float32)}
+        try:
+            checker.check_model(net.proto)
+        except Exception as e:
+            raise RuntimeError(f"{tag}: rewired graph invalid ({e})")
         net.states = pairs
 
     # -- streaming (tract.rs process()) --
