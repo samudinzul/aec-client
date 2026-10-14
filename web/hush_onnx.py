@@ -679,6 +679,12 @@ class HushOnnxCore:
                                     "arr": np.zeros(shape, dtype=np.float32)}
                 print(f"[hush_onnx] {tag}: carry {hin} "
                       f"{tuple(shape)} -> {hout} ({how})")
+                # Prove the rewire took (protobuf repeated-field
+                # assignment is silent on failure modes we can't see):
+                wired = [nm for nd in net.proto.graph.node
+                         for nm in nd.input].count(feed_name)
+                print(f"[hush_onnx] {tag}: '{feed_name}' feeds "
+                      f"{wired} edge(s)")
         try:
             checker.check_model(net.proto)
         except Exception as e:
@@ -971,10 +977,37 @@ def main(argv=None):
     ap.add_argument("--selftest", action="store_true",
                     help="carry diagnostics: Y_h variability per frame + "
                     "carried-vs-zeroed output diff (no ground truth needed)")
+    ap.add_argument("--internals", type=int, default=0, metavar="N",
+                    help="dump per-frame internals (lsnr, mask head/mean, "
+                    "coefs mean-abs, Y_h head) for the first N frames")
     a = ap.parse_args(argv)
     core = HushOnnxCore(a.bundle)
     try:
         print(core.spec_dump())
+        if a.internals:
+            # Full internal trace for the first N frames on tones:
+            # lsnr, mask head + mean (sigmoid => [0,1] expected),
+            # coefs mean-abs, Y_h head. Sanity-read by eye.
+            import math
+            t = np.arange(HOP * a.internals, dtype=np.float32) / 16000.0
+            tone = (0.3 * np.sin(2 * math.pi * 220.0 * t)).astype(np.float32)
+            core.reset()
+            for k in range(a.internals):
+                fr = tone[k * HOP:(k + 1) * HOP]
+                spec = core._feats.analyze(fr)
+                core._rolling.append(spec.copy())
+                del core._rolling[0]
+                erb = core._feats.erb_feats(spec)
+                nspec = core._feats.norm_spec(spec)
+                lsnr, mask, coefs = core._infer(erb, nspec)
+                yh = {kk: np.asarray(v["arr"]).ravel()[:3].tolist()
+                      for kk, v in core.enc.states.items()}
+                print(f"f{k}: lsnr={lsnr:.2f} "
+                      f"mask[:5]={np.asarray(mask).ravel()[:5].tolist()} "
+                      f"maskmean={float(np.mean(mask)):.3f} "
+                      f"coefsabs={float(np.mean(np.abs(coefs))):.4f} "
+                      f"Y_h={yh}")
+            return 0
         if a.selftest:
             # Carry diagnostics without any ground truth.
             # NOTE: noise input gates to the zero mask (hides state
