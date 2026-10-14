@@ -817,8 +817,12 @@ class HushOnnxCore:
         except Exception as e:
             # Loud passthrough: latch the error into stats (the UI
             # err line shows ns.error) instead of failing silently
-            # every frame.
+            # every frame. HUSH_DEBUG=1 also dumps the traceback
+            # (probe runs, never production).
+            import traceback
             self.last_error = f"hush onnx frame failed: {e}"
+            if os.environ.get("HUSH_DEBUG"):
+                traceback.print_exc()
             self.out_rms = self.in_rms
             return frame.copy()
 
