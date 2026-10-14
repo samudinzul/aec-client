@@ -11,3 +11,7 @@ onnxruntime>=1.20     # NKF-AEC engine: runs models/nkf.onnx on CPU
                       # Also runs the Hush NS backend (web/hush_onnx.py:
                       # enc/erb_dec/df_dec from the shipped bundle, no
                       # DLL needed) — same fail-closed gating as NKF.
+onnx>=1.17            # Hush GRU-carry discovery only: inspects the
+                      # bundle's graph once at load (recurrent node
+                      # state names) — lazy import, never in the base
+                      # set. Mainstream ONNX-project wheel.

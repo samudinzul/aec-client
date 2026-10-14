@@ -39,6 +39,7 @@ like every other stage). Never mutes.
 """
 
 import os
+import re
 import sys
 import tarfile
 import tempfile
@@ -212,6 +213,17 @@ def _is_time_dim(d):
     return d is None or isinstance(d, str) or d < 0
 
 
+def _role_hit(name, role):
+    """Role fragment as a standalone token (not inside another word).
+
+    Guards: 'e2' must not match 'layer20', 'm' must not match
+    'Sigmoidm_dim_0' — but full names ('e2', 'lsnr', 'coefs',
+    'feat_erb') always match.
+    """
+    return re.search(r"(?:^|[^a-z0-9])" + re.escape(role)
+                     + r"(?:[^a-z0-9]|$)", name.lower()) is not None
+
+
 def _fixed_total(shape):
     """Product of dims with dynamic/time dims counted as 1.
 
@@ -231,12 +243,18 @@ def _concrete_shape(shape):
 
 
 class _OnnxNet:
-    """One .onnx file: session + carried GRU states (zeros init)."""
+    """One .onnx file: session + graph proto + carried GRU states."""
 
     def __init__(self, path):
         if ort is None:
             raise RuntimeError("onnxruntime is not installed "
                                "(pip install -r web/requirements-engines.txt)")
+        try:
+            import onnx
+        except ImportError:
+            raise RuntimeError("onnx is not installed (GRU graph "
+                               "inspection — pip install -r "
+                               "web/requirements-engines.txt)")
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
@@ -248,7 +266,8 @@ class _OnnxNet:
                     for i in self._sess.get_inputs()]
         self.outs = [(o.name, tuple(o.shape), o.type)
                      for o in self._sess.get_outputs()]
-        self.states = {}  # in_name -> {shape, out, arr}
+        self.proto = onnx.load(path)
+        self.states = {}  # h_in name -> {shape, out, arr}
 
     def spec_lines(self, tag):
         lines = [f"[{tag}]"]
@@ -307,38 +326,61 @@ class HushOnnxCore:
 
     # -- I/O mapping (probed, strict; fail closed with the dump) --
 
-    def _data_inputs(self, net, roles):
-        """Map {role: (name, shape)} by name, then exact fixed total.
+    _TRIPLE = ("e2", "e3", "emb")  # all 128/frame; split separately
 
-        roles: role -> single-frame total. Dynamic dims count as 1;
-        fixed time dims != 1 inflate the total past any role (fail
-        closed, never streamed). State-smelling names are never
-        claimed as data. Anything unclaimed stays for state pairing.
+    def _assign_roles(self, tagged, roles, tag, what, e3_first):
+        """Map {role: (name, shape)}: token names, exact totals, triple.
+
+        tagged: [(name, shape)] in net order. roles: {role: want}.
+        State-smelling names are never claimed. e2/e3/emb go through
+        _split_128 when still missing afterwards. Anything missing
+        or ambiguous fails closed with the dump.
         """
-        found = {}
-        # Pass 1: names (torch submodule forward-arg names usually
-        # survive export).
-        for name, shape, _t in net.ins:
-            if _is_state_name(name):
-                continue
-            low = name.lower()
+        cands = [(n, s) for n, s in tagged if not _is_state_name(n)]
+        data = {}
+        for name, shape in cands:  # token names first
             for role in roles:
-                if role in low and role not in found:
-                    found[role] = (name, shape)
+                if _role_hit(name, role) and role not in data:
+                    data[role] = (name, shape)
                     break
-        # Pass 2: exact totals for the rest (first claimant wins;
-        # collisions fall through to state pairing / fail below).
-        for name, shape, _t in net.ins:
-            if any(name == f[0] for f in found.values()):
-                continue
-            if _is_state_name(name):
+        for name, shape in cands:  # exact totals (triple excluded)
+            if any(name == f[0] for f in data.values()):
                 continue
             total = _fixed_total(shape)
             for role, want in roles.items():
-                if total == want and role not in found:
-                    found[role] = (name, shape)
+                if role in self._TRIPLE:
+                    continue
+                if total == want and role not in data:
+                    data[role] = (name, shape)
                     break
-        return found
+        missing3 = [r for r in self._TRIPLE
+                    if r in roles and r not in data]
+        if missing3:
+            claimed = {f[0] for f in data.values()}
+            bucket = [(n, s) for n, s in cands
+                      if n not in claimed and _fixed_total(s) == 128]
+            if set(missing3) == set(self._TRIPLE) and len(bucket) == 3:
+                e2, e3, emb = self._split_128(
+                    bucket, tag, what, e3_first)
+                data.update({"e2": e2, "e3": e3, "emb": emb})
+            elif len(missing3) == 1 and len(bucket) == 1:
+                (only,), ((bn, bs),) = missing3, bucket
+                if (only == "emb") != (len(bs) == 3):
+                    raise RuntimeError(
+                        f"{tag}: '{only}' rank mismatch ({bn} {bs}) "
+                        f"for {what}:\n{self._dump}")
+                data[only] = (bn, bs)
+            else:
+                raise RuntimeError(
+                    f"{tag}: roles {missing3} unresolvable "
+                    f"(bucket {bucket}) for {what}:\n{self._dump}")
+        missing = [r for r in roles if r not in data]
+        if missing:
+            raise RuntimeError(
+                f"{tag}: roles {missing} unrecognized for {what}:\n"
+                f"{self._dump}\n(paste this dump back — mapping needs "
+                "a one-line fix)")
+        return data
 
     def _split_128(self, bucket, tag, what, e3_first):
         """Split a 128-total bucket into (e2, e3, emb).
@@ -372,39 +414,22 @@ class HushOnnxCore:
         return e2, e3, emb
 
     def _map_all(self):
-        # Encoder inputs: erb (32), spec (128) — unique totals.
-        enc_in = self._data_inputs(self.enc, {"erb": 32, "spec": 128})
-        missing = [r for r in ("erb", "spec") if r not in enc_in]
-        if missing:
-            raise RuntimeError(
-                f"enc: data inputs {missing} unrecognized:\n{self._dump}\n"
-                "(paste this dump back — mapping needs a one-line fix)")
-        self._enc_in = enc_in
-        # Encoder data outputs: c0 1024, e0 512, e1 256, lsnr 1
-        # unique; 128-bucket {e2, e3, emb} via _split_128.
-        buckets = {}
-        for name, shape, _t in self.enc.outs:
-            if _is_state_name(name):
-                continue
-            buckets.setdefault(_fixed_total(shape), []).append((name, shape))
-        enc_out = {}
-        for role, want in (("c0", 1024), ("e0", 512), ("e1", 256),
-                           ("lsnr", 1)):
-            cands = buckets.get(want, [])
-            if len(cands) != 1:
-                raise RuntimeError(
-                    f"enc output '{role}' ambiguous ({cands}):\n{self._dump}")
-            enc_out[role] = cands[0]
-        e2, e3, emb = self._split_128(
-            buckets.get(128, []), "enc", "outputs", e3_first=False)
-        enc_out.update({"e2": e2, "e3": e3, "emb": emb})
-        self._enc_out = enc_out
-        self._pair_states(self.enc, "enc")
+        self._enc_in = self._assign_roles(
+            [(n, s) for n, s, _t in self.enc.ins],
+            {"erb": 32, "spec": 128}, "enc", "inputs", e3_first=True)
+        self._enc_out = self._assign_roles(
+            [(n, s) for n, s, _t in self.enc.outs],
+            {"c0": 1024, "e0": 512, "e1": 256, "e2": 128, "e3": 128,
+             "emb": 128, "lsnr": 1},
+            "enc", "outputs", e3_first=False)
+        self._discover_states(self.enc, "enc")
         # Decoders: unique totals mapped directly, 128-bucket split.
-        self._erb_in = self._map_decoder(
-            self.erb, "erb_dec", (("e1", 256), ("e0", 512)), ("m", 32))
-        self._df_in = self._map_decoder(
-            self.df, "df_dec", (("c0", 1024),),
+        self._erb_in, self._erb_out = self._map_decoder(
+            self.erb, "erb_dec",
+            {"emb": 128, "e3": 128, "e2": 128, "e1": 256, "e0": 512},
+            ("m", 32))
+        self._df_in, self._df_out = self._map_decoder(
+            self.df, "df_dec", {"emb": 128, "c0": 1024},
             ("coefs", NB_DF * DF_ORDER * 2))
         # Load-time proof the spec layout is decidable (raises here,
         # not mid-call, when ambiguous).
@@ -412,60 +437,75 @@ class HushOnnxCore:
                            self._enc_in["spec"][1])
         print(self._dump)
 
-    def _map_decoder(self, net, tag, expect, out_role):
-        """Decoder inputs: unique totals direct, 128-bucket split."""
-        buckets = {}
-        for name, shape, _t in net.ins:
-            if _is_state_name(name):
-                continue
-            buckets.setdefault(_fixed_total(shape), []).append((name, shape))
-        data = {}
-        for role, want in expect:
-            cands = buckets.get(want, [])
-            if len(cands) != 1:
-                raise RuntimeError(
-                    f"{tag}: '{role}' ambiguous ({cands}):\n{self._dump}")
-            data[role] = cands[0]
-        e2, e3, emb = self._split_128(
-            buckets.get(128, []), tag, "inputs", e3_first=True)
-        data.update({"e2": e2, "e3": e3, "emb": emb})
+    def _map_decoder(self, net, tag, in_roles, out_role):
+        data = self._assign_roles(
+            [(n, s) for n, s, _t in net.ins],
+            dict(in_roles), tag, "inputs", e3_first=True)
         oname, owant = out_role
-        cands = [(n, s) for n, s, _t in net.outs
-                 if not _is_state_name(n) and _fixed_total(s) == owant]
-        if len(cands) != 1:
-            raise RuntimeError(
-                f"{tag} output '{oname}' ambiguous ({cands}):\n{self._dump}")
-        self._pair_states(net, tag)
-        return data, cands[0]
+        out = self._assign_roles(
+            [(n, s) for n, s, _t in net.outs],
+            {oname: owant}, tag, "outputs", e3_first=False)
+        self._discover_states(net, tag)
+        return data, out[oname]
 
-    def _pair_states(self, net, tag):
-        """Same-total in/out pairing for GRU carry (zeros init)."""
-        in_tots, out_tots = {}, {}
-        for name, shape, _t in net.ins:
-            if _is_state_name(name):
-                in_tots.setdefault(_fixed_total(shape), []).append(
-                    (name, shape))
-        for name, shape, _t in net.outs:
-            if _is_state_name(name):
-                out_tots.setdefault(_fixed_total(shape), []).append(
-                    (name, shape))
+    def _discover_states(self, net, tag):
+        """GRU/LSTM carry via graph inspection (NOT I/O probing).
+
+        The exports carry no state tensors in I/O (recurrence lives
+        inside, pulsed by tract) — so per-frame carry overrides each
+        recurrent node's initial-state initializer and fetches its
+        state-output intermediate. Both are mainstream onnxruntime
+        features (feed-by-initializer-name, fetch-intermediate).
+        Anything else (no recurrent nodes is fine — pure conv;
+        missing initializers, non-forward direction) fails closed.
+        """
+        from collections import Counter
+        proto = net.proto
+        hist = Counter(n.op_type for n in proto.graph.node)
+        print(f"[hush_onnx] {tag}: top ops " +
+              ", ".join(f"{k}×{v}" for k, v in hist.most_common(8)))
+        inits = {}
+        for init in proto.graph.initializer:
+            inits[init.name] = tuple(init.dims)
         pairs = {}
-        for tot, ilist in in_tots.items():
-            olist = out_tots.get(tot, [])
-            if len(ilist) != 1 or len(olist) != 1:
+        for node in proto.graph.node:
+            if node.op_type not in ("GRU", "LSTM"):
+                continue
+            ins, outs = list(node.input), list(node.output)
+            direction = "forward"
+            for attr in node.attribute:
+                if attr.name == "direction":
+                    s = attr.s
+                    direction = (s.decode() if isinstance(s, bytes)
+                                 else str(s))
+            if direction != "forward":
                 raise RuntimeError(
-                    f"{tag} state pairing ambiguous "
-                    f"(in={ilist} out={olist}):\n{self._dump}")
-            (iname, ishape), (oname, _o) = ilist[0], olist[0]
-            pairs[iname] = {"shape": ishape, "out": oname,
-                            "arr": np.zeros(
-                                _concrete_shape(ishape), dtype=np.float32)}
-        for tot, olist in out_tots.items():
-            for oname, _o in olist:
-                if all(p["out"] != oname for p in pairs.values()):
+                    f"{tag}: non-forward {node.op_type} "
+                    f"('{node.name}', {direction}) — streaming port "
+                    "can't run it")
+            h_in = ins[5] if len(ins) > 5 else ""
+            h_out = outs[1] if len(outs) > 1 else ""
+            extra = []
+            if node.op_type == "LSTM":
+                c_in = ins[6] if len(ins) > 6 else ""
+                c_out = outs[2] if len(outs) > 2 else ""
+                extra.append((c_in, c_out))
+            for hin, hout in [(h_in, h_out)] + extra:
+                if not hin or not hout:
                     raise RuntimeError(
-                        f"{tag} unpaired state output '{oname}':\n"
-                        + self._dump)
+                        f"{tag}: {node.op_type} '{node.name}' without "
+                        f"carryable state (in={ins} out={outs})")
+                if hin not in inits:
+                    raise RuntimeError(
+                        f"{tag}: state '{hin}' is not an overridable "
+                        "initializer")
+                if hin in pairs:
+                    raise RuntimeError(
+                        f"{tag}: state '{hin}' shared by two nodes")
+                pairs[hin] = {"shape": inits[hin], "out": hout,
+                              "arr": np.zeros(inits[hin], dtype=np.float32)}
+                print(f"[hush_onnx] {tag}: carry {hin} "
+                      f"{inits[hin]} -> {hout}")
         net.states = pairs
 
     # -- streaming (tract.rs process()) --
@@ -528,7 +568,8 @@ class HushOnnxCore:
                 _concrete_shape(in_shape))
         for iname, st in net.states.items():
             feed[iname] = st["arr"]
-        outs = ([n for n, _s, _t in net.outs])
+        outs = ([n for n, _s, _t in net.outs]
+                + [st["out"] for st in net.states.values()])
         res = net._sess.run(outs, feed)
         got = dict(zip(outs, res))
         for _iname, st in net.states.items():

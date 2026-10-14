@@ -69,8 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   norms, carried GRU states, LSNR gating, order-5 deep filter).
   Tried before the ctypes path, which stays as fallback; the
   HushNs surface is unchanged (plus `path` in stats). I/O mapped
-  by probing — anything ambiguous fails closed with the spec dump.
-  Validate with `python -m web.hush_onnx BUNDLE` (dump +
+  by probing, GRU carry via graph-discovered initializer override
+  (needs the onnx wheel, engines pack) — anything ambiguous fails
+  closed with the spec dump. Validate with
+  `python -m web.hush_onnx BUNDLE` (dump +
   determinism), file runs with `--wav`, DLL parity with `--dll`.
 - **Web: transport + live levels on the Soundboard tab.**
   Own Start / Reset-to-defaults / status footer plus Mic/Ref/Out
