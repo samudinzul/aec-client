@@ -338,13 +338,23 @@ class HushNs:
                 return None, "hush bundle missing"
             try:
                 from .hush_onnx import HushOnnxCore
-                return HushOnnxCore(model), ""
+                try:
+                    atten = float(os.environ.get("HUSH_ATTEN_DB",
+                                                 str(atten_lim_db)))
+                except ValueError:
+                    atten = float(atten_lim_db)
+                return HushOnnxCore(model, atten_lim_db=atten), ""
             except Exception as e:
                 return None, f"hush onnx path failed: {e}"
 
         def _try_ct():
+            try:
+                atten = float(os.environ.get("HUSH_ATTEN_DB",
+                                             str(atten_lim_db)))
+            except ValueError:
+                atten = float(atten_lim_db)
             ct = _HushCt(lib_path=lib, model_path=model,
-                         atten_lim_db=atten_lim_db)
+                         atten_lim_db=atten)
             return (ct, "") if ct.ready else (None, ct.last_error)
 
         first, second = (_try_ct, _try_onnx) if prefer_ct else (

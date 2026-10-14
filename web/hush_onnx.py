@@ -392,10 +392,24 @@ class _OnnxNet:
 class HushOnnxCore:
     """Streaming Hush over onnxruntime (tract.rs port). NOT thread-safe."""
 
-    def __init__(self, bundle_path):
+    def __init__(self, bundle_path, atten_lim_db=None):
         self.last_error = ""
         self.in_rms = 0.0
         self.out_rms = 0.0
+        # Attenuation limit (dB), parity with the DLL session param
+        # (weya_nc_session_create atten). Caps max suppression: ERB
+        # gains floor at 10^(-atten/20), and the zero-gate emits the
+        # floor instead of silence. 100 = unlimited (DLL default).
+        # HUSH_ATTEN_DB overrides (e.g. 24 tames aggressive gating).
+        if atten_lim_db is None:
+            try:
+                atten_lim_db = float(
+                    os.environ.get("HUSH_ATTEN_DB", "100.0"))
+            except ValueError:
+                atten_lim_db = 100.0
+        self.atten_lim_db = float(atten_lim_db)
+        self._gain_floor = np.float32(
+            10.0 ** (-self.atten_lim_db / 20.0))
         self._tmp = tempfile.TemporaryDirectory(prefix="hush_onnx_")
         with tarfile.open(bundle_path, "r:gz") as tar:
             names = tar.getnames()
@@ -736,14 +750,15 @@ class HushOnnxCore:
         if self._trace_lsnr:
             self._lsnr_trace.append(lsnr)
         if lsnr < float(MIN_DB):
-            # Noise only: zero mask, no DF (bins<64 AND >=64 zeroed,
-            # like apply_mask over the full spec).
-            gains = np.zeros(NB_ERB, dtype=np.float32)
+            # Noise only: floor the mask instead of zeroing when an
+            # atten limit is set (keeps a noise floor instead of
+            # gating to silence); unlimited (100 dB) still zeros.
+            gains = np.full(NB_ERB, self._gain_floor, dtype=np.float32)
             coefs = None
         elif lsnr > float(MAX_ERB_DB):
             return frame.copy()  # clean: bypass everything
         else:
-            gains = mask
+            gains = np.maximum(mask, self._gain_floor).astype(np.float32)
             if lsnr > float(MAX_DF_DB):
                 coefs = None
         # ERB gains onto the newest spec (rectangular bands).
