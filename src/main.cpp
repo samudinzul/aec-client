@@ -1091,7 +1091,11 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     int fs = frameSizeForRate(g_sampleRate.load());
     if ((int)frameCount != fs) { EmitFading(out, frameCount); return; }
 
-    const size_t DRIFT_TARGET = (size_t)fs * 2;
+    // Minimal-latency tuning: ring target is ONE frame (not two).
+    // The OS period already buffers a full frame each way; holding
+    // two here just adds 10 ms of stale audio. Jitter trims via the
+    // threshold below (skips, never stalls).
+    const size_t DRIFT_TARGET = (size_t)fs;
     const size_t DRIFT_THRESHOLD = (size_t)fs / 16;
     if (g_micRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
         g_micRing.skip(g_micRing.available() - DRIFT_TARGET);
@@ -1235,10 +1239,9 @@ void monitor_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCou
     const ma_uint32 n =
         frameCount < (ma_uint32)MAX_FRAME_SIZE ? frameCount : (ma_uint32)MAX_FRAME_SIZE;
 
-    // The monitor runs on its own clock, so the ring can creep up or
-    // drain: trim the excess (same rule as the mic/ref drift guards).
+    // Same one-frame rule as the mic/ref guards (minimal latency).
     const size_t driftTarget =
-        (size_t)frameSizeForRate(g_sampleRate.load()) * 2;
+        (size_t)frameSizeForRate(g_sampleRate.load());
     if (g_monitorRing.available() > driftTarget)
         g_monitorRing.skip(g_monitorRing.available() - driftTarget);
 

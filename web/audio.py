@@ -43,7 +43,7 @@ from .dsp import (FRAME_SIZE, SAMPLE_RATE, resample_from_16k,
                   resample_to_16k, rms)
 from . import dsp  # soft_limit (tanh knee) is referenced as dsp.soft_limit
 
-_Q_DEPTH = 12
+_Q_DEPTH = 4
 
 
 def _pump_qos():
@@ -406,13 +406,12 @@ class AudioRunner:
         self.monitor_enabled = bool(monitor_enabled)
         self._in_q = queue.Queue(maxsize=_Q_DEPTH)
         self._ref_q = queue.Queue(maxsize=_Q_DEPTH)
-        # Output queues are shallower than input: each holds 8 ms
-        # 16 kHz frames, so 6 deep caps the output leg at ~48 ms.
-        # Underruns fade (EmitFading parity) instead of stalling,
-        # but deeper than 4 keeps GC pauses from starving audio
-        # (crackle-free over minimum-latency).
-        self._out_q = queue.Queue(maxsize=6)
-        self._mon_q = queue.Queue(maxsize=6)
+        # Minimal-latency tuning: output holds TWO 8 ms frames max
+        # (~16 ms). Any deeper is pure delay; starves fade instead
+        # of stalling (EmitFading parity). Tight by design — if the
+        # machine stutters, this is where it shows first.
+        self._out_q = queue.Queue(maxsize=2)
+        self._mon_q = queue.Queue(maxsize=2)
         self._stop = threading.Event()
         self._threads = []
         self._pa = None
@@ -615,10 +614,9 @@ class AudioRunner:
 
     def _work_step(self, mic_buf, ref_buf):
         try:
-            # 10 ms poll matches the frame cadence (128 @ 16 kHz =
-            # 8 ms); the old 50 ms timeout stalled the pump a full
-            # 5 frames whenever the mic hiccuped.
-            raw_mic = self._in_q.get(timeout=0.01)
+            # Minimal-latency poll: 5 ms. The pump spins just under
+            # the 8 ms frame cadence so a ready chunk never waits.
+            raw_mic = self._in_q.get(timeout=0.005)
         except queue.Empty:
             return
         # Loopback starves while the speakers are idle
@@ -662,17 +660,17 @@ class AudioRunner:
         mic_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._mic_rate, input=True,
                               input_device_index=self.mic_idx,
-                              frames_per_buffer=256,
+                              frames_per_buffer=64,
                               stream_callback=self._on_mic)
         ref_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._ref_rate, input=True,
                               input_device_index=self.ref_idx,
-                              frames_per_buffer=256,
+                              frames_per_buffer=64,
                               stream_callback=self._on_ref)
         out_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._out_rate, output=True,
                               output_device_index=self.out_idx,
-                              frames_per_buffer=256,
+                              frames_per_buffer=64,
                               stream_callback=self._on_out)
         self._streams = [mic_s, ref_s, out_s]
 
@@ -692,7 +690,7 @@ class AudioRunner:
                     format=pa_patch.paInt16, channels=1,
                     rate=self._mon_rate, output=True,
                     output_device_index=self.monitor_idx,
-                    frames_per_buffer=256,
+                    frames_per_buffer=64,
                     stream_callback=self._on_mon))
             except Exception:
                 self.monitor_idx = None
