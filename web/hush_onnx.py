@@ -411,7 +411,6 @@ class HushOnnxCore:
         # not mid-call, when ambiguous).
         self._arrange_spec(np.zeros(NB_DF, np.complex64),
                            self._enc_in["spec"][1])
-        print(self._dump)
         self._feats = _DfFeats()
         self._rolling = [np.zeros(N_FREQ, dtype=np.complex64)
                          for _ in range(DF_ORDER)]
@@ -958,11 +957,19 @@ def main(argv=None):
                 abs(nd[k] - norms[0][k]) < 1e-9
                 for nd in norms[1:] for k in nd)
             print(f"carry fetch: {'STATIC (broken)' if static else 'live'}")
-            # (2) feed: carried-vs-zeroed on TONES (full DF path).
-            core.reset()
-            for f in tone[:3]:
-                core._run_frame160(f)
+            # (2) feed, isolated properly: full reset + identical
+            # 3-frame warmup before EACH variant, so norms/mems/rolling
+            # are bit-identical and only GRU states differ. (Without the
+            # re-warm, norm drift between consecutive runs confounds
+            # the comparison.)
+            def _warmed():
+                core.reset()
+                for f in tone[:3]:
+                    core._run_frame160(f)
+
+            _warmed()
             o_carry = core._run_frame160(tone[3])
+            _warmed()
             for net in (core.enc, core.erb, core.df):
                 for st in net.states.values():
                     st["arr"].fill(0)
@@ -972,6 +979,7 @@ def main(argv=None):
                   f"({'FEED DEAD' if d_cz == 0.0 else 'feed live'})")
             # (3) feed authority: ABSURD states must move the output a
             # lot (proves fed values actually drive the GRUs).
+            _warmed()
             for net in (core.enc, core.erb, core.df):
                 for st in net.states.values():
                     st["arr"].fill(10.0)
