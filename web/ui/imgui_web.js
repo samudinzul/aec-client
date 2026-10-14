@@ -129,9 +129,10 @@ class WebImGuiUI {
             '<div class="chkline" role="radiogroup" aria-label="Noise suppression">' +
             '<span class="flabel">Noise suppression</span>' +
             '<label><input type="radio" name="ig-ns" id="ig-nsOff" value="off">Off</label>' +
-            '<label><input type="radio" name="ig-ns" id="ig-nsDtln" value="dtln" checked>DTLN-NS</label>' +
+            '<label><input type="radio" name="ig-ns" id="ig-nsDtln" value="dtln" checked>DTLN-NS (default)</label>' +
             '<label><input type="radio" name="ig-ns" id="ig-nsHush" value="hush">Hush</label>' +
             '</div>' +
+            '<div class="hint">Off: raw voice, lowest CPU · DTLN-NS: general background hiss · Hush: keyboards, mice and background talkers, slightly more CPU.</div>' +
             '<div id="ig-nsHushHint" class="hint" hidden>Hush needs the weya_nc library + model bundle on this machine (see web/README.md) — DTLN-NS runs until then.</div>' +
             '<div id="ig-enginfo" class="hint"></div>';
         p.appendChild(stages);
