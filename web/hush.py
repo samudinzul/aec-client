@@ -121,13 +121,27 @@ def resolve_paths(lib_path=None, model_path=None, model_dir=None):
 
 
 def hush_available(lib_path=None, model_path=None, model_dir=None):
-    """Files present (cheap stat only — no library load, no model read)."""
+    """Stage runnable (cheap stat only — no library load, no model read).
+
+    True via either path: onnxruntime + bundle (no DLL needed), or
+    the user-supplied library + bundle (ctypes fallback).
+    """
     lib, model = resolve_paths(lib_path, model_path, model_dir)
-    return os.path.isfile(lib) and os.path.isfile(model)
+    if os.path.isfile(lib) and os.path.isfile(model):
+        return True
+    try:
+        from .hush_onnx import ort
+    except ImportError:
+        return False
+    return ort is not None and os.path.isfile(model)
 
 
-class HushNs:
-    """Streaming Hush NS. Mirrors the DtlnNs surface (process/reset/stats).
+class _HushCt:
+    """Streaming Hush NS over the prebuilt library (fallback path).
+
+    Mirrors the DtlnNs surface (process/reset/stats). Used when the
+    onnxruntime path is unavailable; the HushNs dispatcher below
+    tries onnx first (no DLL needed) and falls back here.
 
     Construction never raises: missing files or a broken library
     leave ready == False with last_error set, and process() passes
@@ -173,8 +187,9 @@ class HushNs:
                 f"(or set {_LIB_ENV})")
         if not os.path.isfile(self.model_path):
             raise RuntimeError(
-                f"model bundle not found — {_BUNDLE_NAME} next to the "
-                f"library (or set {_MODEL_ENV[0]})")
+                "model bundle not found — hush_16k_onnx.tar.gz (or the "
+                "upstream-named bundle) next to the library "
+                f"(or set {_MODEL_ENV[0]})")
         lib = ctypes.CDLL(self.lib_path)
         lib.weya_nc_model_load_from_path.argtypes = [ctypes.c_char_p]
         lib.weya_nc_model_load_from_path.restype = ctypes.c_void_p
@@ -287,3 +302,79 @@ class HushNs:
             "dropped": 0,
             "error": self.last_error,
         }
+
+
+class HushNs:
+    """NS-stage Hush backend: onnxruntime first, ctypes fallback.
+
+    Same surface as DtlnNs (ready/process/reset/stats) — Chain is
+    unaware which path runs. Construction never raises; with neither
+    path available process() passes audio through (fail-open).
+    stats() carries "path": "onnx" | "ctypes" | "none".
+    """
+
+    def __init__(self, lib_path=None, model_path=None, model_dir=None,
+                 atten_lim_db=100.0):
+        lib, model = resolve_paths(lib_path, model_path, model_dir)
+        self.lib_path, self.model_path = lib, model
+        self._impl = None
+        self._path = "none"
+        self.last_error = ""
+        self.in_rms = self.out_rms = 0.0
+        onnx_error = ""
+        if os.path.isfile(model):
+            try:
+                from .hush_onnx import HushOnnxCore
+                self._impl = HushOnnxCore(model)
+                self._path = "onnx"
+            except Exception as e:
+                onnx_error = f"hush onnx path failed: {e}"
+                self._impl = None
+        if self._impl is None:
+            ct = _HushCt(lib_path=lib, model_path=model,
+                         atten_lim_db=atten_lim_db)
+            if ct.ready:
+                self._impl = ct
+                self._path = "ctypes"
+            else:
+                self.last_error = " / ".join(
+                    s for s in (onnx_error, ct.last_error) if s) or (
+                        "hush unavailable "
+                        f"(lib={lib} model={model})")
+
+    @property
+    def ready(self):
+        return self._impl is not None
+
+    def reset(self):
+        self.in_rms = self.out_rms = 0.0
+        if self._impl is not None:
+            try:
+                self._impl.reset()
+            except Exception:
+                pass
+
+    def process(self, frame_f32):
+        frame = np.asarray(frame_f32, dtype=np.float32)
+        self.in_rms = rms(frame)
+        if self._impl is None:
+            self.out_rms = self.in_rms
+            return frame.copy()
+        try:
+            out = self._impl.process(frame)
+        except Exception:
+            self.out_rms = self.in_rms
+            return frame.copy()
+        self.out_rms = rms(out)
+        return out
+
+    def stats(self):
+        if self._impl is None:
+            return {
+                "backend": 0, "rCount": 0, "inRms": self.in_rms,
+                "outRms": self.out_rms, "dropped": 0,
+                "error": self.last_error, "path": "none",
+            }
+        st = dict(self._impl.stats())
+        st["path"] = self._path
+        return st

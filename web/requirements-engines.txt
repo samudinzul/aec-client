@@ -7,4 +7,7 @@
 pywebrtc-audio>=0.2   # WebRTC AEC3 engine (EchoCanceller): same code as Chrome,
                       # prebuilt wheels incl. Windows x86_64, Python 3.10-3.14
 onnxruntime>=1.20     # NKF-AEC engine: runs models/nkf.onnx on CPU
-                      # (Windows wheels; 45 KB model ships in this repo)
+                      # (Windows wheels; 45 KB model ships in this repo).
+                      # Also runs the Hush NS backend (web/hush_onnx.py:
+                      # enc/erb_dec/df_dec from the shipped bundle, no
+                      # DLL needed) — same fail-closed gating as NKF.

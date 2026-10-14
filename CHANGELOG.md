@@ -62,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Live-verified 2026-10-14: keyboard/mouse residue clearly better
   than DTLN-NS, `t/k/p` onset sharpness at parity, CPU slightly
   higher — stays optional, user's choice per call.
+- **Web: Hush over onnxruntime (no DLL needed).**
+  `web/hush_onnx.py` runs the shipped bundle through the mainstream
+  wheel (same as NKF) with a NumPy port of the DeepFilterNet
+  streaming runtime (Vorbis-window STFT, exact ERB widths, runtime
+  norms, carried GRU states, LSNR gating, order-5 deep filter).
+  Tried before the ctypes path, which stays as fallback; the
+  HushNs surface is unchanged (plus `path` in stats). I/O mapped
+  by probing — anything ambiguous fails closed with the spec dump.
+  Validate with `python -m web.hush_onnx BUNDLE` (dump +
+  determinism), file runs with `--wav`, DLL parity with `--dll`.
 - **Web: transport + live levels on the Soundboard tab.**
   Own Start / Reset-to-defaults / status footer plus Mic/Ref/Out
   meters, driven by the same handlers, state, and 60 fps loop as

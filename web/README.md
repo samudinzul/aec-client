@@ -130,14 +130,14 @@ Open http://localhost:8000 — that page IS the GUI.
   fail-open — missing/broken models pass audio through, never mute.
   Default NS backend; the radio also offers **Off** and **Hush**.
 - **Hush** (optional NS backend — model bundle ships in `models/`,
-  only the library is user-supplied, never shipped)
-  — pulp-vision/Hush via its `weya_nc` shared library (stdlib
-  `ctypes`, no new dependency). Put `weya_nc.dll` in
-  `%LOCALAPPDATA%\aec-web\hush\` (or set `WEYA_NC_LIB` /
-  `WEYA_NC_MODEL` env vars), then pick the Hush radio. The radio
-  disables itself while the DLL is absent; a mid-run load
-  failure passes audio through with the error in state (same
-  fail-open contract as DTLN-NS).
+  runs through `onnxruntime`, no DLL needed)
+  — pulp-vision/Hush via a NumPy port of its DeepFilterNet streaming
+  runtime (`web/hush_onnx.py`, same wheel as NKF — needs the engines
+  pack). Without `onnxruntime`, falls back to the `weya_nc` shared
+  library in `%LOCALAPPDATA%\aec-web\hush\` (or `WEYA_NC_LIB` env)
+  via stdlib `ctypes`. The radio disables itself while neither path
+  works; a mid-run failure passes audio through with the error in
+  state (same fail-open contract as DTLN-NS).
 - **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%
   (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
   the mic before the engine, for quiet microphones.
