@@ -21,6 +21,18 @@ AEC Client bundles the following open-source libraries:
     (networkedaudio/Realtime_AudioDenoise_EchoCancellation)
     License: MIT (upstream DTLN denoise)
 
+3c. Hush noise suppression
+    DeepFilterNet3 fork with a background-speaker auxiliary loss
+    (pulp-vision/Hush — https://github.com/pulp-vision/Hush,
+    model bundle https://huggingface.co/weya-ai/hush)
+    License: Apache-2.0
+    Bundled binaries: prebuilt weya_nc.dll (libs/) + ONNX bundle
+    (models/hush_16k_onnx.tar.gz, upstream name
+    advanced_dfnet16k_model_best_onnx.tar.gz — renamed: the release
+    asserts ban any staged filename containing "dfn"),
+    SHA-256 DLL 633958ef… / bundle 45632cca…; loaded at runtime
+    with LoadLibrary (never linked), like tensorflowlite_c.
+
 4.  ONNX Runtime
     Copyright (C) Microsoft Corporation
     License: MIT

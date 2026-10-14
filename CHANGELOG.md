@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Desktop: Hush NS backend (Off / DTLN-NS / Hush radio).**
+  Same stage the web build got: `src/hush_wrapper.{h,cpp}`
+  drives the prebuilt `weya_nc` library (LoadLibrary at runtime,
+  like `tensorflowlite_c` — `libs/weya_nc.dll` + bundle
+  `models/hush_16k_onnx.tar.gz` ship in the desktop release) with
+  a small FIFO bridge (16 kHz desktop frames already are one Hush
+  frame). New config slot 30 (`g_nsBackend`, old files derive it
+  from the tick); Start fail-closes with a clear message while
+  the files are missing; `Running` status and profile labels show
+  `+ Hush` / `-> Hush`. DTLN-NS stays the default.
 - **Web: optional Hush NS backend (Off / DTLN-NS / Hush radio).**
   The Noise suppression checkbox is now a three-way radio; Hush
   (pulp-vision/Hush) runs through its `weya_nc` shared library via

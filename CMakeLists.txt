@@ -40,6 +40,7 @@ add_executable(aec_gui
     src/nkf_wrapper.cpp
     src/dtln_wrapper.cpp
     src/dtln_ns_wrapper.cpp
+    src/hush_wrapper.cpp
     version.rc
     aec_gui.manifest
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
@@ -217,3 +218,19 @@ foreach(_tflite_dll
                 "$<TARGET_FILE_DIR:aec_gui>")
     endif()
 endforeach()
+# Hush NS backend (optional — the radio fail-closes at Start without
+# these, and the release script stages them when present).
+if(EXISTS "${CMAKE_SOURCE_DIR}/libs/weya_nc.dll")
+    add_custom_command(TARGET aec_gui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/libs/weya_nc.dll"
+            "$<TARGET_FILE_DIR:aec_gui>"
+        COMMENT "Copying Hush runtime (weya_nc.dll)")
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/models/hush_16k_onnx.tar.gz")
+    add_custom_command(TARGET aec_gui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/models/hush_16k_onnx.tar.gz"
+            "$<TARGET_FILE_DIR:aec_gui>/models/hush_16k_onnx.tar.gz"
+        COMMENT "Copying Hush model bundle")
+endif()

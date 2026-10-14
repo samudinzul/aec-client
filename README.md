@@ -37,7 +37,7 @@ AEC Client routes your microphone through a **processing profile** (an echo canc
 
 ```
 Microphone ─────────────────┐
-                              ├─→ Engine ─→ DTLN-NS ─→ VB-CABLE ─→ Discord
+                              ├─→ Engine ─→ NS ─→ VB-CABLE ─→ Discord
 Speakers (loopback) ────────┘     (AEC3 / NKF / DTLN)
 ```
 
@@ -53,9 +53,9 @@ No more headphones. No more echo. No dead-air noise.
   - **NKF-AEC** — tiny neural Kalman core (ICASSP 2023, 45 KB model), for weak CPUs.
   - AEC3 and NKF-AEC are **experimental** — hidden from the menu by default; tick **Show experimental engines** on the Appearance tab to reveal them.
 - **What you see is what runs** — the profile label always reads `engine` or `engine → NS`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
-- **Noise suppression (DTLN-NS)** — a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. Runs after the engine on every path.
+- **Noise suppression** — Off / DTLN-NS / Hush radio after the engine on every path. **DTLN-NS** *(default)* is a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. **Hush** (pulp-vision/Hush) kills keyboards, mice and background talkers better at slightly more CPU.
 - **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting.
-- **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC has the lightest engine core, but with Noise suppression on, all chains cost about the same (every chain runs the NS pair).
+- **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC has the lightest engine core, but with Noise suppression on, all chains cost about the same (every chain runs one NS stage).
 - **Low latency** — 30–40 ms round-trip
 - **Works with any audio device** — speakers, earphones, headsets
 - **Selectable sample rate** (16 / 48 kHz)
@@ -77,8 +77,8 @@ call). If your machine is very low-end, in order of impact:
 1. **Pick the NKF-AEC profile** — smallest engine, designed for weak
    CPUs. Reveal it by ticking **Show experimental engines** on the
    Appearance tab.
-2. **Untick "Noise suppression"** — drops the second DTLN-NS pair from
-   the chain, halving the neural models loaded.
+2. **Pick "Off" in Noise suppression** — drops the post-engine
+   stage from the chain, halving the neural models loaded.
 3. **Web UI: skip the native window** — instead of `web\start.bat`
    (which opens a WebView2 window), run `python -m web.server` and
    open `http://localhost:8000/` in a browser you already have open.
@@ -93,7 +93,7 @@ call). If your machine is very low-end, in order of impact:
 ## Web UI (Python, no installer)
 
 All three engine profiles (**DTLN-AEC 128**, **WebRTC AEC3**,
-**NKF-AEC**, each optionally followed by DTLN-NS) also run as a
+**NKF-AEC**, each optionally followed by an NS stage — DTLN-NS or Hush) also run as a
 **pure-Python local web app**: no `.exe`, no installer, nothing
 for antivirus heuristics to flag — the web release ZIP scans
 0 detections on VirusTotal. Python is the only prerequisite (a
@@ -144,7 +144,7 @@ Full docs: [web/README.md](web/README.md).
    - **Your microphone** → your physical mic
    - **Your speakers** → your physical speakers
    - **Send cleaned sound to** → `CABLE Input (VB-Audio Virtual Cable)` (picked automatically)
-5. **Pick an engine** at the top of the Audio tab — the label shows the engine and its chain (e.g. `DTLN-AEC 128 → NS`). Start with the default **DTLN-AEC 128**. The **Noise suppression (DTLN-NS)** tick shows for every engine. Ticks and the sample rate under More can be changed any time without losing the selection.
+5. **Pick an engine** at the top of the Audio tab — the label shows the engine and its chain (e.g. `DTLN-AEC 128 → NS`). Start with the default **DTLN-AEC 128**. The **Noise suppression** radio (Off / DTLN-NS / Hush) shows for every engine. Ticks and the sample rate under More can be changed any time without losing the selection.
 6. **Click Start**. Keep speakers at a moderate volume. Very loud speakers make any canceller leave echo behind (and can push AEC3 into cutting mid-sentence) — if the room must be loud, stay on DTLN-AEC 128.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
