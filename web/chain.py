@@ -378,7 +378,7 @@ class Chain:
             except Exception:
                 nkf_st = None
         ns_tag = " + Hush" if (ns_backend == "hush" and ns_active) else (
-            " + NS" if ns_active else "")
+            " + DTLN-NS" if ns_active else "")
         return {
             "running": self.running,
             "engine": name if self.running else "",
