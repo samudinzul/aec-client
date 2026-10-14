@@ -43,7 +43,7 @@ from .dsp import (FRAME_SIZE, SAMPLE_RATE, resample_from_16k,
                   resample_to_16k, rms)
 from . import dsp  # soft_limit (tanh knee) is referenced as dsp.soft_limit
 
-_Q_DEPTH = 64
+_Q_DEPTH = 8
 
 
 def _pump_qos():
@@ -654,14 +654,17 @@ class AudioRunner:
         mic_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._mic_rate, input=True,
                               input_device_index=self.mic_idx,
+                              frames_per_buffer=128,
                               stream_callback=self._on_mic)
         ref_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._ref_rate, input=True,
                               input_device_index=self.ref_idx,
+                              frames_per_buffer=128,
                               stream_callback=self._on_ref)
         out_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._out_rate, output=True,
                               output_device_index=self.out_idx,
+                              frames_per_buffer=128,
                               stream_callback=self._on_out)
         self._streams = [mic_s, ref_s, out_s]
 
