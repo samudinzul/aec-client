@@ -1880,6 +1880,13 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
         if (nsb < 0 || nsb > 2) nsb = 1;
         int prevNsb = nsb;
         ImGui::TextUnformatted("Noise suppression");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Noise suppression backend (runs after the engine):\n"
+                "Off - raw echo-cancelled voice, lowest CPU.\n"
+                "DTLN-NS - general background hiss, cheapest stage.\n"
+                "Hush - keyboards, mice and background talkers, slightly\n"
+                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
@@ -1891,13 +1898,6 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
-        if ( ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Noise suppression backend (runs after the engine):\n"
-                "Off - raw echo-cancelled voice, lowest CPU.\n"
-                "DTLN-NS - general background hiss, cheapest stage.\n"
-                "Hush - keyboards, mice and background talkers, slightly\n"
-                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
         // Use-case hint only when the default isn't picked — with
         // DTLN-NS selected it restates the obvious (detail stays in
         // the hover tooltip).
