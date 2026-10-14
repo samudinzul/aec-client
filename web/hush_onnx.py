@@ -881,8 +881,10 @@ def main(argv=None):
             core.reset()
             o2 = core.process(x.copy())
             same = np.array_equal(o1, o2)
+            st = core.stats()
             print(f"determinism: {'EXACT' if same else 'MISMATCH'} "
-                  f"rms={float(np.sqrt(np.mean(o1.astype(float)**2))):.1f}")
+                  f"rms={float(np.sqrt(np.mean(o1.astype(float)**2))):.4f} "
+                  f"err={st['error']!r}")
             return 0 if same else 1
         pcm = _read_wav16(a.wav)
         x = pcm.astype(np.float32) / 32768.0
@@ -891,7 +893,8 @@ def main(argv=None):
         dt = time.perf_counter() - t0
         print(f"onnx: {dt:.2f}s wall for {len(x)/16000:.1f}s audio "
               f"({dt/(len(x)/16000)*1000:.1f} ms/s) "
-              f"rms={float(np.sqrt(np.mean(o.astype(float)**2))):.4f}")
+              f"rms={float(np.sqrt(np.mean(o.astype(float)**2))):.4f} "
+              f"err={core.stats()['error']!r}")
         if a.dll is not None:
             from .hush import _HushCt
             ct = _HushCt(lib_path=a.dll, model_path=a.bundle)
