@@ -1560,7 +1560,7 @@ void StartAEC() {
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
     const char* nsTag = "";
     if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
-    else if (g_engine.ns) nsTag = " + NS";
+    else if (g_engine.ns) nsTag = " + DTLN-NS";
     snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", sr, engineName,
              nsTag,
              g_listenToSelf ? " [monitor]" : "");
