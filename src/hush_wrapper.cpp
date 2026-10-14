@@ -130,9 +130,8 @@ HushHandle* HushNew(const char* modelPath) {
         HushSetError(h, "weya_nc_model_load_from_path returned NULL");
         return h;
     }
-    // 16 kHz stream, 18 dB attenuation cap (natural noise floor;
-    // 100 = unlimited, heard as aggressive gating on voice).
-    h->session = h->api.sessionCreate(h->model, 16000, 18.0f);
+    // 16 kHz stream, unlimited attenuation (matches the web backend).
+    h->session = h->api.sessionCreate(h->model, 16000, 100.0f);
     if (!h->session) {
         HushSetError(h, "weya_nc_session_create returned NULL");
         return h;
