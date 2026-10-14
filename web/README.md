@@ -107,8 +107,9 @@ Open http://localhost:8000 — that page IS the GUI.
    into `web\sounds\` and open the Soundboard tab. Click a pad to
    play a sound on top of your voice (one pad at a time; a new click
    takes over). The tab also has a gain slider, a "Play soundboard to
-   my speakers" monitor toggle with a device dropdown, and a Stop-all
-   button. Files are decoded once at startup, so a pad click never
+   my speakers" monitor toggle with a device dropdown, a Stop-all
+   button, and its own Start / Reset-to-defaults transport plus live
+   meters (same as the Audio tab). Files are decoded once at startup, so a pad click never
    touches the disk.
 
 ## What runs

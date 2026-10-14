@@ -2186,6 +2186,7 @@ void DrawAboutTab() {
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
     ImGui::BulletText("Live level meters");
+    ImGui::BulletText("Soundboard - play sounds over your voice");
     ImGui::BulletText("Optional minimize to system tray");
 
     ImGui::Spacing();

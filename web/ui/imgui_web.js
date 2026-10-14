@@ -327,6 +327,7 @@ class WebImGuiUI {
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
             '<li>Live level meters</li>' +
+            '<li>Soundboard — play sounds over your voice, with transport + meters on its own tab</li>' +
             '<li>Native app window (Edge WebView2) with browser fallback</li>' +
             '</ul>';
         p.appendChild(f);
