@@ -756,7 +756,16 @@ class HushOnnxCore:
         res = net._sess.run(outs, feed)
         got = dict(zip(outs, res))
         for _iname, st in net.states.items():
-            st["arr"] = np.asarray(got[st["out"]], dtype=np.float32)
+            back = np.asarray(got[st["out"]])
+            if not st.get("_shape_logged"):
+                # Definitive shape check, once: a Y_h whose shape
+                # isn't what we feed back would corrupt carry
+                # silently (feed matches our own declaration by
+                # construction, so nothing else can catch it).
+                print(f"[hush_onnx] state {st['out']} "
+                      f"fetched {back.shape} fed {st['arr'].shape}")
+                st["_shape_logged"] = True
+            st["arr"] = np.asarray(back, dtype=np.float32)
         return got
 
     def _enc_raw(self, erb, nspec):
