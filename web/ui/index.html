@@ -430,7 +430,7 @@ function connect() {
     meter('mOut', st.outRms || 0);
     $('status').textContent =
       `Running (16000 Hz, ${st.chain || 'DTLN-AEC'})` +
-      (st.ns.backend ? ` · ${st.ns.backend === 2 ? 'Hush' : 'NS'}` : ' · NS off') +
+      (st.ns.backend ? '' : ' · NS off') +
       (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
     if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
   };

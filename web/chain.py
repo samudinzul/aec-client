@@ -344,6 +344,14 @@ class Chain:
                 "outRms": 0.0, "dropped": 0,
                 "error": self.hush_error,
             })
+        elif ns_backend == "off":
+            # Stage skipped: report it off (backend 0), not the
+            # DTLN object's readiness — consumers read backend as
+            # "stage running" (status suffix, classic page).
+            ns = {
+                "backend": 0, "rCount": 0, "inRms": 0.0,
+                "outRms": 0.0, "dropped": 0, "error": "",
+            }
         else:
             ns = ns_obj.stats() if ns_obj is not None else {
                 "backend": 0, "rCount": 0, "inRms": 0.0,

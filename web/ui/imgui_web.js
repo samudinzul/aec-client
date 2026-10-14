@@ -1014,7 +1014,7 @@ class WebImGuiUI {
             this.outTarget = this.meterScale(st.outRms || 0);
             this.el.status.textContent =
                 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')' +
-                ((st.ns && st.ns.backend) ? ' · ' + (st.ns.backend === 2 ? 'Hush' : 'NS') : ' · NS off') +
+                ((st.ns && st.ns.backend) ? '' : ' · NS off') +
                 (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '');
             if (st.error || (st.ns && st.ns.error))
                 this.el.err.textContent = st.error || (st.ns && st.ns.error);
