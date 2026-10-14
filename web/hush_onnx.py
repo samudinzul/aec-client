@@ -128,6 +128,48 @@ def _linspace_f32(lo, hi, n):
 
 _WIDTHS = _erb_widths()
 assert _WIDTHS.sum() == N_FREQ
+
+
+def _erb_widths_f64(sr=SR, fft=FFT, nb=NB_ERB, min_nf=2):
+    """Same formula in float64: must agree with the f32 replica.
+
+    Agreement proves no band boundary sits on an f32 rounding cliff
+    (the only way f32-vs-f64 arithmetic could change the integer
+    widths). Checked once at import; a mismatch fails closed here,
+    not as mysterious dB offsets mid-call.
+    """
+    freq_width = sr / fft
+    c1 = 9.265
+    c2 = 24.7 * 9.265
+    e_low = c1 * np.log1p(0.0 / c2)
+    e_high = c1 * np.log1p((sr // 2) / c2)
+    step = (e_high - e_low) / nb
+    widths = np.zeros(nb, dtype=np.int64)
+    prev_freq = 0
+    freq_over = 0
+    for i in range(1, nb + 1):
+        f = c2 * (np.exp((e_low + i * step) / c1) - 1.0)
+        fb = int(np.floor(f / freq_width + 0.5))
+        nbf = fb - prev_freq - freq_over
+        if nbf < min_nf:
+            freq_over = min_nf - nbf
+            nbf = min_nf
+        else:
+            freq_over = 0
+        widths[i - 1] = nbf
+        prev_freq = fb
+    widths[-1] += 1
+    too_large = int(widths.sum() - (fft // 2 + 1))
+    if too_large > 0:
+        widths[-1] -= too_large
+    return widths
+
+
+_WIDTHS64 = _erb_widths_f64()
+assert _WIDTHS64.sum() == N_FREQ
+assert list(_WIDTHS) == list(_WIDTHS64), (
+    f"ERB widths differ f32 vs f64: {_WIDTHS} vs {_WIDTHS64}")
+print(f"[hush_onnx] ERB widths ok: {list(_WIDTHS)}")
 _WINDOW = _vorbis_window()
 
 
@@ -892,15 +934,18 @@ def main(argv=None):
     try:
         print(core.spec_dump())
         if a.selftest:
-            # Carry diagnostics without any ground truth:
-            # (1) fetched Y_h must VARY across frames (static = broken
-            # fetch); (2) carried-vs-zeroed states must CHANGE the
-            # output (identical = feed ignored, override dead).
-            rng = np.random.default_rng(11)
-            frames = [(rng.standard_normal(HOP) * 0.25).astype(np.float32)
-                      for _ in range(5)]
+            # Carry diagnostics without any ground truth.
+            # NOTE: noise input gates to the zero mask (hides state
+            # effects), so the feed tests run on TONES (full path).
+            import math
+            t = np.arange(HOP * 5, dtype=np.float32) / 16000.0
+            tone = [(0.3 * np.sin(2 * math.pi * 220.0
+                                  * t[k * HOP:(k + 1) * HOP])
+                     ).astype(np.float32) for k in range(5)]
+            # (1) fetch: Y_h must VARY across frames (static = broken).
+            core.reset()
             norms = []
-            for f in frames:
+            for f in tone:
                 core._run_frame160(f)
                 norms.append(
                     {k: float(np.sqrt((v["arr"] ** 2).mean()))
@@ -913,17 +958,26 @@ def main(argv=None):
                 abs(nd[k] - norms[0][k]) < 1e-9
                 for nd in norms[1:] for k in nd)
             print(f"carry fetch: {'STATIC (broken)' if static else 'live'}")
+            # (2) feed: carried-vs-zeroed on TONES (full DF path).
             core.reset()
-            for f in frames[:3]:
+            for f in tone[:3]:
                 core._run_frame160(f)
-            o_carry = core._run_frame160(frames[3])
+            o_carry = core._run_frame160(tone[3])
             for net in (core.enc, core.erb, core.df):
                 for st in net.states.values():
                     st["arr"].fill(0)
-            o_zero = core._run_frame160(frames[3])
-            print(f"carried-vs-zeroed max_abs="
-                  f"{float(np.abs(o_carry - o_zero).max()):.6f} "
-                  f"({'FEED DEAD' if float(np.abs(o_carry - o_zero).max()) == 0.0 else 'feed live'})")
+            o_zero = core._run_frame160(tone[3])
+            d_cz = float(np.abs(o_carry - o_zero).max())
+            print(f"tonal carried-vs-zeroed max_abs={d_cz:.6f} "
+                  f"({'FEED DEAD' if d_cz == 0.0 else 'feed live'})")
+            # (3) feed authority: ABSURD states must move the output a
+            # lot (proves fed values actually drive the GRUs).
+            for net in (core.enc, core.erb, core.df):
+                for st in net.states.values():
+                    st["arr"].fill(10.0)
+            o_absurd = core._run_frame160(tone[3])
+            d_ab = float(np.abs(o_carry - o_absurd).max())
+            print(f"carried-vs-absurd max_abs={d_ab:.6f}")
             return 0
         if a.wav is None:
             # Determinism probe: identical input twice -> identical out.
