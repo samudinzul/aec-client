@@ -21,6 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now fade from the last frame / hold last value (desktop
   `EmitFading` parity). AEC overlap-add itself verified
   shift-for-shift against `src/dtln_wrapper.cpp` — identical.
+- **Web: status chain label.** With the radio Off, state reported
+  the DTLN object's readiness (backend 1), so the status suffix
+  claimed "NS" while the chain tag correctly omitted it; with
+  DTLN-NS the tag plus the suffix printed the backend twice. Off
+  now reports a zeroed stage (backend 0 = not running), and the
+  suffix only ever says "NS off" — the chain tag (`+ NS`/`+ Hush`)
+  carries the active backend. Both UIs.
+- **Web: Hush loads at selection.** Switching DTLN→Hush mid-call
+  only recorded the name (the model loaded in `start()`), so the
+  pump shipped unprocessed audio mislabelled "NS off" until
+  Stop/Start. The pick now loads under the same lock order as
+  start, pump keeps the old backend during the load, and a failed
+  load refuses the pick.
 
 ### Added
 
@@ -49,6 +62,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Live-verified 2026-10-14: keyboard/mouse residue clearly better
   than DTLN-NS, `t/k/p` onset sharpness at parity, CPU slightly
   higher — stays optional, user's choice per call.
+- **Web: transport + live levels on the Soundboard tab.**
+  Own Start / Reset-to-defaults / status footer plus Mic/Ref/Out
+  meters, driven by the same handlers, state, and 60 fps loop as
+  the Audio tab (desktop keeps transport visible from every tab).
+- **Docs:** features + About panels on both builds reflect the NS
+  radio, Hush, and the soundboard; desktop NS telemetry row
+  removed (stage errors only); NS radio carries one-line use-case
+  labels on both builds.
 
 ## [1.13.0] - 2026-10-12
 
