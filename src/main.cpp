@@ -1898,7 +1898,11 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "DTLN-NS - general background hiss, cheapest stage.\n"
                 "Hush - keyboards, mice and background talkers, slightly\n"
                 "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
-        ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
+        // Use-case hint only when the default isn't picked — with
+        // DTLN-NS selected it restates the obvious (detail stays in
+        // the hover tooltip).
+        if (nsb != 1)
+            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.
         const char* nsErr = "";
