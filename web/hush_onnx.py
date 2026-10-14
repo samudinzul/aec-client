@@ -669,7 +669,7 @@ class HushOnnxCore:
             # out[f] = sum_o X[t-4+o][f] * C[o][f], bins < 64.
             acc = np.zeros(NB_DF, dtype=np.complex64)
             for oo in range(DF_ORDER):
-                acc += self._rolling[oo][:NB_DF] * coefs[:, oo, :]
+                acc += self._rolling[oo][:NB_DF] * coefs[:, oo]
             enh[:NB_DF] = acc
         return self._feats.synthesize(enh)
 
@@ -730,7 +730,7 @@ class HushOnnxCore:
 
     @staticmethod
     def _to_642(co, coname):
-        """Flat coefs -> complex64[64,5,2], layout-robust.
+        """Flat coefs -> complex64[64,5] (order-major complex pairs).
 
         Drops size-1 dims; requires the 64-bin axis plus a
         remainder multiplying to 10 — either (5,2) in order or a
