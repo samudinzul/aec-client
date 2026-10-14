@@ -436,9 +436,11 @@ class HushOnnxCore:
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
         self.ready = True
-        # LSNR trace (probe/diagnostic only — gated, never production).
+        # Frame stats (probe/diagnostic only — gated, never production).
         self._trace_lsnr = False
         self._lsnr_trace = []
+        self._collect_stats = False
+        self._stat_frames = []
 
     def spec_dump(self):
         return self._dump
@@ -720,6 +722,10 @@ class HushOnnxCore:
         erb = self._feats.erb_feats(spec)
         nspec = self._feats.norm_spec(spec)
         lsnr, mask, coefs = self._infer(erb, nspec)
+        if self._collect_stats:
+            self._stat_frames.append(
+                (lsnr, float(np.mean(mask)),
+                 float(np.mean(np.abs(coefs)))))
         if self._trace_lsnr:
             self._lsnr_trace.append(lsnr)
         if lsnr < float(MIN_DB):
@@ -1110,6 +1116,7 @@ def main(argv=None):
         x = pcm.astype(np.float32) / 32768.0
         if a.dll is not None:
             core._trace_lsnr = True  # before processing (per-frame log)
+            core._collect_stats = True
         t0 = time.perf_counter()
         o = core.process(x)
         dt = time.perf_counter() - t0
@@ -1167,6 +1174,15 @@ def main(argv=None):
                         best = (lag, corr)
                 print(f"lsnr lag scan: best lag={best[0]} corr={best[1]:.3f} "
                       f"(off-zero peak = alignment artifact)")
+                # Stage-level fork: mask/coefs levels decide whether a
+                # quiet output is correct gating or a broken decoder.
+                sf = np.asarray(core._stat_frames, dtype=np.float64)
+                if len(sf):
+                    gz = (sf[:, 0] < -15.0).mean()
+                    gb = (sf[:, 0] > 35.0).mean()
+                    print(f"stages: zero-gate={gz:.3f} bypass={gb:.3f} "
+                          f"maskmean={sf[:, 1].mean():.4f} "
+                          f"coefsabs={sf[:, 2].mean():.4f}")
             # Per-2s windows: transient-localized diffs (clicks/onsets)
             # vs spread-everywhere (systematic port error) read
             # completely differently.
