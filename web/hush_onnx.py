@@ -988,6 +988,10 @@ def main(argv=None):
             # Full internal trace for the first N frames on tones:
             # lsnr, mask head + mean (sigmoid => [0,1] expected),
             # coefs mean-abs, Y_h head. Sanity-read by eye.
+            # With --dll, also traces the DLL's own LSNR on the SAME
+            # tones: matching trajectories vindicate the whole
+            # encoder side (features + carry + forward) at once and
+            # isolate any remainder to the decoders.
             import math
             t = np.arange(HOP * a.internals, dtype=np.float32) / 16000.0
             tone = (0.3 * np.sin(2 * math.pi * 220.0 * t)).astype(np.float32)
@@ -1007,6 +1011,15 @@ def main(argv=None):
                       f"maskmean={float(np.mean(mask)):.3f} "
                       f"coefsabs={float(np.mean(np.abs(coefs))):.4f} "
                       f"Y_h={yh}")
+            if a.dll is not None:
+                from .hush import _HushCt
+                ct = _HushCt(lib_path=a.dll, model_path=a.bundle)
+                assert ct.ready, ct.last_error
+                ct.reset()
+                ct.trace_lsnr = True
+                ct.process(tone.copy())
+                print("ct lsnr: " + " ".join(
+                    f"{v:.2f}" for v in ct._lsnr_trace[:a.internals]))
             return 0
         if a.selftest:
             # Carry diagnostics without any ground truth.
