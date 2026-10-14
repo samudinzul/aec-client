@@ -1879,6 +1879,7 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
         int nsb = g_nsBackend.load();
         if (nsb < 0 || nsb > 2) nsb = 1;
         int prevNsb = nsb;
+        ImGui::TextUnformatted("Noise suppression");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
@@ -1897,7 +1898,7 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "DTLN-NS - general background hiss, cheapest stage.\n"
                 "Hush - keyboards, mice and background talkers, slightly\n"
                 "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
-        ImGui::TextDisabled("Off: raw voice, lowest CPU - DTLN-NS: general hiss - Hush: clicks and talkers, more CPU.");
+        ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
         // Live diagnostics -- shows whether the stage is actually
         // running and suppressing (ring fill, dropped samples,
         // in/out RMS over the last frame).
