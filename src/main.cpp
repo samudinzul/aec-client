@@ -1091,11 +1091,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     int fs = frameSizeForRate(g_sampleRate.load());
     if ((int)frameCount != fs) { EmitFading(out, frameCount); return; }
 
-    // Minimal-latency tuning: ring target is ONE frame (not two).
-    // The OS period already buffers a full frame each way; holding
-    // two here just adds 10 ms of stale audio. Jitter trims via the
-    // threshold below (skips, never stalls).
-    const size_t DRIFT_TARGET = (size_t)fs;
+    const size_t DRIFT_TARGET = (size_t)fs * 2;
     const size_t DRIFT_THRESHOLD = (size_t)fs / 16;
     if (g_micRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
         g_micRing.skip(g_micRing.available() - DRIFT_TARGET);
@@ -1239,9 +1235,10 @@ void monitor_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCou
     const ma_uint32 n =
         frameCount < (ma_uint32)MAX_FRAME_SIZE ? frameCount : (ma_uint32)MAX_FRAME_SIZE;
 
-    // Same one-frame rule as the mic/ref guards (minimal latency).
+    // The monitor runs on its own clock, so the ring can creep up or
+    // drain: trim the excess (same rule as the mic/ref drift guards).
     const size_t driftTarget =
-        (size_t)frameSizeForRate(g_sampleRate.load());
+        (size_t)frameSizeForRate(g_sampleRate.load()) * 2;
     if (g_monitorRing.available() > driftTarget)
         g_monitorRing.skip(g_monitorRing.available() - driftTarget);
 
@@ -1310,7 +1307,6 @@ void StartMonitor() {
     cfg.playback.channels  = 1;
     cfg.sampleRate         = sr;
     cfg.periodSizeInFrames = frameSizeForRate(sr);
-    cfg.performanceProfile = ma_performance_profile_low_latency;
     cfg.dataCallback       = monitor_callback;
     cfg.playback.pDeviceID = &g_playbackDevices[monIdx].id;
 
@@ -1499,7 +1495,6 @@ void StartAEC() {
     micCfg.capture.channels = 1;
     micCfg.sampleRate = sr;
     micCfg.periodSizeInFrames = fs;
-    micCfg.performanceProfile = ma_performance_profile_low_latency;
     micCfg.dataCallback = mic_callback;
     micCfg.capture.pDeviceID = &g_captureDevices[g_micIndex].id;
 
@@ -1508,7 +1503,6 @@ void StartAEC() {
     loopCfg.capture.channels = 1;
     loopCfg.sampleRate = sr;
     loopCfg.periodSizeInFrames = fs;
-    loopCfg.performanceProfile = ma_performance_profile_low_latency;
     loopCfg.dataCallback = loopback_callback;
     loopCfg.capture.pDeviceID = &g_playbackDevices[g_refIndex].id;
 
@@ -1517,7 +1511,6 @@ void StartAEC() {
     outCfg.playback.channels = 1;
     outCfg.sampleRate = sr;
     outCfg.periodSizeInFrames = fs;
-    outCfg.performanceProfile = ma_performance_profile_low_latency;
     outCfg.dataCallback = output_callback;
     outCfg.playback.pDeviceID = &g_playbackDevices[outIdx].id;
 
