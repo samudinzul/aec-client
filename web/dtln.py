@@ -250,6 +250,16 @@ class DtlnAec:
         if self.out_ring.size >= n:
             out[:] = self.out_ring.pop(n)
         else:
-            for i in range(n):
-                out[i] = self.out_ring.pop(1)[0] if self.out_ring.size else 0
+            # Underflow (should be near-nonexistent now the pump feeds
+            # ref silence on loopback starve): NEVER hard-zero mid-frame
+            # — a step to 0 is a click, most audible on quiet speech
+            # tails. Drain what's there, hold the last value for the
+            # shortfall (flat DC holds click-free; the next frame
+            # resumes normally). Same reason the desktop fades gaps
+            # instead of zeroing (main.cpp EmitFading).
+            have = self.out_ring.size
+            if have:
+                out[:have] = self.out_ring.pop(have)
+            hold = out[have - 1] if have else 0
+            out[have:] = hold
         return out

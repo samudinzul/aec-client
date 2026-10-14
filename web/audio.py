@@ -426,6 +426,12 @@ class AudioRunner:
         self._out_carry = dsp._StreamBuf()
         self._mon_rate = 48000
         self._mon_carry = dsp._StreamBuf()
+        # Last emitted callback frames (float, post-resample domain) —
+        # starvation fades FROM these toward zero (desktop EmitFading
+        # parity) instead of hard-cutting to silence, which clicks on
+        # quiet speech tails. Callback-thread-only, like the carries.
+        self._last_out = np.zeros(0, dtype=np.float32)
+        self._last_mon = np.zeros(0, dtype=np.float32)
 
     # -------------------------------------------------------
     #  PortAudio callbacks (run on PortAudio's thread;
@@ -456,6 +462,24 @@ class AudioRunner:
             pass
         return (None, pa_patch.paContinue)
 
+    @staticmethod
+    def _fade_fill(out, n, last):
+        """Fill out[n:] from the last emitted frame, fading to zero.
+
+        Ports main.cpp EmitFading: out[i] = last[i] * (1 - i/m),
+        so a starved tail decays from the waveform instead of
+        stepping to 0 (the step is the click). `last` shorter than
+        the gap contributes what it has; the rest stays silence —
+        the fade already landed near zero by then.
+        """
+        m = len(out) - n
+        if m <= 0:
+            return
+        k = min(m, len(last))
+        if k > 0:
+            fade = 1.0 - np.arange(n, n + k, dtype=np.float32) / len(out)
+            out[n:n + k] = last[:k] * fade
+
     def _on_out(self, in_data, frame_count, time_info, status):
         try:
             carry = self._out_carry
@@ -473,11 +497,15 @@ class AudioRunner:
             if n == frame_count:
                 out = carry.pop(n)
             else:
-                # Starved: pad with silence so the cable never
-                # underruns audibly (main.cpp output_callback).
+                # Starved: fade from the last emitted frame (desktop
+                # EmitFading) — Python GC/GIL pauses make the pump
+                # starve more often than the C++ desktop ever does,
+                # and a hard cut to zero clicks on quiet speech tails.
                 out = np.zeros(frame_count, dtype=np.float32)
                 if n:
                     out[:n] = carry.pop(n)
+                self._fade_fill(out, n, self._last_out)
+            self._last_out = out.copy()
             # Soft limiter (tanh knee at -3 dBFS), not a hard clip at 0 dBFS:
             # the resampled mix can crest past 1.0 and a hard clip is
             # square-wave distortion. Mirrors main.cpp SoftLimit.
@@ -504,9 +532,14 @@ class AudioRunner:
             if n == frame_count:
                 out = carry.pop(n)
             else:
+                # Starved: fade from the last emitted frame, same as
+                # _on_out (a cut to zero clicks on the local speakers
+                # just as it does on the cable).
                 out = np.zeros(frame_count, dtype=np.float32)
                 if n:
                     out[:n] = carry.pop(n)
+                self._fade_fill(out, n, self._last_mon)
+            self._last_mon = out.copy()
             # Soft limiter (tanh knee at -3 dBFS), not a hard clip at 0 dBFS:
             # the resampled mix can crest past 1.0 and a hard clip is
             # square-wave distortion. Mirrors main.cpp SoftLimit.
