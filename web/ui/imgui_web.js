@@ -252,6 +252,28 @@ class WebImGuiUI {
         p.appendChild(this.el.sbPads);
         this.el.sbEmpty = this.mk('div', 'hint');
         p.appendChild(this.el.sbEmpty);
+
+        // --- Transport (mirrors the Audio footer: same handlers, same
+        // state — the desktop keeps transport + meters visible from
+        // every tab, so the Soundboard tab gets its own copies) ---
+        p.appendChild(this.sep(''));
+        const sbFoot = this.mk('div', 'footer-btns');
+        sbFoot.innerHTML =
+            '<button id="ig-sbStartBtn" type="button" class="button">Start</button>' +
+            '<button id="ig-sbResetBtn" type="button" class="button button-secondary">Reset to defaults</button>' +
+            '<span id="ig-sbStatus" class="footer-status">Stopped.</span>';
+        p.appendChild(sbFoot);
+
+        const sbLevels = this.mk('div');
+        sbLevels.id = 'ig-sbLevels';
+        sbLevels.hidden = true;
+        sbLevels.innerHTML =
+            '<div class="sep">Live Levels</div>' +
+            '<div class="frow"><span class="flabel">Mic</span><canvas id="ig-sbMIn" class="meter" width="420" height="26"></canvas></div>' +
+            '<div class="frow"><span class="flabel">Ref</span><canvas id="ig-sbMRef" class="meter" width="420" height="26"></canvas></div>' +
+            '<div class="frow"><span class="flabel">Out</span><canvas id="ig-sbMOut" class="meter" width="420" height="26"></canvas></div>';
+        p.appendChild(sbLevels);
+        this.el.sbLevels = sbLevels;
         return p;
     }
 
@@ -338,8 +360,11 @@ class WebImGuiUI {
         this.el.tray = q('ig-trayOn');
         this.el.start = q('ig-startBtn'); this.el.reset = q('ig-resetBtn');
         this.el.status = q('ig-status');
+        this.el.sbStart = q('ig-sbStartBtn'); this.el.sbReset = q('ig-sbResetBtn');
+        this.el.sbStatus = q('ig-sbStatus');
         this.el.err = q('ig-err'); this.el.devhint = q('ig-devhint');
         this.el.mIn = q('ig-mIn'); this.el.mRef = q('ig-mRef'); this.el.mOut = q('ig-mOut');
+        this.el.sbMIn = q('ig-sbMIn'); this.el.sbMRef = q('ig-sbMRef'); this.el.sbMOut = q('ig-sbMOut');
         this.el.rescan = q('ig-rescan');
         this.el.cablewarn = q('ig-cablewarn');
         this.el.dotMic = q('ig-dotMic'); this.el.dotRef = q('ig-dotRef'); this.el.dotOut = q('ig-dotOut');
@@ -385,6 +410,8 @@ class WebImGuiUI {
         this.el.tray.addEventListener('change', () => this.savePrefs());
         this.el.start.addEventListener('click', () => this.toggleStart());
         this.el.reset.addEventListener('click', () => this.resetDefaults());
+        this.el.sbStart.addEventListener('click', () => this.toggleStart());
+        this.el.sbReset.addEventListener('click', () => this.resetDefaults());
         this.el.wp.addEventListener('change', () => this.applyWallpaper(true));
         this.$('ig-wpReload').addEventListener('click', () => this.applyWallpaper(true));
 
@@ -822,16 +849,18 @@ class WebImGuiUI {
         this.applyMonitorDevPref();
         this.showMonitor();
         this.savePrefs();
-        this.el.status.textContent = this.running ? this.el.status.textContent : 'Defaults restored - press Start.';
+        this.setStatus(this.running ? this.el.status.textContent : 'Defaults restored - press Start.');
     }
 
     async toggleStart() {
         // Await the prefs save so Start/Stop reads the latest device
         // and gain values — fire-and-forget raced the start POST.
         await this.savePrefs();
-        const btn = this.el.start;
-        btn.disabled = true;
-        btn.textContent = this.running ? 'Stopping…' : 'Starting…';
+        const btns = [this.el.start, this.el.sbStart];
+        for (const b of btns) {
+            b.disabled = true;
+            b.textContent = this.running ? 'Stopping…' : 'Starting…';
+        }
         try {
             const r = this.running
                 ? await this.api('POST', '/api/stop')
@@ -846,14 +875,24 @@ class WebImGuiUI {
             this.el.err.textContent = 'server unreachable (' + e.message + ')';
             this.setRunning(false, {});
         } finally {
-            btn.disabled = false;
+            for (const b of btns) b.disabled = false;
             this.paintStartBtn();
         }
     }
 
     paintStartBtn() {
-        this.el.start.textContent = this.running ? ('Stop   ' + this.uptime()) : 'Start';
-        this.el.start.classList.toggle('button-danger', this.running);
+        const label = this.running ? ('Stop   ' + this.uptime()) : 'Start';
+        for (const b of [this.el.start, this.el.sbStart]) {
+            b.textContent = label;
+            b.classList.toggle('button-danger', this.running);
+        }
+    }
+
+    setStatus(t) {
+        // Both transport footers (Audio + Soundboard tabs) show the
+        // same status — desktop parity: transport is visible everywhere.
+        this.el.status.textContent = t;
+        this.el.sbStatus.textContent = t;
     }
 
     uptime() {
@@ -883,17 +922,18 @@ class WebImGuiUI {
         this.el.rescan.disabled = on;
         this.el.listen.disabled = on;
         this.el.levels.hidden = !on;
+        this.el.sbLevels.hidden = !on;
         // Soundboard pads only work while the session runs (mix happens
         // in the pump thread).
         this.el.sbRefresh.disabled = on;
         if (!on) {
             this.el.devhint.textContent = '';
-            this.el.status.textContent = 'Stopped.';
+            this.setStatus('Stopped.');
             this.updatePads([]);
             this.micSmoothed = this.refSmoothed = this.outSmoothed = 0;
             this.micTarget = this.refTarget = this.outTarget = 0;
         } else {
-            this.el.status.textContent = 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')';
+            this.setStatus('Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')');
         }
         this.showMonitor();
     }
@@ -919,6 +959,9 @@ class WebImGuiUI {
                     [this.el.mIn, 'micSmoothed', 'micTarget'],
                     [this.el.mRef, 'refSmoothed', 'refTarget'],
                     [this.el.mOut, 'outSmoothed', 'outTarget'],
+                    [this.el.sbMIn, 'micSmoothed', 'micTarget'],
+                    [this.el.sbMRef, 'refSmoothed', 'refTarget'],
+                    [this.el.sbMOut, 'outSmoothed', 'outTarget'],
                 ];
                 for (const [c, sk, tk] of pairs) {
                     if (!c) continue;
@@ -956,7 +999,7 @@ class WebImGuiUI {
         try {
             ws = new WebSocket('ws://' + location.host + '/ws');
         } catch (e) {
-            this.el.status.textContent = 'Server disconnected — retrying…';
+            this.setStatus('Server disconnected — retrying…');
             setTimeout(() => this.connect(), 1000);
             return;
         }
@@ -972,7 +1015,7 @@ class WebImGuiUI {
         };
         ws.onclose = () => {
             this.setRunning(false, {});
-            this.el.status.textContent = 'Server disconnected — retrying…';
+            this.setStatus('Server disconnected — retrying…');
             setTimeout(() => this.connect(), Math.min(5000, 500 * Math.pow(2, this.wsRetry++)));
         };
         ws.onmessage = (ev) => {
@@ -1012,10 +1055,10 @@ class WebImGuiUI {
             this.micTarget = this.meterScale(st.inRms || 0);
             this.refTarget = this.meterScale(st.refRms || 0);
             this.outTarget = this.meterScale(st.outRms || 0);
-            this.el.status.textContent =
+            this.setStatus(
                 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')' +
                 ((st.ns && st.ns.backend) ? '' : ' · NS off') +
-                (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '');
+                (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : ''));
             if (st.error || (st.ns && st.ns.error))
                 this.el.err.textContent = st.error || (st.ns && st.ns.error);
         };
