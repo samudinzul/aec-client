@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Web: optional Hush NS backend (Off / DTLN-NS / Hush radio).**
+  The Noise suppression checkbox is now a three-way radio; Hush
+  (pulp-vision/Hush) runs through its `weya_nc` shared library via
+  stdlib `ctypes`, bridging the chain's 128-sample frames to Hush's
+  160-sample frames with a small FIFO (same priming-passthrough
+  convention as DTLN-NS). The library + ONNX bundle are
+  user-supplied files outside the repo (per-user data dir or
+  `WEYA_NC_LIB` / `WEYA_NC_MODEL` env) — nothing ships in the
+  release zip, selection is fail-closed while the files are absent,
+  and a broken stage fails open. DTLN-NS stays the default; the
+  default path is bit-identical. A/B from the repo root:
+  `python web/test_offline.py mic.wav ref.wav out.wav --ns-backend hush`.
+
 ## [1.13.0] - 2026-10-12
 
 ### Changed (web asset refreshed 2026-10-13, same version)

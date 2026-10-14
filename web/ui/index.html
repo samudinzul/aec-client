@@ -89,10 +89,13 @@
   <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
   from the list (Windows lists only enabled devices).</div>
   <div id="devhint" class="hint" style="color:#ffd75e"></div>
-  <label class="chk"><input type="checkbox" id="nsOn" checked>
-    Noise suppression (DTLN-NS) — removes background hiss</label>
-  <div class="hint">Applies live: untick to hear the raw echo-cancelled
-  voice, tick again to re-apply suppression.</div>
+  <div>Noise suppression:
+    <label class="chk"><input type="radio" name="nsBackend" id="nsOff" value="off">Off</label>
+    <label class="chk"><input type="radio" name="nsBackend" id="nsDtln" value="dtln" checked>DTLN-NS</label>
+    <label class="chk"><input type="radio" name="nsBackend" id="nsHush" value="hush">Hush</label>
+  </div>
+  <div id="nsHushHint" class="hint" hidden>Hush needs the weya_nc library + model bundle on this machine (see web/README.md).</div>
+  <div class="hint">Applies live: switch backends mid-call to compare, Off hears the raw echo-cancelled voice.</div>
   <div id="enginfo" class="hint"></div>
   <label class="chk"><input type="checkbox" id="listenOn">
     Listen to myself — hear your cleaned voice through your speakers</label>
@@ -217,10 +220,21 @@ async function loadDevices() {
 const pct2gain = pct => Math.min(4.0, Math.max(0.1, pct / 100));
 const gain2pct = g => Math.min(200, Math.max(0, Math.round(g * 100)));
 const prefVal = id => { const v = $(id).value; return v === '' ? null : +v; };
+const nsBackend = () => (document.querySelector('input[name="nsBackend"]:checked') || {}).value || 'dtln';
+function setNsBackend(v) {
+  const r = document.querySelector('input[name="nsBackend"][value="' + v + '"]');
+  if (r) r.checked = true;
+}
+function showNsHint(st) {
+  const missing = st && st.nsBackends && st.nsBackends.hush === false;
+  $('nsHushHint').hidden = !missing;
+  $('nsHush').disabled = !!missing;
+}
 function savePrefs() {
   api('POST', '/api/prefs', {mic: prefVal('mic'),
     ref: prefVal('ref'), out: prefVal('out'),
-    nsEnabled: $('nsOn').checked,
+    nsBackend: nsBackend(),
+    nsEnabled: nsBackend() !== 'off',
     micGain: pct2gain(+$('micGain').value),
     trayEnabled: $('trayOn').checked,
     listenToSelf: $('listenOn').checked,
@@ -274,8 +288,8 @@ function showGain() {
 }));
 $('rescan').onclick = loadDevices;
 
-// NS toggle applies live (no device reconfigure needed).
-$('nsOn').addEventListener('change', savePrefs);
+// NS radio applies live (no device reconfigure needed).
+// (Bound next to savePrefs above via querySelectorAll.)
 $('profile').addEventListener('change', savePrefs);
 $('expOn').addEventListener('change', () => {
   savePrefs();
@@ -288,10 +302,14 @@ $('listenOn').addEventListener('change', () => {
     ? 'Stop, then Start to apply the new output.'
     : '';
 });
+document.querySelectorAll('input[name="nsBackend"]').forEach(r =>
+  r.addEventListener('change', savePrefs));
 $('micGain').addEventListener('input', () => { showGain(); savePrefs(); });
-// Initialize the checkboxes from the server's stored prefs.
+// Initialize the radios from the server's stored prefs.
 api('GET', '/api/state').then(st => {
-  if (st && 'nsEnabled' in st) $('nsOn').checked = !!st.nsEnabled;
+  if (st && st.nsBackend !== undefined) setNsBackend(st.nsBackend);
+  else if (st && 'nsEnabled' in st) setNsBackend(st.nsEnabled ? 'dtln' : 'off');
+  showNsHint(st);
   if (st && st.micGain !== undefined) $('micGain').value = gain2pct(+st.micGain);
   showGain();
 }).catch(() => { showGain(); });
@@ -391,8 +409,8 @@ function connect() {
   ws.onmessage = ev => {
     const st = JSON.parse(ev.data);
     if (st.running !== running) setRunning(st.running, st);
-    if (st.nsEnabled !== undefined && st.nsEnabled !== $('nsOn').checked)
-      $('nsOn').checked = !!st.nsEnabled;
+    if (st.nsBackend !== undefined && st.nsBackend !== nsBackend())
+      setNsBackend(st.nsBackend);
     if (st.listenToSelf !== undefined && !!st.listenToSelf !== $('listenOn').checked)
       $('listenOn').checked = !!st.listenToSelf;
     if (st.profile !== undefined && String(st.profile) !== $('profile').value)
@@ -410,7 +428,8 @@ function connect() {
     meter('mIn', st.inRms || 0);
     meter('mOut', st.outRms || 0);
     $('status').textContent =
-      `Running (16000 Hz, ${st.chain || 'DTLN-AEC'}) · NS backend ${st.ns.backend}` +
+      `Running (16000 Hz, ${st.chain || 'DTLN-AEC'})` +
+      (st.ns.backend ? ` · ${st.ns.backend === 2 ? 'Hush' : 'NS'}` : ' · NS off') +
       (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
     if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
   };

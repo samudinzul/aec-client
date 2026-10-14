@@ -23,11 +23,11 @@
 # themselves keep the flat GitHub-asset layout (zip root = asset
 # folder).
 #
-# No .exe, no DLL, no .pyd, no .venv, no __pycache__ — not even
-# the optional local aec_dsp accelerator: a .pyd IS a PE binary
-# and ships the exact AV-heuristic risk this build exists to
-# dodge (it stays a local-only build; the UI falls back to
-# NumPy without it). Nothing in here can trip the
+# No .exe, no DLL, no .pyd, no .venv, no __pycache__. A third-party
+# user-supplied library (e.g. Hush's weya_nc for the optional NS
+# backend) must NEVER be committed or staged: any PE binary ships
+# the exact AV-heuristic risk this build exists to dodge (selection
+# stays fail-closed without it). Nothing in here can trip the
 # AI heuristics that flag the unsigned
 # desktop build (see SECURITY.md).
 #
@@ -90,6 +90,7 @@ sed "s/%%VERSION%%/${VER}/g" scripts/templates/README-web.txt > "$STAGE/README.t
 fail=0
 for f in web/start.bat web/server.py web/chain.py \
          web/audio.py web/aec3.py web/nkf.py web/gui.py \
+         web/hush.py \
          web/requirements.txt \
          web/ui/index.html web/ui/imgui_web.html \
          web/ui/imgui_web.js web/ui/imgui_web.css \

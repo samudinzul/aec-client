@@ -31,7 +31,7 @@ board = SoundBoard()
 runner = None
 runner_lock = threading.Lock()
 prefs = {"mic": None, "ref": None, "out": None,
-         "nsEnabled": True, "micGain": 1.0,
+         "nsEnabled": True, "nsBackend": "dtln", "micGain": 1.0,
          "trayEnabled": True, "listenToSelf": False,
          "profile": 0, "experimentalEngines": False,
          "soundboardGain": 0.08, "monitorEnabled": True,
@@ -133,12 +133,21 @@ def set_prefs(body: dict):
     for k in ("mic", "ref", "out"):
         if k in body:
             prefs[k] = body[k]
-    if "nsEnabled" in body:
-        # Live toggle (unlike devices): skipping the NS
-        # stage needs no device reconfigure, so it
-        # applies to the running chain immediately.
+    if "nsBackend" in body:
+        # Radio: off / dtln / hush. Live (no reconfigure needed),
+        # fail-closed: a hush pick without its files (or a bogus
+        # value) keeps the previous backend — the UI resyncs from
+        # state on the next tick, so the revert is visible.
+        nb = str(body["nsBackend"])
+        if nb in ("off", "dtln", "hush") and chain.set_ns_backend(nb):
+            prefs["nsBackend"] = nb
+            prefs["nsEnabled"] = nb != "off"
+    elif "nsEnabled" in body:
+        # Legacy bool clients (and the classic page on old load):
+        # maps onto the radio without clobbering a hush pick.
         prefs["nsEnabled"] = bool(body["nsEnabled"])
         chain.ns_enabled = prefs["nsEnabled"]
+        prefs["nsBackend"] = chain.ns_backend
     if "micGain" in body:
         # Live preamp gain, linear, clamped to 0.1x..4.0x
         # (the UI shows 0..200%, like the desktop client);
@@ -272,7 +281,16 @@ def start():
         if not chain.start():
             return {"ok": False, "error": chain.last_error or
                     "Failed to load DTLN model"}
-        chain.ns_enabled = prefs.get("nsEnabled", True)
+        # Migrate the legacy bool onto the radio (a stored "hush"
+        # wins; a stored bool only applies when no radio was saved).
+        nb = prefs.get("nsBackend")
+        if nb in ("off", "dtln", "hush"):
+            chain.set_ns_backend(nb)
+            prefs["nsBackend"] = chain.ns_backend
+            prefs["nsEnabled"] = chain.ns_backend != "off"
+        else:
+            chain.ns_enabled = prefs.get("nsEnabled", True)
+            prefs["nsBackend"] = chain.ns_backend
         chain.mic_gain = prefs.get("micGain", 1.0)
         if any(prefs[k] is None for k in ("mic", "ref", "out")):
             chain.stop()

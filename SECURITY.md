@@ -66,8 +66,11 @@ that is why the web build exists.
 - Pure script + data only. `scripts/make-release-web.sh` asserts
   **twice** (staging + zip contents) that no `.exe`, `.dll`, `.pyd`,
   cache, or venv is present — the build fails otherwise. No
-  exceptions, including for our own optional `aec_dsp` accelerator
-  (local-only; `web/dsp.py` falls back to NumPy without it).
+  exceptions. The optional Hush NS backend (`web/hush.py`) loads a
+  USER-supplied `weya_nc` library + model bundle from outside the
+  repo via stdlib `ctypes` — those files must never be committed
+  or staged; selection is fail-closed while they are absent, so a
+  stock install behaves exactly as if Hush did not exist.
 - Dependencies are mainstream PyPI wheels installed on the user's
   machine by the launchers. Never freeze with PyInstaller/Nuitka —
   that reintroduces the packed-binary target.

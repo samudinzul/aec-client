@@ -126,7 +126,13 @@ class WebImGuiUI {
         p.appendChild(prof);
         const stages = this.mk('div');
         stages.innerHTML =
-            '<label class="chkline"><input type="checkbox" id="ig-nsOn" checked>Noise suppression (DTLN-NS)</label>' +
+            '<div class="chkline" role="radiogroup" aria-label="Noise suppression">' +
+            '<span class="flabel">Noise suppression</span>' +
+            '<label><input type="radio" name="ig-ns" id="ig-nsOff" value="off">Off</label>' +
+            '<label><input type="radio" name="ig-ns" id="ig-nsDtln" value="dtln" checked>DTLN-NS</label>' +
+            '<label><input type="radio" name="ig-ns" id="ig-nsHush" value="hush">Hush</label>' +
+            '</div>' +
+            '<div id="ig-nsHushHint" class="hint" hidden>Hush needs the weya_nc library + model bundle on this machine (see web/README.md) — DTLN-NS runs until then.</div>' +
             '<div id="ig-enginfo" class="hint"></div>';
         p.appendChild(stages);
 
@@ -321,7 +327,8 @@ class WebImGuiUI {
         this.el.mic = q('ig-mic'); this.el.ref = q('ig-ref'); this.el.out = q('ig-out');
         this.el.outLabel = q('ig-outLabel');
         this.el.gain = q('ig-micGain'); this.el.gainVal = q('ig-gainVal');
-        this.el.ns = q('ig-nsOn');
+        this.el.nsOff = q('ig-nsOff'); this.el.nsDtln = q('ig-nsDtln');
+        this.el.nsHush = q('ig-nsHush'); this.el.nsHint = q('ig-nsHushHint');
         this.el.listen = q('ig-listen');
         this.el.rowOut = q('ig-rowOut');
         this.el.profile = q('ig-profile');
@@ -359,7 +366,8 @@ class WebImGuiUI {
                 this.el.devhint.textContent = this.running ? 'Stop, then Start to apply the new device.' : '';
             }));
         this.el.rescan.addEventListener('click', () => this.loadDevices());
-        this.el.ns.addEventListener('change', () => this.savePrefs());
+        [this.el.nsOff, this.el.nsDtln, this.el.nsHush].forEach((r) =>
+            r.addEventListener('change', () => this.savePrefs()));
         this.el.profile.addEventListener('change', () => this.savePrefs());
         this.el.exp.addEventListener('change', () => {
             // The list rebuild (applyEngineAvailability) drops the
@@ -486,12 +494,41 @@ class WebImGuiUI {
         box.style.color = k.notchFreq > 0 ? '#ff9d6b' : '';
     }
 
+    nsBackend() {
+        // Radio group value: off / dtln / hush (default dtln).
+        if (this.el.nsHush.checked) return 'hush';
+        if (this.el.nsOff.checked) return 'off';
+        return 'dtln';
+    }
+
+    setNsBackend(v) {
+        this.el.nsOff.checked = v === 'off';
+        this.el.nsDtln.checked = v === 'dtln';
+        this.el.nsHush.checked = v === 'hush';
+    }
+
+    nsHasFocus() {
+        const a = document.activeElement;
+        return a === this.el.nsOff || a === this.el.nsDtln || a === this.el.nsHush;
+    }
+
+    showNsHint(st) {
+        // Hush is user-supplied files, not a pip package: when the
+        // library + bundle are absent the radio disables instead of
+        // failing at Start (same pattern as engine availability).
+        const avail = st && st.nsBackends;
+        const missing = avail && avail.hush === false;
+        this.el.nsHint.hidden = !missing;
+        this.el.nsHush.disabled = !!missing;
+    }
+
     savePrefs() {
         clearTimeout(this._saveTimer);
         return this.api('POST', '/api/prefs', {
             mic: this.prefVal(this.el.mic), ref: this.prefVal(this.el.ref),
             out: this.prefVal(this.el.out),
-            nsEnabled: this.el.ns.checked,
+            nsBackend: this.nsBackend(),
+            nsEnabled: this.nsBackend() !== 'off',
             micGain: Math.min(4.0, Math.max(0.1, (+this.el.gain.value) / 100)),
             trayEnabled: this.el.tray.checked,
             listenToSelf: this.el.listen.checked,
@@ -526,7 +563,10 @@ class WebImGuiUI {
 
     refreshToggles() {
         this.api('GET', '/api/state').then((st) => {
-            if (st && st.nsEnabled !== undefined) this.el.ns.checked = !!+st.nsEnabled;
+            if (st && st.nsBackend !== undefined) this.setNsBackend(st.nsBackend);
+            else if (st && st.nsEnabled !== undefined)
+                this.setNsBackend(+st.nsEnabled ? 'dtln' : 'off');
+            this.showNsHint(st);
             if (st && st.micGain !== undefined)
                 this.el.gain.value = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
             this.showGain();
@@ -771,7 +811,7 @@ class WebImGuiUI {
         }
         this.el.gain.value = 100;
         this.showGain();
-        this.el.ns.checked = true;
+        this.setNsBackend('dtln');
         this.el.sbGain.value = 100;
         this.el.sbGainVal.textContent = '100%';
         this.el.monOn.checked = true;
@@ -944,9 +984,9 @@ class WebImGuiUI {
             // Guard every WS-driven form update with activeElement:
             // the 30 Hz tick must not fight the user mid-drag/mid-click
             // (the slider was snapping back while being dragged).
-            if (st.nsEnabled !== undefined && !!+st.nsEnabled !== this.el.ns.checked
-                && document.activeElement !== this.el.ns)
-                this.el.ns.checked = !!+st.nsEnabled;
+            if (st.nsBackend !== undefined && st.nsBackend !== this.nsBackend()
+                && !this.nsHasFocus())
+                this.setNsBackend(st.nsBackend);
             if (st.listenToSelf !== undefined && !!st.listenToSelf !== this.el.listen.checked
                 && document.activeElement !== this.el.listen) {
                 this.el.listen.checked = !!st.listenToSelf;
@@ -960,6 +1000,7 @@ class WebImGuiUI {
                 this.el.exp.checked = !!st.experimentalEngines;
             if (st.soundboardPlaying !== undefined) this.updatePads(st.soundboardPlaying);
             this.applyEngineAvailability(st.engines);
+            this.showNsHint(st);
             this.showEngineInfo(st);
             if (st.micGain !== undefined && document.activeElement !== this.el.gain) {
                 const pct = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
@@ -971,7 +1012,8 @@ class WebImGuiUI {
             this.refTarget = this.meterScale(st.refRms || 0);
             this.outTarget = this.meterScale(st.outRms || 0);
             this.el.status.textContent =
-                'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ') · NS ' + ((st.ns && st.ns.backend) || '?') +
+                'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')' +
+                ((st.ns && st.ns.backend) ? ' · ' + (st.ns.backend === 2 ? 'Hush' : 'NS') : ' · NS off') +
                 (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : '');
             if (st.error || (st.ns && st.ns.error))
                 this.el.err.textContent = st.error || (st.ns && st.ns.error);

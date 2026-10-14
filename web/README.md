@@ -100,8 +100,9 @@ Open http://localhost:8000 — that page IS the GUI.
    also boosts background noise — watch the Mic meter.
 4. Click Start. Talk with speakers on.
 5. In Discord: input = CABLE Output.
-6. Optional, live: untick **Noise suppression (DTLN-NS)**
-   to halve model CPU at the cost of background hiss.
+6. Optional, live: the **Noise suppression** radio (Off / DTLN-NS /
+   Hush) switches the post-engine stage without restarting.
+   Off halves model CPU at the cost of background hiss.
 7. **Soundboard** — drop `.wav` / `.mp3` / `.flac` / `.ogg` files
    into `web\sounds\` and open the Soundboard tab. Click a pad to
    play a sound on top of your voice (one pad at a time; a new click
@@ -126,6 +127,16 @@ Open http://localhost:8000 — that page IS the GUI.
   mirrors the desktop lines.
 - **DTLN-NS** (`models/dtln_ns_128_*.tflite`) after the engine,
   fail-open — missing/broken models pass audio through, never mute.
+  Default NS backend; the radio also offers **Off** and **Hush**.
+- **Hush** (optional NS backend, user-supplied files, never shipped)
+  — pulp-vision/Hush via its `weya_nc` shared library (stdlib
+  `ctypes`, no new dependency). Download `weya_nc.dll` + the ONNX
+  bundle (`advanced_dfnet16k_model_best_onnx.tar.gz`) from the Hush
+  releases into `%LOCALAPPDATA%\aec-web\hush\` (or set `WEYA_NC_LIB`
+  / `WEYA_NC_MODEL` env vars), then pick the Hush radio. The radio
+  disables itself while the files are absent; a mid-run load
+  failure passes audio through with the error in state (same
+  fail-open contract as DTLN-NS).
 - **Mic preamp** (`chain.py` `mic_gain`, `micGain` pref): 0–200%
   (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
   the mic before the engine, for quiet microphones.
@@ -141,6 +152,7 @@ Open http://localhost:8000 — that page IS the GUI.
 | `aec3.py` | WebRTC AEC3 engine (EchoCanceller) | `Aec3New/CancelEcho` |
 | `nkf.py` | NKF-AEC engine + stages + RES/brakes | `NkfNew/Process`, `NKFImpl` |
 | `dtln_ns.py` | DTLN-NS stage + ring + stats | `DtlnNsNew/Process/Stats` |
+| `hush.py` | Hush NS backend via user-supplied weya_nc lib (ctypes, fail-closed select / fail-open run) | Hush `weya_nc.h` C ABI |
 | `chain.py` | Engine select + NS stacking, fail-open | `main.cpp` frame pump |
 | `audio.py` | pyaudiowpatch callback-mode mic/loopback/CABLE I/O, resampled to 16 kHz at the edges | desktop device model |
 | `server.py` | FastAPI REST + WS + serves `ui/` | Audio tab semantics |

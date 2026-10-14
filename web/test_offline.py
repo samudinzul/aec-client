@@ -1,11 +1,14 @@
 """Offline fidelity harness — WAV-in -> WAV-out through the web chain.
 
 Usage (from repo root):
-    python web/test_offline.py mic.wav ref.wav out.wav
+    python web/test_offline.py mic.wav ref.wav out.wav [--ns-backend dtln|hush|off]
 
-Reads two 16 kHz mono WAVs, runs them through Chain (DTLN-AEC + NS),
-writes the cleaned output. Compare against the desktop app's output
-on the same pair: prints RMS + peak so you can judge the match.
+Reads two 16 kHz mono WAVs, runs them through Chain (engine + NS
+stage), writes the cleaned output. Compare against the desktop
+app's output on the same pair: prints RMS + peak so you can judge
+the match. --ns-backend picks the NS stage (default dtln; hush
+needs the user-supplied weya_nc files — see web/hush.py, and
+WEYA_NC_LIB / WEYA_NC_MODEL env vars for custom paths).
 
 Also doubles as a smoke test with synthetic audio (no WAVs needed):
     python web/test_offline.py --smoke
@@ -119,15 +122,28 @@ def smoke():
 def main():
     from .chain import Chain
 
-    if len(sys.argv) == 2 and sys.argv[1] == "--smoke":
+    args = sys.argv[1:]
+    ns_backend = "dtln"
+    if "--ns-backend" in args:
+        i = args.index("--ns-backend")
+        try:
+            ns_backend = args[i + 1]
+        except IndexError:
+            print("error: --ns-backend needs off|dtln|hush")
+            return 1
+        del args[i:i + 2]
+    if len(args) == 1 and args[0] == "--smoke":
         return smoke()
-    if len(sys.argv) != 4:
+    if len(args) != 3:
         print(__doc__)
         return 1
-    mic, ref, outp = read_wav16(sys.argv[1]), read_wav16(sys.argv[2]), sys.argv[3]
+    mic, ref, outp = read_wav16(args[0]), read_wav16(args[1]), args[2]
     n = min(len(mic), len(ref))
     mic, ref = mic[:n], ref[:n]
     ch = Chain()
+    if not ch.set_ns_backend(ns_backend):
+        print(f"NS backend refused: {ch.last_error}")
+        return 2
     if not ch.start():
         print(f"chain failed to start: {ch.last_error}")
         return 2
@@ -142,7 +158,8 @@ def main():
     out = np.concatenate(out)[:n]
     write_wav16(outp, out)
     print(f"wrote {outp}: rms={np.sqrt(np.mean(out.astype(float)**2)):.1f} "
-          f"peak={np.abs(out).max()} frames={ch.state()['frames']}")
+          f"peak={np.abs(out).max()} frames={ch.state()['frames']} "
+          f"ns={ch.state()['nsBackend']}")
     return 0
 
 

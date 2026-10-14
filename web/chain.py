@@ -3,8 +3,11 @@
   engine (int16 -> int16, selected profile: DTLN-AEC 128 /
   WebRTC AEC3 / NKF-AEC — same PROFILES table as the desktop,
   same experimental gating in the server prefs)
-  DTLN-NS (float -> float, fail-open, on/off toggle — runs after
-  the engine on every path, like the desktop)
+  NS stage (float -> float, fail-open — runs after the engine on
+  every path, like the desktop). Backend is selectable: "dtln"
+  (DTLN-NS pair, default, ships in models/) or "hush" (Hush via
+  the user-supplied weya_nc library + bundle — see web/hush.py;
+  "off" skips the stage).
   mic preamp gain + float -> int16 (round-half-even + clamp,
   like ``clamp_s16(lrintf)``)
 
@@ -28,6 +31,7 @@ import numpy as np
 from . import dsp
 from .dtln import DtlnAec
 from .dtln_ns import DtlnNs
+from .hush import HushNs, hush_available
 
 
 # Desktop PROFILES table (src/main.cpp), minus the filter column
@@ -37,6 +41,12 @@ PROFILES = (
     ("WebRTC AEC3", "aec3"),
     ("NKF-AEC", "nkf"),
 )
+
+
+# NS-stage backends: "off" skips the stage, "dtln" is the shipped
+# DTLN-NS pair, "hush" is the user-supplied Hush library (fail-closed
+# at selection while its files are absent — see web/hush.py).
+NS_BACKENDS = ("off", "dtln", "hush")
 
 
 # Backend probe cache: state() calls engine_available() for every
@@ -100,7 +110,11 @@ class Chain:
         self.num_threads = num_threads
         self.dtln = None
         self.ns = None
-        self.ns_enabled = True
+        self.ns_backend = "dtln"  # one of NS_BACKENDS; single source of
+        # truth for the stage (ns_enabled below is a compat view).
+        self.hush = None  # lazy HushNs (user-supplied files; None until
+        # first "hush" selection — never loaded unless picked).
+        self.hush_error = ""
         self.mic_gain = 1.0
         self.running = False
         self.last_error = ""
@@ -109,6 +123,41 @@ class Chain:
         self._backend = None  # Aec3Engine / NkfEngine (dtln uses self.dtln)
         self._load_lock = threading.Lock()
         self._swap_lock = threading.Lock()
+
+    @property
+    def ns_enabled(self):
+        """Compat view: old bool toggle (nsBackend != off)."""
+        return self.ns_backend != "off"
+
+    @ns_enabled.setter
+    def ns_enabled(self, value):
+        # Map the legacy toggle without clobbering a hush pick:
+        # on from off lands on dtln, on from hush stays hush.
+        if value:
+            if self.ns_backend == "off":
+                self.ns_backend = "dtln"
+        else:
+            self.ns_backend = "off"
+
+    def set_ns_backend(self, name):
+        """Select the NS stage backend (live — no reconfigure needed).
+
+        Unknown names and a hush pick without its files fail closed:
+        returns False and keeps the previous backend.
+        """
+        if name not in NS_BACKENDS:
+            self.last_error = f"unknown NS backend: {name}"
+            return False
+        if name == "hush" and not hush_available():
+            self.last_error = (
+                "hush files missing (weya_nc library + model bundle) — "
+                "see web/README.md; keeping " + self.ns_backend)
+            return False
+        with self._swap_lock:
+            self.ns_backend = name
+            if name == "hush" and self.hush is not None:
+                self.hush.reset()
+        return True
 
     def _load_engines(self):
         """Build the model pairs — the slow part
@@ -129,6 +178,22 @@ class Chain:
             if self.running or self.dtln is not None:
                 return
             self._load_engines()
+
+    def _ensure_hush(self):
+        """Create the Hush backend on first pick (caller holds _load_lock).
+
+        A broken library leaves self.hush_error set and self.hush
+        unready — processing then fails open (passthrough), the same
+        contract as a missing DTLN-NS pair.
+        """
+        if self.hush is not None:
+            return
+        try:
+            self.hush = HushNs()
+            self.hush_error = "" if self.hush.ready else self.hush.last_error
+        except Exception as e:
+            self.hush = None
+            self.hush_error = f"hush init failed: {e}"
 
     def set_engine(self, name):
         """Select the echo engine (hot-swappable while running —
@@ -188,7 +253,20 @@ class Chain:
             self.frames = 0
             # NS broken is fail-open (pre-existing contract):
             # start succeeds, the error rides along for the UI.
-            self.last_error = "" if self.ns.ready else self.ns.last_error
+            # The error reported is the ACTIVE backend's: a hush pick
+            # with unloadable files still starts (passthrough) instead
+            # of stranding the voice path.
+            with self._swap_lock:
+                ns_backend = self.ns_backend
+            if ns_backend == "hush":
+                self._ensure_hush()
+                if self.hush is not None:
+                    self.hush.reset()
+                self.last_error = (self.hush_error if self.hush is None
+                                   else ("" if self.hush.ready
+                                         else self.hush.last_error))
+            else:
+                self.last_error = "" if self.ns.ready else self.ns.last_error
             return True
 
     def stop(self):
@@ -200,6 +278,8 @@ class Chain:
                 self.dtln.reset()
             if self.ns is not None:
                 self.ns.reset()
+            if self.hush is not None:
+                self.hush.reset()
             with self._swap_lock:
                 if self._backend is not None:
                     self._backend.reset()
@@ -221,18 +301,27 @@ class Chain:
                           -32768.0, 32767.0).astype(np.int16)
         with self._swap_lock:
             engine, backend = self.engine, self._backend
+            ns_backend = self.ns_backend
         try:
             if engine == "dtln" or backend is None:
                 cleaned = self.dtln.process(mic, ref)
             else:
                 cleaned = backend.process(mic, ref)
-            if self.ns_enabled and self.ns is not None and self.ns.ready:
+            if ns_backend != "off":
                 f = cleaned.astype(np.float32) / 32768.0
+                staged = False
                 try:
-                    f = self.ns.process(f)
+                    if ns_backend == "hush" and self.hush is not None:
+                        f = self.hush.process(f)
+                        staged = True
+                    elif (ns_backend == "dtln" and self.ns is not None
+                            and self.ns.ready):
+                        f = self.ns.process(f)
+                        staged = True
                 except Exception:
                     pass  # fail-open: keep engine output
-                cleaned = dsp.f32_to_i16_round(f)
+                if staged:
+                    cleaned = dsp.f32_to_i16_round(f)
             self.frames += 1
             return cleaned
         except Exception as e:  # fail-open: ship mic, never silence
@@ -244,13 +333,23 @@ class Chain:
         # down from another thread, and a check-then-use
         # race here killed the WebSocket on every Stop.
         ns_obj = self.ns
+        hush_obj = self.hush
         dtln_obj = self.dtln
         with self._swap_lock:
             engine, backend = self.engine, self._backend
-        ns = ns_obj.stats() if ns_obj is not None else {
-            "backend": 0, "rCount": 0, "inRms": 0.0,
-            "outRms": 0.0, "dropped": 0, "error": "",
-        }
+            ns_backend = self.ns_backend
+        if ns_backend == "hush":
+            ns = (hush_obj.stats() if hush_obj is not None else {
+                "backend": 0, "rCount": 0, "inRms": 0.0,
+                "outRms": 0.0, "dropped": 0,
+                "error": self.hush_error,
+            })
+        else:
+            ns = ns_obj.stats() if ns_obj is not None else {
+                "backend": 0, "rCount": 0, "inRms": 0.0,
+                "outRms": 0.0, "dropped": 0, "error": "",
+            }
+        ns_active = bool(ns["backend"]) and ns_backend != "off"
         name = {n: d for d, n in PROFILES}.get(engine, "DTLN-AEC 128")
         nkf_st = None
         if engine == "nkf" and backend is not None:
@@ -258,13 +357,21 @@ class Chain:
                 nkf_st = backend.get_state()
             except Exception:
                 nkf_st = None
+        ns_tag = " + Hush" if (ns_backend == "hush" and ns_active) else (
+            " + NS" if ns_active else "")
         return {
             "running": self.running,
             "engine": name if self.running else "",
-            "chain": (name + " + NS") if (self.running and ns["backend"]
-                                           and self.ns_enabled) else (
-                name if self.running else ""),
-            "nsEnabled": 1 if self.ns_enabled else 0,
+            "chain": (name + ns_tag) if self.running else "",
+            "nsEnabled": 1 if ns_backend != "off" else 0,
+            "nsBackend": ns_backend,
+            "nsBackends": {
+                # DTLN pair ships in models/ (None = not loaded yet,
+                # assume present until the load says otherwise).
+                "dtln": (dtln_obj.backend != 0)
+                        if dtln_obj is not None else True,
+                "hush": hush_available(),
+            },
             "micGain": self.mic_gain,
             "sampleRate": 16000,
             "dtlnBackend": dtln_obj.backend if dtln_obj else 0,

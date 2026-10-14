@@ -4,10 +4,11 @@
 # Install:  pip install -r requirements.txt   (Python 3.10+ on Windows)
 #
 # AV note: every package here is a mainstream, reputable wheel.
-# The only binary of our own is the OPTIONAL local aec_dsp Rust
-# extension (ext/aec_dsp, built with maturin; see ext/README.md) —
-# web/dsp.py falls back to NumPy without it, and it must NEVER
-# ship in a release zip (see scripts/make-release-web.sh).
+# Nothing we write is a PE binary. The optional Hush NS backend
+# (web/hush.py) loads a USER-supplied weya_nc library + model bundle
+# from outside the repo via stdlib ctypes — those files must NEVER
+# be committed or staged (scripts/make-release-web.sh asserts zero
+# .dll/.pyd and fails the build otherwise).
 # Do NOT freeze this into a PyInstaller/Nuitka exe — that
 # reintroduces the exact problem this project exists to dodge.
 
