@@ -1899,33 +1899,6 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "Hush - keyboards, mice and background talkers, slightly\n"
                 "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
         ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
-        // Live diagnostics -- shows whether the stage is actually
-        // running and suppressing (ring fill, dropped samples,
-        // in/out RMS over the last frame).
-        if (nsb == 2 && g_engine.hush) {
-            HushStats st;
-            HushStatsGet(g_engine.hush, &st);
-            char line[256];
-            snprintf(line, sizeof line,
-                     "Hush: %s frame=%d dropped=%d in=%.4f out=%.4f %s",
-                     st.backend ? "ready" : "off",
-                     st.frameLen, st.dropped,
-                     st.inRms, st.outRms, HushLastError(g_engine.hush));
-            ImGui::TextDisabled("%s", line);
-        } else if (g_engine.ns) {
-            DtlnNsStats st;
-            DtlnNsStatsGet(g_engine.ns, &st);
-            const char* be[] = { "off", "TFLite", "ONNX" };
-            char line[256];
-            snprintf(line, sizeof line,
-                     "DTLN-NS: %s ring=%d dropped=%d in=%.4f out=%.4f %s",
-                     be[st.backend], st.rCount, st.dropped,
-                     st.inRms, st.outRms, DtnsLastError(g_engine.ns));
-            if (st.dropped > 0)
-                snprintf(line + strlen(line), sizeof line - strlen(line),
-                         " [ring overflow!]");
-            ImGui::TextDisabled("%s", line);
-        }
     }
 
     ImGui::Spacing();
