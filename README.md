@@ -2,9 +2,11 @@
 
 > Speech enhancement wrapper for Windows: acoustic echo cancellation (AEC3, NKF-AEC, DTLN) + noise suppression (DTLN-NS, Hush) → virtual mic for Discord, Zoom, Teams, and other voice apps.
 
-![AEC Client — desktop app (left) and web UI (right), same Idle state](screenshots/desktop-and-web.png)
+| ![Desktop app](screenshots/main.png) | ![Web UI](screenshots/web-ui.png) |
+|---|---|
+| *Desktop `aec_gui.exe`* | *Web UI in its native window (`web/start.bat`)* |
 
-*Left: desktop `aec_gui.exe`. Right: web UI in its native window (`web/start.bat`). Same three profiles, same chain, same telemetry — pick the window you prefer.*
+*Same three profiles, same chain, same telemetry — pick the window you prefer.*
 
 **Built entirely with open-source tools.** No proprietary SDKs. No cloud dependencies. No telemetry.
 
