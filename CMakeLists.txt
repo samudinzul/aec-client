@@ -234,3 +234,44 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/hush_16k_onnx.tar.gz")
             "$<TARGET_FILE_DIR:aec_gui>/models/hush_16k_onnx.tar.gz"
         COMMENT "Copying Hush model bundle")
 endif()
+
+# ============================================================
+#  exp/ — GTCRN + LocalVQE v1.4 experiment harnesses.
+#  Desktop-only, EXCLUDE_FROM_ALL: the default build is untouched.
+#  Build explicitly:
+#    cmake --build build --target gtcrn_smoke localvqe_smoke
+#  Never shipped: the release scripts do not stage exp/.
+# ============================================================
+add_executable(gtcrn_smoke EXCLUDE_FROM_ALL
+    exp/gtcrn/gtcrn_smoke.cpp
+    exp/gtcrn/gtcrn_wrapper.cpp
+)
+
+target_include_directories(gtcrn_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/exp/gtcrn
+    ${MSYS2_ROOT}/include/onnxruntime
+)
+
+target_link_libraries(gtcrn_smoke PRIVATE onnxruntime)
+
+if(WIN32)
+    target_link_libraries(gtcrn_smoke PRIVATE ole32 uuid winmm)
+endif()
+
+add_custom_command(TARGET gtcrn_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
+        $<TARGET_FILE_DIR:gtcrn_smoke>)
+
+add_executable(localvqe_smoke EXCLUDE_FROM_ALL
+    exp/localvqe/localvqe_smoke.cpp
+    exp/localvqe/localvqe_wrapper.cpp
+)
+
+target_include_directories(localvqe_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/exp/localvqe
+)
+
+if(WIN32)
+    target_link_libraries(localvqe_smoke PRIVATE ole32 uuid winmm)
+endif()
