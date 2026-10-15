@@ -39,14 +39,15 @@ Key contracts (from the model cards — read before touching the wrappers):
   [soniqo/speech-core](https://github.com/soniqo/speech-core)
   (`OnnxLocalVQEEchoCanceller`). FFT 512 / hop 256 (16 ms).
 
-## Status: v0 plumbing (both wrappers fail-open passthrough)
+## Status
 
-- Sessions load, IO tables print, WAV harnesses run end-to-end, RMS tables
-  verify the plumbing. **No neural audio runs yet** — `Process` carries mic
-  (GTCRN) / mic-through (LocalVQE) and says so in the per-second table.
-- Next step after `get_models.sh` + `probe.py`: fill the marked `V1` sections
-  (`STFT → Run → ISTFT + cache carry` for GTCRN; vendor `speech-core` or port
-  the Kalman frontend for LocalVQE).
+- **GTCRN: V1 neural path live.** `GtcrnProcess` runs sqrt-Hann STFT →
+  `Run(mix + carried caches)` → ISTFT overlap-add per 256-sample hop
+  (reference: sherpa-onnx `offline-speech-denoiser-gtcrn-impl.h`).
+  Expect on the synth clip: hiss sections drop, voice bursts stay near
+  input level. Any `Run` failure latches to passthrough (never mute).
+- **LocalVQE: still v0 plumbing** (files validated, mic passthrough until
+  the Kalman host DSP is ported — see contract above).
 
 ## Usage (MSYS2 UCRT64, from repo root)
 
