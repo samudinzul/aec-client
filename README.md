@@ -459,9 +459,8 @@ aec-client/
 │   └── README.md               Web UI docs
 │
 ├── screenshots/
-│   ├── desktop-and-web.png         README + release hero (merge of below)
-│   ├── main.png                    Desktop source shot
-│   └── web-ui.png                  Web UI source shot
+│   ├── main.png                    Desktop shot (README + release, left)
+│   └── web-ui.png                  Web UI shot (README + release, right)
 │
 ├── wallpapers/                     User-supplied backgrounds
 │
