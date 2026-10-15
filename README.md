@@ -1,6 +1,6 @@
 # AEC Client
 
-> Real-time acoustic echo cancellation for Windows — use speakers and a microphone at the same time in Discord, Zoom, Teams, or any other voice app.
+> Speech enhancement wrapper for Windows: acoustic echo cancellation (AEC3, NKF-AEC, DTLN) + noise suppression (DTLN-NS, Hush) → virtual mic for Discord, Zoom, Teams, and other voice apps.
 
 ![AEC Client — desktop app (left) and web UI (right), same Idle state](screenshots/desktop-and-web.png)
 
