@@ -26,6 +26,7 @@
 #include "dtln_wrapper.h"
 #include "dtln_ns_wrapper.h"
 #include "hush_wrapper.h"
+#include "gtcrn_wrapper.h"
 
 #include <cstdio>
 #include <cmath>
@@ -157,6 +158,7 @@ struct EngineState {
     DtlnHandle* dtln  = nullptr;
     DtlnNsHandle* ns = nullptr;   // DTLN noise reduction (all engines)
     HushHandle* hush = nullptr;   // Hush NS backend (all engines, 16 kHz)
+    GtcrnHandle* gtcrn = nullptr;  // GTCRN NS backend, experimental (all engines, 16 kHz)
 };
 
 // ============================================================
@@ -204,7 +206,8 @@ std::atomic<bool>  g_enablePreprocess(false);
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
-// NS backend: 0=off, 1=DTLN-NS (default), 2=Hush. Meaningful only
+// NS backend: 0=off, 1=DTLN-NS (default), 2=Hush, 3=GTCRN (exp).
+// Meaningful only
 // while g_nsEnabled; the radio sets both consistently. Global pref
 // like the tick: a profile switch never resets it.
 std::atomic<int>   g_nsBackend{ 1 };
@@ -731,7 +734,7 @@ void SaveSettings() {
       << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
-      << g_nsBackend.load() << "\n";                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush)
+      << g_nsBackend.load() << "\n";                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN-exp)
 }
 
 void LoadSettings() {
@@ -896,9 +899,9 @@ void LoadSettings() {
         if (pgen >= 7) g_nsEnabled.store(nsRaw != 0);
         else           g_nsEnabled.store(true);
         // Slot 30 applies here (after the tick is final): a stored
-        // 0/1/2 wins, anything else (or a missing slot) derives from
+        // 0/1/2/3 wins, anything else (or a missing slot) derives from
         // the tick so old configs keep sounding exactly as before.
-        if (nsBackendRaw >= 0 && nsBackendRaw <= 2)
+        if (nsBackendRaw >= 0 && nsBackendRaw <= 3)
             g_nsBackend.store(nsBackendRaw);
         else
             g_nsBackend.store(g_nsEnabled.load() ? 1 : 0);
@@ -1008,6 +1011,7 @@ void ReinitEngine() {
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
     if (g_engine.ns)   { DtlnNsDestroy(g_engine.ns);   g_engine.ns   = nullptr; }
     if (g_engine.hush) { HushDestroy(g_engine.hush); g_engine.hush = nullptr; }
+    if (g_engine.gtcrn) { GtcrnDestroy(g_engine.gtcrn); g_engine.gtcrn = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
@@ -1034,10 +1038,13 @@ void ReinitEngine() {
     // DTLN noise reduction: the echo canceller leaves background
     // noise; the DTLN-NR pair (same 512/128/257 DSP, single mic feed)
     // runs after the engine on every path (WebRTC NS is retired, and
-    // the NKF-only WPE + notch stages are gone). The Hush backend
-    // (prebuilt weya_nc library + models/hush_16k_onnx.tar.gz) is the
-    // alternative NS stage, picked by the radio; only one is created.
-    if (g_nsEnabled.load() && g_nsBackend.load() == 2)
+    // the NKF-only WPE + notch stages are gone). Hush (prebuilt weya_nc
+    // library + models/hush_16k_onnx.tar.gz) and GTCRN (experimental,
+    // models/gtcrn_simple.onnx on the vendored ORT) are the alternative
+    // NS stages, picked by the radio; only one is created.
+    if (g_nsEnabled.load() && g_nsBackend.load() == 3)
+        g_engine.gtcrn = GtcrnNew("models/gtcrn_simple.onnx");
+    else if (g_nsEnabled.load() && g_nsBackend.load() == 2)
         g_engine.hush = HushNew("models/hush_16k_onnx.tar.gz");
     else if (g_nsEnabled.load())
         g_engine.ns = DtlnNsNew("models/dtln_ns_128");
@@ -1155,9 +1162,20 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // 16 kHz only (the DTLN-NR model is 16 kHz; other rates skip it).
     // Fail-open: a null or failed stage passes the frame straight
     // through — it never mutes the near-end voice. Meters below show
-    // post-stage output, i.e. what Discord hears. Hush runs here too
-    // when the radio picked it (same convert/process/convert-back
-    // shape, same fail-open contract).
+    // post-stage output, i.e. what Discord hears. Hush and GTCRN run
+    // here too when the radio picked them (same convert/process/
+    // convert-back shape, same fail-open contract).
+    GtcrnHandle* gtcrn = (g_nsBackend.load() == 3) ? g_engine.gtcrn : nullptr;
+    if (gtcrn && g_sampleRate.load() == 16000) {
+        for (int i = 0; i < fs; i++)
+            fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+        if (GtcrnProcess(gtcrn, fltBuf, fltBuf, fs) != 1) {
+            for (int i = 0; i < fs; i++)
+                fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+        }
+        for (int i = 0; i < fs; i++)
+            cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
+    }
     HushHandle* hush = (g_nsBackend.load() == 2) ? g_engine.hush : nullptr;
     if (hush && g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
@@ -1478,6 +1496,14 @@ void StartAEC() {
     // Hush is fail-closed at Start (web parity: the radio refuses
     // without files there; here Start is the apply point): a broken
     // stage must never silently passthrough a backend the user picked.
+    // GTCRN (experimental) follows the same rule.
+    if (g_nsEnabled.load() && g_nsBackend.load() == 3 &&
+        (!g_engine.gtcrn || !GtcrnReady(g_engine.gtcrn))) {
+        const char* why = (g_engine.gtcrn && GtcrnLastError(g_engine.gtcrn)[0])
+            ? GtcrnLastError(g_engine.gtcrn) : "models/gtcrn_simple.onnx missing";
+        snprintf(g_statusText, 128, "GTCRN unavailable - %.90s", why);
+        return;
+    }
     if (g_nsEnabled.load() && g_nsBackend.load() == 2 &&
         (!g_engine.hush || !HushReady(g_engine.hush))) {
         const char* why = (g_engine.hush && HushLastError(g_engine.hush)[0])
@@ -1563,7 +1589,8 @@ void StartAEC() {
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
     const char* nsTag = "";
-    if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
+    if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
+    else if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
     else if (g_engine.ns) nsTag = " + DTLN-NS";
     snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", sr, engineName,
              nsTag,
@@ -1844,14 +1871,16 @@ void DrawAudioTab() {
     // the post stages are ticked — no hidden state.
 std::string profilePreview = PROFILES[g_profileIndex].name;
     if (g_nsEnabled.load())
-        profilePreview += (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
+        profilePreview += (g_nsBackend.load() == 3) ? " -> GTCRN" :
+            (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
     bool wasRunning = g_isRunning;
     if ( ImGui::BeginCombo("##profile", profilePreview.c_str())) {
         for (int i = 0; i < PROFILE_COUNT; i++) {
             std::string label = PROFILES[i].name;
             EngineType le = (EngineType)PROFILES[i].engine;
             if (g_nsEnabled.load())
-                label += (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
+                label += (g_nsBackend.load() == 3) ? " -> GTCRN" :
+                    (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
             bool sel = (g_profileIndex == i);
             // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden
             // unless the user ticked the Appearance checkbox — the
@@ -1877,11 +1906,11 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
             "The tick below appends '-> NS' to the chain shown here.");
 
     // Post stage: NS backend radio for every engine (Off / DTLN-NS /
-    // Hush). Live restart on switch (same path as switching profiles
-    // mid-call). Global pref: a profile switch does not reset it.
+    // Hush / GTCRN-exp). Live restart on switch (same path as switching
+    // profiles mid-call). Global pref: a profile switch does not reset it.
     {
         int nsb = g_nsBackend.load();
-        if (nsb < 0 || nsb > 2) nsb = 1;
+        if (nsb < 0 || nsb > 3) nsb = 1;
         int prevNsb = nsb;
         ImGui::TextUnformatted("Noise suppression");
         if (ImGui::IsItemHovered())
@@ -1890,12 +1919,16 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "Off - raw echo-cancelled voice, lowest CPU.\n"
                 "DTLN-NS - general background hiss, cheapest stage.\n"
                 "Hush - keyboards, mice and background talkers, slightly\n"
-                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
+                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).\n"
+                "GTCRN (exp) - ultra-light hiss killer, 16 kHz only\n"
+                "(needs models/gtcrn_simple.onnx).");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
         ImGui::SameLine();
         ImGui::RadioButton("Hush", &nsb, 2);
+        ImGui::SameLine();
+        ImGui::RadioButton("GTCRN (exp)", &nsb, 3);
         if (nsb != prevNsb) {
             g_nsBackend.store(nsb);
             g_nsEnabled.store(nsb != 0);
@@ -1906,11 +1939,12 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
         // DTLN-NS selected it restates the obvious (detail stays in
         // the hover tooltip).
         if (nsb != 1)
-            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
+            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers - GTCRN: light hiss (exp).");
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.
         const char* nsErr = "";
-        if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
+        if (nsb == 3 && g_engine.gtcrn) nsErr = GtcrnLastError(g_engine.gtcrn);
+        else if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
         else if (g_engine.ns) nsErr = DtnsLastError(g_engine.ns);
         if (nsErr && nsErr[0]) ImGui::TextDisabled("%s", nsErr);
     }
@@ -2189,7 +2223,7 @@ void DrawAboutTab() {
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
     ImGui::BulletText("Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC)");
-    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush)");
+    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN-exp)");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -2204,6 +2238,7 @@ void DrawAboutTab() {
     ImGui::BulletText("DTLN-AEC - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("DTLN-NS - networkedaudio port of breizhn/DTLN denoise (MIT)");
     ImGui::BulletText("Hush - pulp-vision (Apache-2.0)");
+    ImGui::BulletText("GTCRN - Xiaobin Rong et al. (ICASSP 2024, MIT, experimental)");
     ImGui::BulletText("ONNX Runtime - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio - David Reid (MIT-0)");
@@ -2493,6 +2528,7 @@ int main(int, char**) {
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_engine.ns)   DtlnNsDestroy(g_engine.ns);
     if (g_engine.hush) HushDestroy(g_engine.hush);
+    if (g_engine.gtcrn) GtcrnDestroy(g_engine.gtcrn);
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

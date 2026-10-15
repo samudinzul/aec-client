@@ -41,6 +41,7 @@ add_executable(aec_gui
     src/dtln_wrapper.cpp
     src/dtln_ns_wrapper.cpp
     src/hush_wrapper.cpp
+    src/gtcrn_wrapper.cpp
     version.rc
     aec_gui.manifest
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
@@ -198,7 +199,8 @@ foreach(_dtln
     models/dtln_aec_128_1.tflite
     models/dtln_aec_128_2.tflite
     models/dtln_aec_128_1.onnx
-    models/dtln_aec_128_2.onnx)
+    models/dtln_aec_128_2.onnx
+    models/gtcrn_simple.onnx)
     if(EXISTS "${CMAKE_SOURCE_DIR}/${_dtln}")
         add_custom_command(TARGET aec_gui POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -244,11 +246,11 @@ endif()
 # ============================================================
 add_executable(gtcrn_smoke EXCLUDE_FROM_ALL
     exp/gtcrn/gtcrn_smoke.cpp
-    exp/gtcrn/gtcrn_wrapper.cpp
+    src/gtcrn_wrapper.cpp
 )
 
 target_include_directories(gtcrn_smoke PRIVATE
-    ${CMAKE_SOURCE_DIR}/exp/gtcrn
+    ${CMAKE_SOURCE_DIR}/src
     ${MSYS2_ROOT}/include/onnxruntime
 )
 
