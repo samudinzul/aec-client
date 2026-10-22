@@ -94,7 +94,12 @@ static const int   LOOP_WIN      = 1024;    // correlation window
 static const int   LOOP_DMAX     = 12800;   // same 800 ms round trip as TDC
 static const int   LOOP_DEC      = 4;       // box-decimate x4 (cheap NCC)
 static const int   LOOP_PERIOD   = 2048;    // check every ~128 ms of audio
-static const float LOOP_MIN_PEAK = 0.45f;   // NCC: delayed copy, not coincidence
+static const float LOOP_MIN_PEAK = 0.45f;   // engage bar stays LOW on purpose:
+// clipped, beyond-range, or chaotic loops still correlate, but weakly —
+// a high bar would blind detection exactly where protection matters
+// most. False-positive TRIM from ordinary echo is handled by the trim
+// veto below (proven cancellation blocks the ducking), not by the bar.
+// Detection/telemetry still report either way.
 static const int   LOOP_ON       = 2;       // hits needed to engage (hysteresis)
 static const int   LOOP_QUIET    = 16;      // silent detections (~2 s) -> release
 
@@ -116,6 +121,18 @@ static const double LOOP_TAU_REL  = 0.15;
 static const int   LOOP_LOUD_BLOCKS = 96;     // ~3 s continuous per step
 static const size_t NOCANCEL_HOT_AFTER = 80000;  // ~5 s loud, uncancelled
 static const double NOCANCEL_ECHO_RATIO = 0.25;  // ref within 6 dB of mic
+// Rails-sustained override (mirror web/nkf.py RAIL_MS): saturated howl
+// mush sits at full scale forever and mimics cancellation in energy
+// ratios (measured: handled loops <= 0.002 mean-square, howl >= 0.03),
+// so a pure depth veto would leave it untrimmed. RAIL_MS splits them
+// with margin either side; the consecutive-run requirement keeps it
+// gapless-only (syllabic dips reset it — shouted voice with real gaps
+// never trips, howl mush never gaps).
+static const double RAIL_MS = 0.01;
+static const int   RAIL_BLOCKS = LOOP_LOUD_BLOCKS;  // same 3 s sustain bar
+static const int   RAIL_QUIET_TOL = 16;  // blocks (~0.5 s) of genuine gap
+// that reset the run: syllabic dips inside loud audio only pause it
+// (howl mush never gaps that long; shouted phrases always do).
 
 // ---- Tonal census + tracking notch (was: howl backstop trim) ---------
 // A feedback howl is ONE tone owning the wire for seconds; voice and
@@ -215,6 +232,11 @@ struct NkfHandle {
     double loopPref[(LOOP_WIN + LOOP_DMAX) / LOOP_DEC + 1];
 
     float micEnv = 0, refEnv = 0, outEnv = 0;  // EMA of per-block mean-square
+    // Fast pre-trim wire followers for the loop-trim veto below
+    // (tau ~8 blocks, updated in the dep block every block, lock and
+    // give-up independent — unlike outEnv, which freezes pre-lock).
+    // 10log10(fastOutE/fastMicE) is the veto's cancellation evidence.
+    float fastMicE = 0, fastOutE = 0;
     int hotBlocks = 0;
     int resets = 0;
     bool giveUp = false;            // too many resets: always mic this session
@@ -253,6 +275,8 @@ struct NkfHandle {
     // Aggressive-on-loop brakes (mirror web/nkf.py).
     float loopGain = 1.0f;
     int   loopLoudRun = 0;
+    int   railRun = 0;  // consecutive rails-sustained blocks (see RAIL_MS)
+    int   railQuiet = 0;  // genuine-gap blocks toward resetting railRun
     size_t nocancelHotSamples = 0;
     bool  nocancelHot = false;
     bool  lastWindowCancelled = false;
@@ -266,6 +290,11 @@ struct NkfHandle {
     std::vector<ptrdiff_t> bsStrideIn, bsStrideOut;
     // Phase-log transitions (crash diagnostics; see NkfPhase).
     bool engRanOnce = false;
+    // Engine-domain level scales (default ENG_IN/OUT_SCALE — the /16
+    // sweet spot; overridable via NKF_ENG_DIV for level-sensitivity
+    // A/B, mirrors web/nkf.py).
+    float engInScale = ENG_IN_SCALE;
+    float engOutScale = ENG_OUT_SCALE;
 };
 
 // Keep the last TDC_WIN+TDC_DMAX ref samples (correlation window plus
@@ -695,6 +724,28 @@ NkfHandle* NkfNew(const char* modelPath) {
     const char* anf = getenv("NKF_DISABLE_ANF");
     h->anfEnabled = !(anf && anf[0] == '1');
     if (!h->anfEnabled) NkfPhase("notch bypassed (NKF_DISABLE_ANF=1)");
+    // A/B hook for residual-suppressor artifacts (mirrors web
+    // NKF_DISABLE_RES): bypass the intrinsic Wiener post-filter so a
+    // robotic texture can be attributed to the Kalman core or the
+    // suppressor with one env var. Telemetry resDb then reads ~0 dB.
+    const char* nores = getenv("NKF_DISABLE_RES");
+    if (nores && nores[0] == '1' && h->engine) {
+        h->engine->SetResEnabled(false);
+        NkfPhase("RES disabled (NKF_DISABLE_RES=1)");
+    }
+    // A/B hook for model level-sensitivity (mirrors web NKF_ENG_DIV):
+    // the /16 sweet spot is hand-tuned — if the mic level doesn't
+    // suit the model it rings. Try 8 (hotter) or 32 (quieter);
+    // garbage/non-positive falls back to 16.
+    {
+        const char* divRaw = getenv("NKF_ENG_DIV");
+        double div = divRaw ? atof(divRaw) : 16.0;
+        if (!(div > 0.0)) div = 16.0;
+        h->engInScale = (float)(1.0 / div);
+        h->engOutScale = (float)div;
+        if (divRaw && div != 16.0)
+            NkfPhase("engine level 1/%.2f (NKF_ENG_DIV=%s)", div, divRaw);
+    }
     if (getenv("NKF_FORCE_GIVEUP")) {
         h->giveUp = true;
         NkfPhase("forced fail-open (NKF_FORCE_GIVEUP)");
@@ -818,12 +869,12 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
                     NkfPhase("t=%.2f first ProcessBlock", NKF_T(h));
                 }
                 for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
-                    h->engMic[i] = h->micBlock[i] * ENG_IN_SCALE;
-                    h->engRef[i] = h->refBlock[i] * ENG_IN_SCALE;
+                    h->engMic[i] = h->micBlock[i] * h->engInScale;
+                    h->engRef[i] = h->refBlock[i] * h->engInScale;
                 }
                 h->engine->ProcessBlock(h->engMic, h->engRef, h->outBlock);
                 for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
-                    h->outBlock[i] *= ENG_OUT_SCALE;
+                    h->outBlock[i] *= h->engOutScale;
             } catch (...) {
                 // Ort::Exception (or worse) from the engine: fail open
                 // instead of taking the app down with it.
@@ -881,21 +932,62 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             h->total > (size_t)TDC_LOCK_GRACE && !h->giveUp
             && h->nocancelHotSamples >= NOCANCEL_HOT_AFTER;
         h->nocancelHot = nocancel;
+        // Trim veto on proven cancellation (mirror web/nkf.py): even
+        // above the engage bar, a handled echo/loop must not be ducked
+        // (it pumps double-talk). Evidence is FAST (~256 ms EMA on the
+        // pre-trim wire, updated in the dep block below every block):
+        // a 2 s window verdict would go stale across loop onset and
+        // leave full-scale audio untrimmed, while post-trim energy
+        // sawtooths the veto against itself. A true howl never shows
+        // cancellation, so howl protection is untouched. Detection
+        // (looped) still drives telemetry, eager TDC, backstop attack.
+        // Mic floor required: on silence there is no evidence either
+        // way, so the veto stays open (fail-safe = trim allowed).
+        const double fastDepth =
+            10.0 * log10((h->fastOutE + 1e-12) / (h->fastMicE + 1e-12));
+        const bool trimLoop =
+            looped && !(h->fastMicE >= BS_MIC_MS && fastDepth <= -1.0);
         {
             double ms = 0;
             for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
                 ms += (double)h->emitBlock[i] * h->emitBlock[i];
             ms /= NKF_BLOCK_SHIFT;
-            if ((looped || nocancel) && ms >= BS_MIC_MS)
+            if ((trimLoop || nocancel) && ms >= BS_MIC_MS)
                 h->loopLoudRun++;
             else
                 h->loopLoudRun = 0;
+            // Rails-sustained override (mirror web/nkf.py): gapless wire
+            // at rails means a saturated loop even when ratios mimic
+            // cancellation. Only genuine gaps reset the run — mid-level
+            // dips merely hold it (howl mush never truly gaps; shouted
+            // phrases always do).
+            if ((looped || nocancel) && ms >= RAIL_MS)
+                h->railRun++;
+            else if (ms < BS_MIC_MS) {
+                if (++h->railQuiet >= RAIL_QUIET_TOL) {
+                    h->railRun = 0;
+                    h->railQuiet = 0;
+                }
+            } else if (!looped && !nocancel) {
+                h->railRun = 0;
+                h->railQuiet = 0;
+            }
         }
         float loopTarget = 1.0f;
-        if (looped || nocancel) {
+        const int railStep =
+            (h->railRun / RAIL_BLOCKS) > 2 ? 2 : (h->railRun / RAIL_BLOCKS);
+        if (nocancel) {
             const int step = h->loopLoudRun / LOOP_LOUD_BLOCKS;
             loopTarget = (step >= 2) ? LOOP_TRIM_FLOOR
                        : (step >= 1) ? LOOP_TRIM_DEEP : LOOP_TRIM;
+        } else if (looped) {
+            if (trimLoop) {
+                const int step = h->loopLoudRun / LOOP_LOUD_BLOCKS;
+                loopTarget = (step >= 2) ? LOOP_TRIM_FLOOR
+                           : (step >= 1) ? LOOP_TRIM_DEEP : LOOP_TRIM;
+            } else if (railStep >= 1) {
+                loopTarget = (railStep >= 2) ? LOOP_TRIM_FLOOR : LOOP_TRIM_DEEP;
+            }
         }
 
         // Tonal census on the PRE-notch wire: sense the threat, not
@@ -989,19 +1081,14 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
                 h->notchDb += 0.25 * (0.0 - h->notchDb);
             }
         }
-        // Loop trim: multiplicative with the notch, own smoothing.
-        // Starves the loop of gain; the engine keeps adapting under it.
-        h->loopGain += (float)((loopTarget - h->loopGain) *
-                               ((loopTarget < h->loopGain) ? LOOP_TAU_ATK
-                                                           : LOOP_TAU_REL));
-        if (h->loopGain != 1.0f)
-            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
-                h->emitBlock[i] *= h->loopGain;
-
-        // Window accumulators on the WIRE vs mic: the howl fuel check
-        // now sees what the loop actually carries (shadow and fail-open
-        // included — emit == mic there, i.e. 0 dB, uncancelled). Every
-        // 64th frame closes the window and runs arm/release + depth log.
+        // Depth accumulators on the PRE-trim wire (moved ahead of the
+        // trim multiply below) plus the veto's fast followers (same
+        // pre-trim energies, ~256 ms EMA): the veto and the window
+        // verdict must both judge the Kalman's cancellation, not our
+        // own suppression — measuring post-trim sawtooths against
+        // itself (trim quiets the wire -> depth "proves" cancellation
+        // -> veto releases the trim -> wire roars -> trim re-engages,
+        // forever).
         {
             double sm = 0, so = 0;
             for (int i = 0; i < NKF_BLOCK_SHIFT; i++) {
@@ -1011,9 +1098,23 @@ static void NkfProcessImpl(NkfHandle* h, const int16_t* mic,
             h->depMic += sm;
             h->depOut += so;
             h->depSamples += NKF_BLOCK_SHIFT;
+            h->fastMicE += (float)(GUARD_EMA * (sm - h->fastMicE));
+            h->fastOutE += (float)(GUARD_EMA * (so - h->fastOutE));
             if (++h->bsFrames >= BS_FRAMES) NkfBackstopWindow(h);
         }
+        // Loop trim: multiplicative with the notch, own smoothing.
+        // Starves the loop of gain; the engine keeps adapting under it.
+        h->loopGain += (float)((loopTarget - h->loopGain) *
+                               ((loopTarget < h->loopGain) ? LOOP_TAU_ATK
+                                                           : LOOP_TAU_REL));
+        if (h->loopGain != 1.0f)
+            for (int i = 0; i < NKF_BLOCK_SHIFT; i++)
+                h->emitBlock[i] *= h->loopGain;
 
+        // Window note: the howl fuel check above now sees pre-trim
+        // engine output vs mic (shadow and fail-open included — emit
+        // == mic there, i.e. 0 dB, uncancelled). The phase-log depth
+        // therefore reads Kalman cancellation, not wire suppression.
         NkfEmit(h, h->emitBlock, NKF_BLOCK_SHIFT);
 
         // Warm-up (or post-guard) shadow drains unconditionally. It used
@@ -1097,6 +1198,9 @@ void NkfReset(NkfHandle* h) {
     h->depSamples = 0;
     h->loopGain = 1.0f;
     h->loopLoudRun = 0;
+    h->railRun = 0;
+    h->railQuiet = 0;
+    h->fastMicE = h->fastOutE = 0.0f;
     h->nocancelHotSamples = 0;
     h->nocancelHot = false;
     h->lastWindowCancelled = false;
