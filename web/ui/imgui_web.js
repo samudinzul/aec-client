@@ -13,7 +13,7 @@
 
 let webImGuiUI = null;
 
-const APP_VERSION = 'v1.13.1';
+const APP_VERSION = 'v1.14.0';
 
 class WebImGuiUI {
     constructor() {
@@ -116,13 +116,9 @@ class WebImGuiUI {
 
         // --- Profile (same PROFILES table as the desktop) ---
         p.appendChild(this.sep('Profile'));
-        const prof = this.mk('div', 'frow');
-        prof.innerHTML = '<span class="flabel">Profile</span>' +
-            '<select id="ig-profile">' +
-            '<option value="0">DTLN-AEC 128</option>' +
-            '<option value="1">WebRTC AEC3</option>' +
-            '<option value="2">NKF-AEC</option>' +
-            '</select>';
+        const prof = this.mk('div', 'chkline');
+        prof.innerHTML = '<span class="flabel">Engine</span>' +
+            '<span id="ig-profile" role="radiogroup" aria-label="Echo engine" title="Echo engine — same profiles as the desktop app"></span>';
         p.appendChild(prof);
         const stages = this.mk('div');
         stages.innerHTML =
@@ -301,9 +297,9 @@ class WebImGuiUI {
             '<label class="chkline"><input type="checkbox" id="ig-trayOn">Minimize to system tray (X button hides window)</label>' +
             '<div class="hint">When ON: X hides the window, tray icon stays active. When OFF: X closes the app completely. ' +
             '(Needs the native window; hidden in a browser tab.)</div>' +
-            '<label class="chkline"><input type="checkbox" id="ig-exp">Show experimental engines (WebRTC AEC3, NKF-AEC)</label>' +
-            '<div class="hint">Off (default): the profile list shows DTLN-AEC 128 only. ' +
-            'On: also shows WebRTC AEC3 and NKF-AEC — real engines, less tested than the default.</div>';
+            '<label class="chkline"><input type="checkbox" id="ig-exp">Show experimental engines (NKF-AEC)</label>' +
+            '<div class="hint">Off (default): the profile list shows Off, DTLN-AEC 128 and WebRTC AEC3. ' +
+            'On: also shows NKF-AEC — a real engine, less tested than the default.</div>';
         p.appendChild(b);
         return p;
     }
@@ -323,7 +319,9 @@ class WebImGuiUI {
         p.appendChild(this.sep('Features'));
         const f = this.mk('div');
         f.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
-            '<li>Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC) + noise suppression (Off / DTLN-NS / Hush, 16 kHz)</li>' +
+            '<li>Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC-exp) + noise suppression (Off / DTLN-NS / Hush, 16 kHz)</li>' +
+    '<li>80 Hz high-pass on every path (hum/rumble/DC)</li>' +
+    '<li>Gentle expander (digital-black floor, no onset chop)</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
             '<li>Works with speakers, earphones, and headsets</li>' +
             '<li>Live level meters</li>' +
@@ -396,6 +394,8 @@ class WebImGuiUI {
         this.el.rescan.addEventListener('click', () => this.loadDevices());
         [this.el.nsOff, this.el.nsDtln, this.el.nsHush].forEach((r) =>
             r.addEventListener('change', () => this.savePrefs()));
+        // Engine radios: container-level listener survives option
+        // rebuilds (change events bubble from the radios).
         this.el.profile.addEventListener('change', () => this.savePrefs());
         this.el.exp.addEventListener('change', () => {
             // The list rebuild (applyEngineAvailability) drops the
@@ -477,27 +477,39 @@ class WebImGuiUI {
         }
 
     applyEngineAvailability(engines) {
-        // Desktop parity: extra profiles are HIDDEN until the
-        // experimental flag is ticked (not greyed — the desktop
-        // skips them in the combo entirely). A ticked-but-missing
-        // backend stays visible yet disabled ("(unavailable)")
-        // instead of failing at Start. Rebuilds only on change,
-        // so the 10 Hz state ticks never disturb an open list.
+        // Desktop parity: NKF-AEC is HIDDEN until the experimental flag
+        // is ticked (not greyed — the desktop skips it entirely);
+        // WebRTC AEC3 graduated to a regular choice. A ticked-but-missing
+        // backend stays visible yet disabled ("(unavailable)") instead
+        // of failing at Start. Off needs no backend so it never
+        // disables. Rebuilds only on change, so the 10 Hz state ticks
+        // never disturb an open list. Display order lists Off first;
+        // values stay PROFILES-index-aligned.
         if (engines !== undefined) this._engines = engines;
         const exp = this.el.exp.checked;
-        const names = ['dtln', 'aec3', 'nkf'];
-        const labels = ['DTLN-AEC 128', 'WebRTC AEC3', 'NKF-AEC'];
+        const names = ['dtln', 'aec3', 'nkf', 'off'];
+        const labels = ['DTLN-AEC 128', 'WebRTC AEC3', 'NKF-AEC', 'Off (no AEC)'];
+        const order = [3, 0, 1, 2];
         let html = '';
-        for (let i = 0; i < 3; i++) {
-            if (i !== 0 && !exp) continue;
+        for (const i of order) {
+            if (names[i] === 'nkf' && !exp) continue;
             const missing = this._engines && this._engines[names[i]] === false;
-            html += '<option value="' + i + '"' + (missing ? ' disabled=""' : '') + '>' +
-                labels[i] + (missing ? ' (unavailable)' : '') + '</option>';
+            html += '<label><input type="radio" name="ig-profile" value="' + i + '"' +
+                (missing ? ' disabled=""' : '') + '>' +
+                labels[i] + (missing ? ' (unavailable)' : '') + '</label>';
         }
-        const sel = this.el.profile.value;
+        const prev = this.profVal();
         if (this.el.profile.innerHTML !== html) this.el.profile.innerHTML = html;
-        const stillThere = [...this.el.profile.options].some((o) => o.value === sel);
-        this.el.profile.value = stillThere ? sel : '0';
+        const stillThere = [...this.el.profile.querySelectorAll('input[name=ig-profile]')]
+            .some((o) => +o.value === prev);
+        const pick = this.el.profile.querySelector(
+            'input[name=ig-profile][value="' + (stillThere ? prev : 0) + '"]');
+        if (pick) pick.checked = true;
+    }
+
+    profVal() {
+        const c = this.el.profile.querySelector('input[name=ig-profile]:checked');
+        return c ? +c.value : 0;
     }
 
     showEngineInfo(st) {
@@ -562,7 +574,7 @@ class WebImGuiUI {
             micGain: Math.min(4.0, Math.max(0.1, (+this.el.gain.value) / 100)),
             trayEnabled: this.el.tray.checked,
             listenToSelf: this.el.listen.checked,
-            profile: +this.el.profile.value,
+            profile: this.profVal(),
             experimentalEngines: this.el.exp.checked,
             soundboardGain: (+this.el.sbGain.value) / 100,
             monitorEnabled: this.el.monOn.checked,
@@ -606,7 +618,11 @@ class WebImGuiUI {
             if (p && 'listenToSelf' in p) this.el.listen.checked = !!p.listenToSelf;
             this.showListen();
             if (p && 'experimentalEngines' in p) this.el.exp.checked = !!p.experimentalEngines;
-            if (p && 'profile' in p) this.el.profile.value = String(p.profile);
+            if (p && 'profile' in p) {
+                const pick = this.el.profile.querySelector(
+                    'input[name=ig-profile][value="' + p.profile + '"]');
+                if (pick) pick.checked = true;
+            }
             if (p && p.soundboardGain !== undefined) {
                 this.el.sbGain.value = Math.min(200, Math.max(0, Math.round(+p.soundboardGain * 100)));
                 this.el.sbGainVal.textContent = this.el.sbGain.value + '%';
@@ -1038,9 +1054,13 @@ class WebImGuiUI {
                 this.el.listen.checked = !!st.listenToSelf;
                 this.showListen();
             }
-            if (st.profile !== undefined && String(st.profile) !== this.el.profile.value
-                && document.activeElement !== this.el.profile)
-                this.el.profile.value = String(st.profile);
+            // Radios can't be "open" (no dropdown to disturb), so the
+            // server value applies directly — no activeElement guard.
+            if (st.profile !== undefined && st.profile !== this.profVal()) {
+                const pick = this.el.profile.querySelector(
+                    'input[name=ig-profile][value="' + st.profile + '"]');
+                if (pick) pick.checked = true;
+            }
             if (st.experimentalEngines !== undefined
                 && document.activeElement !== this.el.exp)
                 this.el.exp.checked = !!st.experimentalEngines;

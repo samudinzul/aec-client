@@ -69,12 +69,20 @@ if [ "$FRESH" -ne 0 ]; then
     # Windows locks a running program's file AND its folder: wiping
     # build/ while the app is open dies with "Device or resource busy"
     # (possibly after half-deleting the contents). Fail upfront.
-    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|nkf_smoke.exe"; then
-        echo "close aec_gui.exe (and nkf_smoke.exe) first — running programs lock build/" >&2
+    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|nkf_smoke.exe\|dtln_smoke.exe\|aec3_smoke.exe\|gtcrn_smoke.exe\|localvqe_smoke.exe"; then
+        echo "close the app and any smoke exe first — running programs lock build/" >&2
         exit 1
     fi
     echo "-- removing build/ (fresh configure)"
-    rm -rf build
+    # A stale lock (shell sitting inside build/, indexer/antivirus, a
+    # zombie handle tasklist missed) can still EBUSY the rmdir even
+    # after the contents are gone. Fall back to emptying in place —
+    # an empty build/ reconfigures identically — instead of dying.
+    if ! rm -rf build 2>/dev/null; then
+        echo "-- build/ locked, emptying in place instead" >&2
+        find build -mindepth 1 -delete 2>/dev/null || true
+        rmdir build 2>/dev/null || true
+    fi
 fi
 mkdir -p build
 
@@ -133,13 +141,15 @@ else
     run_step "build aec_gui (-j${NPROC})" \
         cmake --build build -j "$NPROC" --target aec_gui
     # A clean build leaves no diagnostic tools or logs behind.
+    # (aec_exp is the experimental fork — never part of a clean
+    # official build; build it explicitly by target when needed.)
     rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
 fi
 
 echo ""
 echo "-- size audit (bloat check)"
 if [ "$WITH_SMOKE" -ne 0 ]; then
-    ls -la build/aec_gui.exe build/nkf_smoke.exe 2>/dev/null || true
+    ls -la build/aec_gui.exe build/aec_exp.exe build/nkf_smoke.exe build/dtln_smoke.exe build/aec3_smoke.exe 2>/dev/null || true
 else
     ls -la build/aec_gui.exe 2>/dev/null || true
 fi
@@ -151,7 +161,7 @@ echo "Models (bundled, unchanged by build flags):"
 du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflite 2>/dev/null || true
 echo ""
 if [ "$WITH_SMOKE" -ne 0 ]; then
-    echo "BUILD OK: build/aec_gui.exe + build/nkf_smoke.exe"
+    echo "BUILD OK: build/aec_gui.exe + build/aec_exp.exe + smoke exes"
     echo "Next: scripts/test.sh --native-only, or ship with scripts/make-release-desktop.sh"
 else
     echo "BUILD OK: build/aec_gui.exe"

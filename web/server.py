@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .audio import AudioRunner, list_devices, speaker_output_for_ref
-from .chain import PROFILES, Chain
+from .chain import EXPERIMENTAL_ENGINES, PROFILES, Chain
 from .soundboard import SoundBoard, decoders_available
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -120,6 +120,7 @@ def state():
     if r is not None:
         st["inRms"] = r.in_rms
         st["outRms"] = r.out_rms
+        st["dropped"] = dict(r.dropped)
     return st
 
 
@@ -208,17 +209,19 @@ def set_prefs(body: dict):
     if "experimentalEngines" in body:
         prefs["experimentalEngines"] = bool(body["experimentalEngines"])
     if "profile" in body:
-        # Desktop parity: without the experimental flag the extra
-        # profiles are hidden AND the selection falls back to DTLN
-        # (so a stale pref can never strand the chain on a
-        # hidden engine).
+        # Desktop parity: experimental engines (NKF-AEC) are hidden AND
+        # the selection falls back to DTLN without the flag (so a stale
+        # pref can never strand the chain on a hidden engine). Off,
+        # DTLN-AEC and WebRTC AEC3 are regular choices — WebRTC AEC3
+        # graduated from experimental.
         try:
             prof = int(body["profile"])
         except (TypeError, ValueError):
             prof = 0
         if prof < 0 or prof >= len(PROFILES):
             prof = 0
-        if prof != 0 and not prefs["experimentalEngines"]:
+        if (PROFILES[prof][1] in EXPERIMENTAL_ENGINES
+                and not prefs["experimentalEngines"]):
             prof = 0
         if prof != prefs["profile"]:
             prefs["profile"] = prof
@@ -385,6 +388,7 @@ async def ws_meters(ws: WebSocket):
                 st["inRms"] = r.in_rms
                 st["refRms"] = r.ref_rms
                 st["outRms"] = r.out_rms
+                st["dropped"] = dict(r.dropped)
             await ws.send_text(json.dumps({"type": "state", **st}))
         except WebSocketDisconnect:
             break

@@ -1,7 +1,9 @@
-# Extra-engine set — experimental profiles (WebRTC AEC3, NKF-AEC).
+# Extra-engine set — optional backends (WebRTC AEC3, NKF-AEC).
 # Neither ships in a base install; the chain fails closed with a
 # clear error if a profile is picked without its package, and the
-# UI disables options whose backend is missing.
+# UI disables options whose backend is missing. (WebRTC AEC3 is a
+# regular listed choice now, not experimental-gated — only NKF-AEC
+# hides behind the flag. The package itself stays optional.)
 # Install:  pip install -r web\requirements-engines.txt
 
 pywebrtc-audio>=0.2   # WebRTC AEC3 engine (EchoCanceller): same code as Chrome,

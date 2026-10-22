@@ -226,7 +226,7 @@ void NKFImpl::OnnxInfer() {
         double gainSum = 0.0;
         for (int i = 0; i < FFT_OUT_SIZE; i++) {
             double g = 1.0;
-            if (farActive) {
+            if (farActive && m_resEnabled) {
                 const double pe = echohat_real[i] * echohat_real[i]
                                 + echohat_imag[i] * echohat_imag[i];
                 const double pm = (double)mic_real[i] * mic_real[i]

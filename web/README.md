@@ -49,9 +49,9 @@ the local environment, installs the full package set
 native window, and all 3 engines), then opens the GUI
 in a native app window (Edge WebView2 — built into
 Windows 10/11, so no browser is needed) once the models
-are loaded. The WebRTC AEC3 / NKF-AEC profiles appear
+are loaded. The NKF-AEC profile appears
 once you tick "Show experimental engines" on the Appearance
-tab. Click it again any time to open another
+tab (WebRTC AEC3 is a regular choice now). Click it again any time to open another
 window against the running server. Stop: close the
 window — the server stops with it — or press Ctrl+C in
 the console. The Appearance tab minimizes to the system
@@ -119,7 +119,9 @@ Open http://localhost:8000 — that page IS the GUI.
   128-shift / 257-bin, Hann-free rFFT like the C++ pocketfft path.
 - **WebRTC AEC3** (`pywebrtc-audio` EchoCanceller) — the same Chrome
   code as the desktop path (AEC + capture HP filter, no NS/AGC),
-  experimental-gated.
+  a regular choice (no experimental gate).
+- **Off (no AEC)** — mic passes straight to the NS stage
+  (denoise-only mode), always available, no backend needed.
 - **NKF-AEC** (`models/nkf.onnx` via `onnxruntime`) — NumPy port of
   the desktop Kalman core + wrapper stages (TDC alignment,
   shadow/crossfade exposure, divergence guard, loop brakes,

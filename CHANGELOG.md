@@ -5,6 +5,55 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-10-16
+
+### Added
+
+- **Engine Off option (desktop + web).** The echo engine is now a
+  radio group — Off / DTLN-AEC / WebRTC AEC3 / NKF-AEC — with Off
+  passing mic straight to the noise-suppression stage
+  (denoise-only mode). Appended last in the profile tables so saved
+  configs load unchanged.
+- **WebRTC AEC3 promoted out of experimental** (desktop + web).
+  Only NKF-AEC hides behind the flag now.
+- **Experimental fork split (desktop).** `exp/main.cpp` builds
+  `aec_exp.exe` with its own title/mutex/config/resources,
+  carrying LocalVQE-AEC + GTCRN; the official `aec_gui.exe` is
+  DTLN/AEC3/NKF + DTLN-NS/Hush only. Release scripts never ship
+  exp content.
+- **Starvation telemetry (web).** Per-queue drop counters
+  (`dropped: {in, ref, out, mon}`) in both state endpoints.
+
+### Experimental (aec_exp.exe only — never in a release)
+
+- **High-band splice (48 kHz output, real highs).** The mic is
+  captured at 48 kHz, the 16 kHz engine processes the low band, and
+  the real 8–24 kHz band is spliced onto the output — no synthesis,
+  so no metallic edge. The high band is delayed by the chain's
+  algorithmic latency so it lands on the same instant as the
+  processed low band, without adding system latency.
+- **High-band noise suppression.** The 16 kHz NS models cannot reach
+  above 8 kHz, so a keyboard click kept its sharp part. A dedicated
+  high-band NS (STFT spectral subtraction, decision-directed a priori
+  SNR, 8–24 kHz bins only) removes it, and a VAD closes the high band
+  while the chain reports no voice. Measured on real speech with a
+  realistic click: click −14.2 dB, hiss −8.9 dB (−41.6 dB with the
+  VAD), voice −1 to −3 dB. Measurements and the rejected
+  alternatives: `exp/HB_NS_DESIGN.md`.
+- **NovaSR 48 kHz tail.** Neural super-resolution from the cleaned
+  16 kHz output. Its highs are derived from the cleaned signal, so a
+  click killed in the low band has no click in the highs.
+
+### Fixed
+
+- **Output starvation gaps (web).** Full queues dropped the newest
+  frame (holes later); now the oldest is discarded to stay live,
+  matching the desktop SPSC rings. Output/monitor carries are
+  drift-trimmed (~43 ms cap) instead of ballooning on clock skew.
+- **Monitor hard-cut to zero (desktop).** Starved monitor tails now
+  fade from the last emitted frame (main-path `EmitFading`
+  parity) instead of clicking on the speakers.
+
 ## [1.13.1] - 2026-10-14
 
 ### Fixed

@@ -26,7 +26,6 @@
 #include "dtln_wrapper.h"
 #include "dtln_ns_wrapper.h"
 #include "hush_wrapper.h"
-#include "gtcrn_wrapper.h"
 
 #include <cstdio>
 #include <cmath>
@@ -50,7 +49,7 @@ using Clock = std::chrono::steady_clock;
 //  is built from these at runtime)
 // ============================================================
 #define APP_NAME    "AEC Client"
-#define APP_VERSION "1.13.1"
+#define APP_VERSION "1.14.0"
 
 // ============================================================
 //  Single-instance protection
@@ -148,9 +147,11 @@ struct SpscRing {
 //  Engine abstraction
 // ============================================================
 // Numeric values keep their historical meaning so saved aec_config.txt
-// indices keep loading: 0 (SpeexDSP) and 3 (LocalVQE) were retired and
-// remap to DTLN (the default) on load.
-enum EngineType { ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4 };
+// indices keep loading: 0 used to be SpeexDSP (retired long ago) and
+// now means engine Off; 3 (old LocalVQE code) and 8 (exp-fork
+// LocalVQE) were retired and remap to DTLN (the default) on load.
+// Experimental engines live in exp/main.cpp, never here.
+enum EngineType { ENGINE_OFF = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4 };
 struct EngineState {
     EngineType  type  = ENGINE_DTLN;
     Aec3Handle* aec3  = nullptr;
@@ -158,7 +159,6 @@ struct EngineState {
     DtlnHandle* dtln  = nullptr;
     DtlnNsHandle* ns = nullptr;   // DTLN noise reduction (all engines)
     HushHandle* hush = nullptr;   // Hush NS backend (all engines, 16 kHz)
-    GtcrnHandle* gtcrn = nullptr;  // GTCRN NS backend, experimental (all engines, 16 kHz)
 };
 
 // ============================================================
@@ -178,7 +178,12 @@ static const Profile PROFILES[] = {
     { "DTLN-AEC 128", ENGINE_DTLN, 0 },
     { "WebRTC AEC3",  ENGINE_AEC3, 2 },
     { "NKF-AEC",      ENGINE_NKF,  0 },
+    { "Off (no AEC)", ENGINE_OFF,  0 },
 };
+// Display order for the engine radio: Off first, then the engines.
+// Indices into PROFILES (which stays append-order so saved profile
+// slots keep loading without migration).
+static const int ENGINE_RADIO_ORDER[] = { 3, 0, 1, 2 };
 const int PROFILE_COUNT = (int)(sizeof(PROFILES) / sizeof(PROFILES[0]));
 
 // ============================================================
@@ -195,6 +200,12 @@ const int MAX_FRAME_SIZE = 480;
 int16_t            g_lastOutFrame[MAX_FRAME_SIZE];
 int                g_lastOutLen = 0;
 bool               g_lastOutValid = false;
+// Same fail-open memory for the soundboard monitor: a starved monitor
+// callback fades from its last frame instead of hard-cutting to zero
+// (a cut clicks on the local speakers, same as the main path).
+int16_t            g_lastMonFrame[MAX_FRAME_SIZE];
+int                g_lastMonLen = 0;
+bool               g_lastMonValid = false;
 SpscRing<4096> g_micRing, g_refRing;
 bool g_isRunning = false;
 Clock::time_point g_sessionStart;
@@ -206,10 +217,11 @@ std::atomic<bool>  g_enablePreprocess(false);
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
-// NS backend: 0=off, 1=DTLN-NS (default), 2=Hush, 3=GTCRN (exp).
-// Meaningful only
-// while g_nsEnabled; the radio sets both consistently. Global pref
-// like the tick: a profile switch never resets it.
+// NS backend: 0=off, 1=DTLN-NS (default), 2=Hush. Experimental
+// backends (GTCRN) and engines (LocalVQE) live in exp/main.cpp.
+// Meaningful only while g_nsEnabled; the radio sets both
+// consistently. Global pref like the tick: a profile switch never
+// resets it.
 std::atomic<int>   g_nsBackend{ 1 };
 std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC in the list
 std::atomic<float> g_micGain(1.0f);
@@ -734,7 +746,7 @@ void SaveSettings() {
       << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
-      << g_nsBackend.load() << "\n";                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN-exp)
+      << g_nsBackend.load() << "\n";                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush)
 }
 
 void LoadSettings() {
@@ -752,15 +764,16 @@ void LoadSettings() {
         // out-of-range index land on 48 kHz — no stranded configs.
         if (g_sampleRateIndex == 0) { g_sampleRate.store(16000); }
         else { g_sampleRateIndex = 1; g_sampleRate.store(48000); }
-        // Retired engines (SpeexDSP=0, LocalVQE=3): remap to the default
-        // (DTLN) so old configs never point at a deleted engine.
-        if (g_engineIndex == 0 || g_engineIndex == 3) {
+        // Retired engine 3 (old LocalVQE code): remap to the default
+        // (DTLN) so old configs never point at a deleted engine. Value
+        // 0 used to be SpeexDSP (retired long ago) and now means Off.
+        if (g_engineIndex == 3) {
             g_engineIndex = ENGINE_DTLN;
             g_sampleRateIndex = 0;
             g_sampleRate.store(16000);
         }
-        if (g_engineIndex != ENGINE_AEC3 && g_engineIndex != ENGINE_NKF &&
-            g_engineIndex != ENGINE_DTLN)
+        if (g_engineIndex != ENGINE_OFF && g_engineIndex != ENGINE_AEC3 &&
+            g_engineIndex != ENGINE_NKF && g_engineIndex != ENGINE_DTLN)
             g_engineIndex = ENGINE_DTLN;
         g_selectedEngine.store(g_engineIndex);
         g_preprocessEnabled = false;
@@ -899,9 +912,10 @@ void LoadSettings() {
         if (pgen >= 7) g_nsEnabled.store(nsRaw != 0);
         else           g_nsEnabled.store(true);
         // Slot 30 applies here (after the tick is final): a stored
-        // 0/1/2/3 wins, anything else (or a missing slot) derives from
-        // the tick so old configs keep sounding exactly as before.
-        if (nsBackendRaw >= 0 && nsBackendRaw <= 3)
+        // 0/1/2 wins, anything else (retired exp slots 3/4, or a
+        // missing slot) derives from the tick so old configs keep
+        // sounding exactly as before.
+        if (nsBackendRaw >= 0 && nsBackendRaw <= 2)
             g_nsBackend.store(nsBackendRaw);
         else
             g_nsBackend.store(g_nsEnabled.load() ? 1 : 0);
@@ -910,10 +924,12 @@ void LoadSettings() {
         // checkbox. Older files default OFF (DTLN only).
         if (pgen >= 8) g_experimentalEngines.store(expRaw != 0);
         else           g_experimentalEngines.store(false);
-        // If the persisted engine is hidden, fall back to DTLN so the
-        // selection can't be left on an engine that isn't in the list.
+        // If the persisted engine is hidden (NKF-AEC without the
+        // experimental flag), fall back to DTLN so the selection can't
+        // be left on an engine that isn't in the list. WebRTC AEC3 is
+        // a regular choice now and needs no fallback.
         if (!g_experimentalEngines.load() &&
-            (g_engineIndex == ENGINE_AEC3 || g_engineIndex == ENGINE_NKF)) {
+            g_engineIndex == ENGINE_NKF) {
             g_engineIndex = ENGINE_DTLN;
             g_selectedEngine.store(ENGINE_DTLN);
             g_profileIndex = 0;
@@ -1005,13 +1021,147 @@ void ApplyProfile(int idx) {
 // ============================================================
 //  Engine init
 // ============================================================
+// High-pass filter for the voice path: 2nd-order Butterworth
+// (RBJ cookbook), 80 Hz, Q = 1/sqrt(2). Cuts what denoisers leave
+// in the basement — mains hum, room rumble, mic thumps, DC offset —
+// without touching voice (male fundamentals start ~85 Hz, and the
+// 12 dB/oct slope barely kisses them). Always on, like the limiter:
+// hygiene, not a knob. Mirrored in web/chain.py (same fc/Q, same
+// Direct Form I) — pinned by test_parity --constants (HPF_FC/HPF_Q).
+// Declared ahead of ReinitEngine (which re-anchors it every Start).
+static const double HPF_FC = 80.0;
+static const double HPF_Q  = 0.7071;
+struct HpfState {
+    double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+    double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
+};
+static void HpfInit(HpfState& h, int sampleRate) {
+    const double w0 = 2.0 * 3.14159265358979323846 * HPF_FC / (double)sampleRate;
+    const double c = cos(w0);
+    const double alpha = sin(w0) / (2.0 * HPF_Q);
+    const double a0 = 1.0 + alpha;
+    h.b0 = (1.0 + c) / 2.0 / a0;
+    h.b1 = -(1.0 + c) / a0;
+    h.b2 = (1.0 + c) / 2.0 / a0;
+    h.a1 = -2.0 * c / a0;
+    h.a2 = (1.0 - alpha) / a0;
+    h.x1 = h.x2 = h.y1 = h.y2 = 0.0;
+}
+// In-place int16 frame filter (float internals, clamped). Runs after
+// the NS post-stage, before the meters — meters show what Discord
+// hears, hum included out.
+static void HpfProcess(HpfState& h, int16_t* frame, int n) {
+    for (int i = 0; i < n; i++) {
+        const double x = (double)frame[i] * (1.0 / 32768.0);
+        const double y = h.b0 * x + h.b1 * h.x1 + h.b2 * h.x2
+                       - h.a1 * h.y1 - h.a2 * h.y2;
+        h.x2 = h.x1;
+        h.x1 = x;
+        h.y2 = h.y1;
+        h.y1 = y;
+        frame[i] = clamp_s16((int)lrint(y * 32768.0));
+    }
+}
+static HpfState g_hpf;  // voice-path instance; (re)init in ReinitEngine
+
+// Gentle downward expander: the floor silencer. DTLN-NS is light by
+// design and Hush still breathes — either way a sensitive meter shows
+// residual floor flutter. Fixed thresholds with hysteresis (NOT an
+// adaptive floor: a follower that chases sustained energy mutes held
+// vowels and humming — measured muting a steady tone. Fixed levels
+// can only fail open, never mute voice). Opens above OPEN_RMS,
+// closes below CLOSE_RMS after HANG_MS hangover (syllables never
+// trip it), 2 ms attack / 5 ms release ramps (no clicks, crisp
+// onsets). Always on, like the HPF — hygiene, not a knob. Mirrored
+// in web/chain.py; pinned by test_parity --constants.
+static const double EXPAND_OPEN_RMS = 150.0;    // ~-47 dBFS
+static const double EXPAND_CLOSE_RMS = 100.0;   // ~-50 dBFS
+static const int EXPAND_HANG_MS = 200;
+struct ExpState {
+    double gain = 1.0;     // current smoothed multiplier
+    int hang = 0;          // close-hangover frames remaining
+    bool open = true;      // gate state (starts open: fail-open)
+};
+static void ExpanderProcess(ExpState& e, int16_t* frame, int n, int sr) {
+    double ms = 0.0;
+    for (int i = 0; i < n; i++) {
+        const double x = (double)frame[i] * (1.0 / 32768.0);
+        ms += x * x;
+    }
+    ms /= (n ? n : 1);
+    const double openE = (EXPAND_OPEN_RMS / 32768.0) * (EXPAND_OPEN_RMS / 32768.0);
+    const double closeE = (EXPAND_CLOSE_RMS / 32768.0) * (EXPAND_CLOSE_RMS / 32768.0);
+    const int hangFrames =
+        (int)(EXPAND_HANG_MS / 1000.0 * (double)sr / (double)(n ? n : 1));
+    if (ms > openE) { e.open = true; e.hang = hangFrames > 0 ? hangFrames : 1; }
+    else if (ms < closeE) {
+        if (e.hang > 0) e.hang--;
+        else e.open = false;
+    }
+    // Between thresholds: hold (hysteresis — no chatter).
+    const double want = e.open ? 1.0 : 0.0;
+    // Asymmetric slew: 2 ms attack (onsets stay crisp), 5 ms release.
+    const double upStep = 1.0 / (0.002 * (double)sr);
+    const double dnStep = 1.0 / (0.005 * (double)sr);
+    for (int i = 0; i < n; i++) {
+        if (e.gain < want) { e.gain += upStep; if (e.gain > want) e.gain = want; }
+        else if (e.gain > want) { e.gain -= dnStep; if (e.gain < want) e.gain = want; }
+        const double x = (double)frame[i] * (1.0 / 32768.0);
+        frame[i] = clamp_s16((int)lrint(x * e.gain * 32768.0));
+    }
+}
+static ExpState g_expst;  // voice-path instance; reset in ReinitEngine
+
+// Gentle presence shelf: the anti-phone stage. The chain is 16 kHz
+// (models are 16 kHz by design), and DTLN-NS shaves a dB or two off
+// the top octave — together they read as "mobile call" even when the
+// spectrum looks full on export (upsampling empty highs stays empty).
+// This is an in-band RBJ high shelf, +4 dB at 5 kHz, S = 1: lifts
+// consonant clarity / air inside 0-8 kHz without touching lows,
+// without hallucination, zero lookahead. Always on, like the HPF —
+// hygiene, not a knob. Mirrored in web/chain.py; pinned by
+// test_parity --constants (PRES_FC/PRES_GAIN_DB).
+static const double PRES_FC = 5000.0;
+static const double PRES_GAIN_DB = 4.0;
+struct PresState {
+    double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+    double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
+};
+static void PresInit(PresState& p, int sampleRate) {
+    const double A = pow(10.0, PRES_GAIN_DB / 40.0);
+    const double w0 = 2.0 * 3.14159265358979323846 * PRES_FC / (double)sampleRate;
+    const double c = cos(w0);
+    const double s = sin(w0);
+    const double alpha = s / 2.0 * 1.4142135623730951;  // sqrt(2), S = 1
+    const double beta = 2.0 * sqrt(A) * alpha;
+    const double a0 = (A + 1.0) - (A - 1.0) * c + beta;
+    p.b0 = A * ((A + 1.0) + (A - 1.0) * c + beta) / a0;
+    p.b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * c) / a0;
+    p.b2 = A * ((A + 1.0) + (A - 1.0) * c - beta) / a0;
+    p.a1 = 2.0 * ((A - 1.0) - (A + 1.0) * c) / a0;
+    p.a2 = ((A + 1.0) - (A - 1.0) * c - beta) / a0;
+    p.x1 = p.x2 = p.y1 = p.y2 = 0.0;
+}
+static void PresProcess(PresState& p, int16_t* frame, int n) {
+    for (int i = 0; i < n; i++) {
+        const double x = (double)frame[i] * (1.0 / 32768.0);
+        const double y = p.b0 * x + p.b1 * p.x1 + p.b2 * p.x2
+                       - p.a1 * p.y1 - p.a2 * p.y2;
+        p.x2 = p.x1;
+        p.x1 = x;
+        p.y2 = p.y1;
+        p.y1 = y;
+        frame[i] = clamp_s16((int)lrint(y * 32768.0));
+    }
+}
+static PresState g_pres;  // voice-path instance; (re)init in ReinitEngine
+
 void ReinitEngine() {
     if (g_engine.aec3)  { Aec3Destroy(g_engine.aec3);   g_engine.aec3  = nullptr; }
     if (g_engine.nkf)   { NkfDestroy(g_engine.nkf);   g_engine.nkf   = nullptr; }
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
     if (g_engine.ns)   { DtlnNsDestroy(g_engine.ns);   g_engine.ns   = nullptr; }
     if (g_engine.hush) { HushDestroy(g_engine.hush); g_engine.hush = nullptr; }
-    if (g_engine.gtcrn) { GtcrnDestroy(g_engine.gtcrn); g_engine.gtcrn = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
@@ -1033,21 +1183,31 @@ void ReinitEngine() {
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_128");
         g_engine.type = ENGINE_DTLN;
+    } else if (eng == ENGINE_OFF) {
+        // Engine Off: no echo canceller — the mic passes straight to
+        // the picked NS backend (denoise-only mode). Nothing to create;
+        // the output pump's fallthrough ships mic, and Start needs no
+        // fail-closed check for it.
+        g_engine.type = ENGINE_OFF;
     }
 
     // DTLN noise reduction: the echo canceller leaves background
     // noise; the DTLN-NR pair (same 512/128/257 DSP, single mic feed)
     // runs after the engine on every path (WebRTC NS is retired, and
     // the NKF-only WPE + notch stages are gone). Hush (prebuilt weya_nc
-    // library + models/hush_16k_onnx.tar.gz) and GTCRN (experimental,
-    // models/gtcrn_simple.onnx on the vendored ORT) are the alternative
-    // NS stages, picked by the radio; only one is created.
-    if (g_nsEnabled.load() && g_nsBackend.load() == 3)
-        g_engine.gtcrn = GtcrnNew("models/gtcrn_simple.onnx");
-    else if (g_nsEnabled.load() && g_nsBackend.load() == 2)
+    // library + models/hush_16k_onnx.tar.gz) is the alternative NS
+    // stage, picked by the radio; only one is created.
+    if (g_nsBackend.load() == 2)
         g_engine.hush = HushNew("models/hush_16k_onnx.tar.gz");
-    else if (g_nsEnabled.load())
+    else if (g_nsBackend.load() == 1)
         g_engine.ns = DtlnNsNew("models/dtln_ns_128");
+    // backend 0 (Off): no post-stage — the engine output goes straight
+    // to the limiter.
+    // Voice-path high-pass follows the sample rate (engines that force
+    // 16 kHz re-anchor it here, every Start).
+    HpfInit(g_hpf, g_sampleRate.load());
+    g_expst = ExpState();  // fresh floor/gain/hangover every Start
+    PresInit(g_pres, g_sampleRate.load());
 }
 
 // Soft limiter for the final gain stage: linear to -3 dBFS, tanh knee
@@ -1158,24 +1318,13 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
 
 
 
-    // DTLN noise reduction: runs on the engine output of every path,
-    // 16 kHz only (the DTLN-NR model is 16 kHz; other rates skip it).
-    // Fail-open: a null or failed stage passes the frame straight
-    // through — it never mutes the near-end voice. Meters below show
-    // post-stage output, i.e. what Discord hears. Hush and GTCRN run
-    // here too when the radio picked them (same convert/process/
-    // convert-back shape, same fail-open contract).
-    GtcrnHandle* gtcrn = (g_nsBackend.load() == 3) ? g_engine.gtcrn : nullptr;
-    if (gtcrn && g_sampleRate.load() == 16000) {
-        for (int i = 0; i < fs; i++)
-            fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        if (GtcrnProcess(gtcrn, fltBuf, fltBuf, fs) != 1) {
-            for (int i = 0; i < fs; i++)
-                fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        }
-        for (int i = 0; i < fs; i++)
-            cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
-    }
+    // Noise-suppression post-stage: runs on the engine output of every
+    // path, 16 kHz only (the models are 16 kHz; other rates skip the
+    // stage). Fail-open: a null or failed stage passes the frame
+    // straight through — it never mutes the near-end voice. Meters
+    // below show post-stage output, i.e. what Discord hears. Only the
+    // radio-picked backend was created in ReinitEngine, so at most one
+    // of these runs; backend 0 (Off) runs none.
     HushHandle* hush = (g_nsBackend.load() == 2) ? g_engine.hush : nullptr;
     if (hush && g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
@@ -1186,7 +1335,8 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         }
         for (int i = 0; i < fs; i++)
             cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
-    } else if (g_engine.ns && g_sampleRate.load() == 16000) {
+    } else if (g_nsBackend.load() == 1 && g_engine.ns &&
+               g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
             fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
         // Fail-open: any NS failure (exception, bad tensor, model
@@ -1202,6 +1352,19 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         for (int i = 0; i < fs; i++)
             cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
     }
+
+    // Voice-path high-pass (80 Hz): strips hum/rumble/DC the stages
+    // above leave behind, on every path including engine-Off. Runs
+    // before the meters so they read the shipped signal.
+    HpfProcess(g_hpf, cleanedFrame, fs);
+
+    // Gentle downward expander just after the high-pass (same reason:
+    // meters read the shipped signal, floor flutter included out).
+    ExpanderProcess(g_expst, cleanedFrame, fs, g_sampleRate.load());
+
+    // Presence shelf just after the expander (same reason: meters read
+    // the shipped signal, brightness included).
+    PresProcess(g_pres, cleanedFrame, fs);
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
     for (int i = 0; i < fs; i++) {
@@ -1266,8 +1429,25 @@ void monitor_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCou
         if (got > n) got = n;
         g_monitorRing.read(out, got);
     }
-    if (got < frameCount)
-        memset(out + got, 0, (frameCount - got) * sizeof(int16_t));
+    if (got < frameCount) {
+        // Starved tail: fade from the last emitted monitor frame
+        // (EmitFading contract on the main path) instead of a hard
+        // cut to zero — then remember this frame for the next gap.
+        for (ma_uint32 i = got; i < frameCount; i++) {
+            ma_uint32 k = i - got;
+            int16_t s = (g_lastMonValid && k < (ma_uint32)g_lastMonLen)
+                ? g_lastMonFrame[k] : 0;
+            float fade = 1.0f - (float)i / (float)(frameCount ? frameCount : 1);
+            out[i] = clamp_s16((int)((float)s * fade));
+        }
+    }
+    {
+        ma_uint32 keep = frameCount < (ma_uint32)MAX_FRAME_SIZE
+            ? frameCount : (ma_uint32)MAX_FRAME_SIZE;
+        memcpy(g_lastMonFrame, out, keep * sizeof(int16_t));
+        g_lastMonLen = (int)keep;
+        g_lastMonValid = true;
+    }
 }
 
 // Hand one frame of soundboard audio to the monitor. Only while the
@@ -1496,14 +1676,6 @@ void StartAEC() {
     // Hush is fail-closed at Start (web parity: the radio refuses
     // without files there; here Start is the apply point): a broken
     // stage must never silently passthrough a backend the user picked.
-    // GTCRN (experimental) follows the same rule.
-    if (g_nsEnabled.load() && g_nsBackend.load() == 3 &&
-        (!g_engine.gtcrn || !GtcrnReady(g_engine.gtcrn))) {
-        const char* why = (g_engine.gtcrn && GtcrnLastError(g_engine.gtcrn)[0])
-            ? GtcrnLastError(g_engine.gtcrn) : "models/gtcrn_simple.onnx missing";
-        snprintf(g_statusText, 128, "GTCRN unavailable - %.90s", why);
-        return;
-    }
     if (g_nsEnabled.load() && g_nsBackend.load() == 2 &&
         (!g_engine.hush || !HushReady(g_engine.hush))) {
         const char* why = (g_engine.hush && HushLastError(g_engine.hush)[0])
@@ -1586,11 +1758,11 @@ void StartAEC() {
     g_sessionStart = Clock::now();
     StartMonitor();   // local soundboard monitoring (fail-open)
     const char* engineName =
+        (g_engine.type == ENGINE_OFF)  ? "Off" :
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
     const char* nsTag = "";
-    if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
-    else if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
+    if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
     else if (g_engine.ns) nsTag = " + DTLN-NS";
     snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", sr, engineName,
              nsTag,
@@ -1831,6 +2003,15 @@ void DrawEngineSection() {
                                "Loop trim: %.1f dB%s",
                                ns.loopDb,
                                ns.nocancelHot ? " (no-cancel)" : "");
+        // Self-monitor loop, spelled out: with Listen-to-myself the
+        // speakers replay our own output back into the mic AND the
+        // loopback ref, so the engine fights a moving target — voice
+        // sounds robotic and tails warble. Not an engine bug: untick
+        // for clean audio (Listen-to-myself is a routing/levels check).
+        if (ns.loopActive && g_listenToSelf)
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                               "Self-monitor loop: speakers feed your voice "
+                               "back - untick Listen to myself for clean audio");
         if (ns.resDb < -0.5)
             ImGui::TextDisabled("RES suppression: %.1f dB", ns.resDb);
         if (ns.guardResets > 0)
@@ -1864,53 +2045,44 @@ void DrawGainsSection() {
 void DrawAudioTab() {
     ImGui::SeparatorText("Profile");
 
-    ImGui::TextUnformatted("Profile");
-    ImGui::SameLine(190.0f);
-    ImGui::SetNextItemWidth(-1);
-    // The label shows the engine itself, plus the chain segments while
-    // the post stages are ticked — no hidden state.
-std::string profilePreview = PROFILES[g_profileIndex].name;
-    if (g_nsEnabled.load())
-        profilePreview += (g_nsBackend.load() == 3) ? " -> GTCRN" :
-            (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
-    bool wasRunning = g_isRunning;
-    if ( ImGui::BeginCombo("##profile", profilePreview.c_str())) {
-        for (int i = 0; i < PROFILE_COUNT; i++) {
-            std::string label = PROFILES[i].name;
-            EngineType le = (EngineType)PROFILES[i].engine;
-            if (g_nsEnabled.load())
-                label += (g_nsBackend.load() == 3) ? " -> GTCRN" :
-                    (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
-            bool sel = (g_profileIndex == i);
-            // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden
-            // unless the user ticked the Appearance checkbox — the
-            // default is DTLN only.
-            if (!g_experimentalEngines.load() &&
-                (le == ENGINE_AEC3 || le == ENGINE_NKF)) continue;
-            if (ImGui::Selectable(label.c_str(), sel)) {
-                if (!sel) {
-                    ApplyProfile(i);
-                    if (wasRunning) { StopAEC(); StartAEC(); }
-                }
-            }
-            if (sel) ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
+    ImGui::TextUnformatted("Engine");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Engine selection (the engine only changes through this menu):\n"
-            "DTLN-AEC 128 - default; best echo + reverb handling, no post filter.\n"
+            "Echo engine selection (applies immediately):\n"
+            "Off - no echo cancellation (mic passes straight to the\n"
+            "noise-suppression stage); lowest CPU.\n"
+            "DTLN-AEC 128 - default; best echo + reverb handling.\n"
             "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
-            "NKF-AEC - weak CPUs, still full cleanup.\n"
-            "The tick below appends '-> NS' to the chain shown here.");
+            "NKF-AEC (experimental) - weak CPUs, still full cleanup.\n"
+            "The picked NS backend below appends '-> NS' to the chain.");
+    // The label shows the engine itself, plus the chain segments while
+    // the post stage runs — no hidden state.
+    bool wasRunning = g_isRunning;
+    for (int r = 0; r < PROFILE_COUNT; r++) {
+        int i = ENGINE_RADIO_ORDER[r];
+        std::string label = PROFILES[i].name;
+        if (g_nsBackend.load() != 0)
+            label += (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
+        bool sel = (g_profileIndex == i);
+        // NKF-AEC stays experimental: hidden unless the user ticked the
+        // Appearance checkbox — WebRTC AEC3 is a regular choice now.
+        if (!g_experimentalEngines.load() &&
+            (EngineType)PROFILES[i].engine == ENGINE_NKF) continue;
+        if (r > 0) ImGui::SameLine();
+        if (ImGui::RadioButton(label.c_str(), sel) && !sel) {
+            ApplyProfile(i);
+            SaveSettings();
+            if (wasRunning) { StopAEC(); StartAEC(); }
+        }
+    }
 
     // Post stage: NS backend radio for every engine (Off / DTLN-NS /
-    // Hush / GTCRN-exp). Live restart on switch (same path as switching
-    // profiles mid-call). Global pref: a profile switch does not reset it.
+    // Hush). Live restart on switch (same path as switching profiles
+    // mid-call). Global pref: a profile switch does not reset it.
+    // Experimental engines/backends live in exp/main.cpp (aec_exp).
     {
         int nsb = g_nsBackend.load();
-        if (nsb < 0 || nsb > 3) nsb = 1;
+        if (nsb < 0 || nsb > 2) nsb = 1;
         int prevNsb = nsb;
         ImGui::TextUnformatted("Noise suppression");
         if (ImGui::IsItemHovered())
@@ -1919,16 +2091,12 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
                 "Off - raw echo-cancelled voice, lowest CPU.\n"
                 "DTLN-NS - general background hiss, cheapest stage.\n"
                 "Hush - keyboards, mice and background talkers, slightly\n"
-                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).\n"
-                "GTCRN (exp) - ultra-light hiss killer, 16 kHz only\n"
-                "(needs models/gtcrn_simple.onnx).");
+                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
         ImGui::SameLine();
         ImGui::RadioButton("Hush", &nsb, 2);
-        ImGui::SameLine();
-        ImGui::RadioButton("GTCRN (exp)", &nsb, 3);
         if (nsb != prevNsb) {
             g_nsBackend.store(nsb);
             g_nsEnabled.store(nsb != 0);
@@ -1939,12 +2107,11 @@ std::string profilePreview = PROFILES[g_profileIndex].name;
         // DTLN-NS selected it restates the obvious (detail stays in
         // the hover tooltip).
         if (nsb != 1)
-            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers - GTCRN: light hiss (exp).");
+            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.
         const char* nsErr = "";
-        if (nsb == 3 && g_engine.gtcrn) nsErr = GtcrnLastError(g_engine.gtcrn);
-        else if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
+        if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
         else if (g_engine.ns) nsErr = DtnsLastError(g_engine.ns);
         if (nsErr && nsErr[0]) ImGui::TextDisabled("%s", nsErr);
     }
@@ -2014,12 +2181,13 @@ void DrawAppearanceTab() {
         ImGui::TextDisabled("Right-click the tray icon to Exit the app.");
     }
 
-    // Experimental engines: WebRTC AEC3 and NKF-AEC are hidden from the
-    // profile list by default (DTLN is the only thing most users need).
-    // Tick this to show them — switching back to DTLN afterwards hides
-    // them again and leaves the selection on DTLN.
+    // Experimental engines: NKF-AEC is hidden from the engine radio
+    // by default (DTLN is the only thing most users need). Tick this
+    // to show it — switching back to DTLN afterwards hides it again
+    // and leaves the selection on DTLN. WebRTC AEC3 is a regular
+    // choice now, always listed.
     bool exp = g_experimentalEngines.load();
-    if ( ImGui::Checkbox("Show experimental engines (WebRTC AEC3, NKF-AEC)", &exp)) {
+    if ( ImGui::Checkbox("Show experimental engines (NKF-AEC)", &exp)) {
         g_experimentalEngines.store(exp);
         if (!exp) {
             // Hiding them: fall back to DTLN so the selection can't be
@@ -2034,10 +2202,10 @@ void DrawAppearanceTab() {
     }
     if ( ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Off (default): the profile list shows DTLN-AEC 128 only.\n"
-            "On: also shows WebRTC AEC3 and NKF-AEC. These are real\n"
-            "engines but less tested than the default - switch back to\n"
-            "DTLN-AEC 128 to hide them again.");
+            "Off (default): the engine radio shows Off, DTLN-AEC 128\n"
+            "and WebRTC AEC3. On: also shows NKF-AEC — a real engine\n"
+            "but less tested than the default. Switch back to DTLN-AEC\n"
+            "128 to hide it again.");
 }
 
 void DrawSoundboardTab() {
@@ -2222,8 +2390,10 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Three processing profiles (DTLN / WebRTC AEC3 / NKF-AEC)");
-    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN-exp)");
+    ImGui::BulletText("Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC-exp)");
+    ImGui::BulletText("80 Hz high-pass on every path (hum/rumble/DC)");
+    ImGui::BulletText("Gentle expander (digital-black floor, no onset chop)");
+    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush)");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -2238,7 +2408,6 @@ void DrawAboutTab() {
     ImGui::BulletText("DTLN-AEC - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("DTLN-NS - networkedaudio port of breizhn/DTLN denoise (MIT)");
     ImGui::BulletText("Hush - pulp-vision (Apache-2.0)");
-    ImGui::BulletText("GTCRN - Xiaobin Rong et al. (ICASSP 2024, MIT, experimental)");
     ImGui::BulletText("ONNX Runtime - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio - David Reid (MIT-0)");
@@ -2528,7 +2697,6 @@ int main(int, char**) {
     if (g_engine.dtln)  DtlnDestroy(g_engine.dtln);
     if (g_engine.ns)   DtlnNsDestroy(g_engine.ns);
     if (g_engine.hush) HushDestroy(g_engine.hush);
-    if (g_engine.gtcrn) GtcrnDestroy(g_engine.gtcrn);
     if (g_contextInitialized) {
         ma_context_uninit(&g_context);
         g_contextInitialized = false;

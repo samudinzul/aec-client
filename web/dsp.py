@@ -220,6 +220,69 @@ def soft_limit(x: np.ndarray) -> np.ndarray:
     return np.clip(out, -32768.0, 32767.0).astype(np.float32)
 
 
+class LinearResampler:
+    """Stateful linear resampler with an exact ratio, continuous across
+    chunks (replaces the old stateless per-chunk linspace mapping, which
+    reset its phase every callback chunk: +125 samples/s rate error at
+    48 kHz plus a periodic seam every chunk — audible as a constant
+    glitch on every engine, and a latency that grew ~8 ms per second).
+
+    step = input samples per output sample (3.0 for 48 kHz -> 16 kHz,
+    1/3 for the way back, rate/16000 in general). Output positions
+    advance by exactly step forever; the fractional remainder and the
+    one overlapping input sample carry across calls, so chunked
+    streaming is sample-identical to one-shot conversion. One instance
+    per stream (mic / ref / out / monitor) — positions are stream
+    state and must never be shared.
+    """
+
+    __slots__ = ("step", "_buf", "_base", "_next")
+
+    def __init__(self, step):
+        step = float(step)
+        if not step > 0.0:
+            raise ValueError("resample step must be positive")
+        self.step = step
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._base = 0   # absolute input index of _buf[0]
+        self._next = 0.0  # absolute input position of the next output
+
+    def __call__(self, x):
+        x = np.asarray(x, dtype=np.float32)
+        if self.step == 1.0:
+            return x  # native 16 kHz: bit-identical, no state or latency
+        if x.size:
+            self._buf = x if self._buf.size == 0 else np.concatenate(
+                (self._buf, x))
+        buf = self._buf
+        base = self._base
+        nxt = self._next
+        step = self.step
+        out = []
+        # An output at absolute position p needs the samples at
+        # floor(p) and floor(p)+1 (buf indices floor(p)-base, +1).
+        while int(nxt) - base + 1 < len(buf):
+            i0 = int(nxt) - base
+            f = nxt - int(nxt)
+            out.append(buf[i0] * (1.0 - f) + buf[i0 + 1] * f)
+            nxt += step
+        if out:
+            # The floor sample of the next output may still be needed
+            # (as floor and floor+1), so retain from there, clamped to
+            # what is actually buffered: a step can overshoot past the
+            # end, and retaining "beyond" would desync base from the
+            # next chunk's first sample.
+            keep = int(nxt) - base
+            if keep < 0:
+                keep = 0
+            if keep > len(buf):
+                keep = len(buf)
+            self._buf = buf[keep:]
+            self._base = base + keep
+            self._next = nxt
+        return np.asarray(out, dtype=np.float32)
+
+
 def _linear_decimate_3(x: np.ndarray) -> np.ndarray:
     """48000 -> 16000: linear interpolation, ~1 sample per 3 in.
 
@@ -288,3 +351,62 @@ def resample_from_16k(frame_f32: np.ndarray, rate: int) -> np.ndarray:
     if want <= 0:
         return np.zeros(0, dtype=np.float32)
     return np.interp(np.linspace(0, 1, want), np.linspace(0, 1, x.size), x).astype(np.float32)
+
+
+# Offline harmonic highband: 16 kHz float32 -> 48 kHz float32 with
+# synthesized 8-16 kHz air (mirrors HighbandExtend in tools/nkf_smoke.cpp).
+# The live cable path (resample_from_16k above) is pure interpolation:
+# honest, but its top octaves measure ~10-29 dB down (empty). This
+# mirrors the mids upward SBR-style: pre-emphasized base (1-pole HP at
+# HB_HP_FC/4, so lows don't dominate the mirror) times cos(2 pi *
+# HB_HP_FC * t) shifts 0-8 kHz to 8-16 kHz (sum) + 0-8 kHz (difference,
+# removed by the post highpass at HB_HP_FC). A square-law doubler was
+# tried first and measured zero lift on dull inputs (doubling <1 kHz
+# lands <2 kHz — highpassed away); the mirror works on any input with
+# mid energy. Voice envelope gate keeps silence silent, mix at
+# HB_MIX_DB. Offline/harness use only for now (A/B proof before any
+# live dual-rate plumbing): whole-vector in, whole-vector out, no
+# chunk-state claims. Pinned by test_parity --constants
+# (HB_MIX_DB/HB_HP_FC/HB_GATE_RMS).
+HB_MIX_DB = -9.0
+HB_HP_FC = 8000.0
+HB_GATE_RMS = 100.0  # int16 domain, same floor as EXPAND_CLOSE_RMS
+
+
+def highband_extend_16k_to_48k(x16_f32: np.ndarray) -> np.ndarray:
+    """Synthetic-air upsampler (offline). Silence in -> silence out."""
+    x = np.asarray(x16_f32, dtype=np.float32)
+    if x.size == 0:
+        return np.zeros(0, dtype=np.float32)
+    base = _linear_interpolate_3(x)
+    if not np.any(x):
+        return base  # digital silence: no excitation, bit-identical path
+    out = base.copy()
+    gate = np.float32(HB_GATE_RMS / 32768.0)
+    mix = np.float32(10.0 ** (HB_MIX_DB / 20.0))
+    ap = np.float32(1.0 - np.exp(-2.0 * np.pi * (HB_HP_FC / 4.0) / 48000.0))
+    a = np.float32(1.0 - np.exp(-2.0 * np.pi * HB_HP_FC / 48000.0))
+    up_k = np.float32(1.0 - np.exp(-1.0 / (0.005 * 48000.0)))
+    dn_k = np.float32(1.0 - np.exp(-1.0 / (0.040 * 48000.0)))
+    step = np.float32(2.0 * np.pi * HB_HP_FC / 48000.0)
+    env = np.float32(0.0)
+    lpp = np.float32(0.0)
+    lp = np.float32(0.0)
+    phase = np.float32(0.0)
+    span = np.float32(0.1 - gate)
+    for i, b in enumerate(base):
+        b = float(b)
+        ab = abs(b)
+        k = up_k if ab > env else dn_k
+        env += np.float32((ab - env) * k)
+        g = (env - gate) / span if span > 0 else np.float32(0.0)
+        g = np.float32(min(1.0, max(0.0, float(g))))
+        lpp += np.float32(float(ap) * (b - float(lpp)))
+        pre = b - float(lpp)
+        m = pre * float(np.cos(float(phase)))
+        phase += step
+        if float(phase) > 2.0 * np.pi:
+            phase = np.float32(float(phase) - 2.0 * np.pi)
+        lp += np.float32(float(a) * (m - float(lp)))
+        out[i] = np.float32(b + (m - float(lp)) * float(g) * float(mix))
+    return out

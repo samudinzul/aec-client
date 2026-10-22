@@ -87,7 +87,14 @@ TDC_MIN_MEAN_E = 1e-5
 TDC_SHADOW = 16
 TDC_FADE = 8
 
-# ---- Self-monitor loop detector (telemetry only) ----------------------
+# ---- Self-monitor loop detector -----------------------------------
+# The engage bar stays LOW on purpose: clipped, beyond-range, or
+# chaotic loops (L5/L6: failed-open, howl-grade) still correlate, but
+# weakly — a high bar would blind detection exactly where protection
+# matters most. False-positive TRIM from ordinary echo used to be the
+# price of the low bar; it is now handled by the trim veto below
+# (proven cancellation blocks the ducking), not by the bar.
+# Detection and telemetry still report either way.
 LOOP_WIN = 1024
 LOOP_DMAX = 12800
 LOOP_DEC = 4
@@ -116,6 +123,18 @@ LOOP_TAU_REL = 0.15   # ...and lets go over ~0.5 s once clear
 LOOP_TRIM_DEEP = 0.25   # -12 dB after ~3 s sustained loud
 LOOP_TRIM_FLOOR = 0.125  # -18 dB after ~6 s; never deeper
 LOOP_LOUD_BLOCKS = 96   # 96 x 512-sample blocks ~= 3 s per step
+# Rails-sustained override (see trim logic): saturated howl mush sits
+# at full scale forever and mimics cancellation in energy RATIOS
+# (measured: handled loops <= 0.002 mean-square, howl >= 0.03), so a
+# pure depth veto would leave it untrimmed. RAIL_MS splits them with
+# margin either side; the consecutive-run requirement keeps it
+# gapless-only (syllabic dips reset it — shouted voice with real gaps
+# never trips, howl mush never gaps).
+RAIL_MS = 0.01
+RAIL_BLOCKS = LOOP_LOUD_BLOCKS  # same 3 s sustain bar as escalation
+RAIL_QUIET_TOL = 16  # blocks (~0.5 s) of genuine gap that reset the run:
+# syllabic dips inside loud audio only pause it (howl mush never gaps
+# that long; shouted phrases always do), while a real pause clears it.
 
 # ---- No-cancel watchdog ---------------------------------------------------
 # Clipped ADC, beyond-range or jitter-chaotic delay, or a confident
@@ -331,6 +350,12 @@ class NkfEngine:
 
     def __init__(self, model_dir="models", num_threads=None,
                  enable_res=True, enable_anf=True):
+        # A/B hook for residual-suppressor artifacts (mirrors the
+        # desktop NKF_DISABLE_RES): the intrinsic Wiener post-filter
+        # is the prime suspect for robotic texture, so it must be
+        # switchable without a code change on both platforms.
+        if os.getenv("NKF_DISABLE_RES") == "1":
+            enable_res = False
         self.ready = False
         self.last_error = ""
         self._core = None
@@ -352,6 +377,15 @@ class NkfEngine:
         self._reset_state()
         if os.getenv("NKF_FORCE_GIVEUP"):
             self.give_up = True
+        # A/B hook for model level-sensitivity (mirrors the desktop
+        # NKF_ENG_DIV): the /16 sweet spot is hand-tuned — if the mic
+        # level doesn't suit the model it rings. Try 8 (hotter) or 32
+        # (quieter); garbage/non-positive falls back to 16.
+        try:
+            div = float(os.getenv("NKF_ENG_DIV", "16"))
+            self._eng_div = div if div > 0.0 else 16.0
+        except (TypeError, ValueError):
+            self._eng_div = 16.0
 
     # -- state (mirrors NkfHandle fields + NkfReset) ---------------------
     def _reset_state(self):
@@ -369,6 +403,7 @@ class NkfEngine:
         self.tdc_locked = False
         self.tdc_confident = False
         self.mic_env = self.ref_env = self.out_env = 0.0
+        self.fast_mic_e = self.fast_out_e = 0.0
         self.hot_blocks = 0
         self.resets = 0
         self.give_up = False
@@ -380,7 +415,10 @@ class NkfEngine:
         self.nocancel_hot_samples = 0
         self.nocancel_hot = False
         self.loop_loud_run = 0
+        self.rail_run = 0
+        self.rail_quiet = 0
         self.last_window_cancelled = False
+        self.last_depth = 0.0
         self.last_tdc_sc = -2.0
         self.last_tdc_d = 0
         self.dep_mic = self.dep_out = 0.0
@@ -433,6 +471,7 @@ class NkfEngine:
             "resDb": float(self._core.res_db)
             if self._core is not None else 0.0,
             "loopDb": float(20.0 * np.log10(self.loop_gain + 1e-9)),
+            "depthDb": float(self.last_depth),
         }
 
     # -- TDC -------------------------------------------------------------
@@ -627,8 +666,11 @@ class NkfEngine:
         depth = 10.0 * np.log10(
             (self.dep_out + 1e-12) / (self.dep_mic + 1e-12))
         # Cancellation evidence for the no-cancel watchdog (pure
-        # measurement — independent of the tonal logic below).
+        # measurement — independent of the tonal logic below). Also the
+        # loop-trim veto: proven cancellation blocks the ducking, and
+        # last_depth exposes the verdict to state()/tests.
         self.last_window_cancelled = depth <= BS_HEAL_D
+        self.last_depth = float(depth)
         floors = mic_ms >= BS_MIC_MS and depth <= BS_HEAL_D
         tonal = frames > 0 and self.bs_hits >= BS_HITS
         stable = self.bs_bin_best >= BS_BIN_RUN
@@ -753,8 +795,9 @@ class NkfEngine:
             if self.tdc_locked and not self.give_up:
                 try:
                     out_b = self._core.process_block(
-                        mic_b * ENG_IN_SCALE, ref_b * ENG_IN_SCALE)
-                    out_b = (out_b * ENG_OUT_SCALE).astype(np.float32)
+                        mic_b * (1.0 / self._eng_div),
+                        ref_b * (1.0 / self._eng_div))
+                    out_b = (out_b * self._eng_div).astype(np.float32)
                 except Exception:
                     self.give_up = True
                     self._core.reset()
@@ -867,18 +910,83 @@ class NkfEngine:
                         and not self.give_up
                         and self.nocancel_hot_samples >= NOCANCEL_HOT_AFTER)
             self.nocancel_hot = nocancel
+            # Trim veto on proven cancellation: even above the engage
+            # bar, a handled echo/loop must not be ducked (it pumps
+            # double-talk). Evidence is FAST (~256 ms EMA on the
+            # pre-trim wire, updated in the dep block below every
+            # block): a 2 s window verdict would go stale across loop
+            # onset and leave full-scale audio untrimmed, while
+            # post-trim energy sawtooths the veto against itself. A
+            # true howl never shows cancellation, so howl protection is
+            # untouched. Mic floor required: on silence there is no
+            # evidence either way, so the veto stays open (fail-safe).
+            # Detection (looped) still drives telemetry, eager TDC,
+            # and the single-window backstop attack.
+            fast_depth = 10.0 * np.log10(
+                (self.fast_out_e + 1e-12) / (self.fast_mic_e + 1e-12))
+            trim_loop = looped and not (
+                self.fast_mic_e >= BS_MIC_MS and fast_depth <= -1.0)
             ms_pre = float(np.mean(emit.astype(np.float64) ** 2))
-            if (looped or nocancel) and ms_pre >= BS_MIC_MS:
+            if (trim_loop or nocancel) and ms_pre >= BS_MIC_MS:
                 self.loop_loud_run += 1
             else:
                 self.loop_loud_run = 0
-            if looped or nocancel:
+            # Rails-sustained override: gapless wire at rails means a
+            # saturated loop even when ratios mimic cancellation (see
+            # RAIL_MS). Only genuine gaps reset the run — mid-level dips
+            # merely hold it (howl mush never truly gaps; shouted phrases
+            # always do), same gap-tolerant shape as the loop detector's
+            # quiet hysteresis.
+            if (looped or nocancel) and ms_pre >= RAIL_MS:
+                self.rail_run += 1
+                self.rail_quiet = 0
+            elif ms_pre < BS_MIC_MS:
+                self.rail_quiet += 1
+                if self.rail_quiet >= RAIL_QUIET_TOL:
+                    self.rail_run = 0
+                    self.rail_quiet = 0
+            elif not (looped or nocancel):
+                self.rail_run = 0
+                self.rail_quiet = 0
+            rail_step = min(self.rail_run // RAIL_BLOCKS, 2)
+            if nocancel:
                 step = self.loop_loud_run // LOOP_LOUD_BLOCKS
                 loop_target = LOOP_TRIM * (0.5 ** min(step, 2))
-                if loop_target < LOOP_TRIM_FLOOR:
-                    loop_target = LOOP_TRIM_FLOOR
+            elif looped:
+                if trim_loop:
+                    step = self.loop_loud_run // LOOP_LOUD_BLOCKS
+                    loop_target = LOOP_TRIM * (0.5 ** min(step, 2))
+                elif rail_step >= 1:
+                    loop_target = LOOP_TRIM * (0.5 ** rail_step)
+                else:
+                    loop_target = 1.0
             else:
                 loop_target = 1.0
+            if loop_target < LOOP_TRIM_FLOOR:
+                loop_target = LOOP_TRIM_FLOOR
+            # Depth accumulators on the PRE-trim wire (moved ahead of
+            # the trim multiply below) plus the veto's fast followers
+            # (same pre-trim energies, ~256 ms EMA): the veto and the
+            # window verdict must both judge the Kalman's cancellation,
+            # not our own suppression — measuring post-trim sawtooths
+            # against itself (trim quiets the wire -> depth "proves"
+            # cancellation -> veto releases the trim -> wire roars ->
+            # trim re-engages, forever). ms_pre above already measures
+            # pre-trim for the same reason.
+            self.dep_mic += float(np.sum(mic_b.astype(np.float64) ** 2))
+            self.dep_out += float(np.sum(emit.astype(np.float64) ** 2))
+            self.dep_samples += shift
+            self.fast_mic_e += GUARD_EMA * (
+                float(np.mean(mic_b.astype(np.float64) ** 2))
+                - self.fast_mic_e)
+            self.fast_out_e += GUARD_EMA * (
+                float(np.mean(emit.astype(np.float64) ** 2))
+                - self.fast_out_e)
+            if self.bs_frames + 1 >= BS_FRAMES:
+                self.bs_frames += 1
+                self._backstop_window()
+            else:
+                self.bs_frames += 1
             # Loop-active trim: multiplicative with the backstop, own
             # smoothing. Cuts loop gain below 1 while engaged; the
             # engine keeps adapting underneath (never frozen).
@@ -887,15 +995,6 @@ class NkfEngine:
                 else LOOP_TAU_REL)
             if self.loop_gain != 1.0:
                 emit = emit * np.float32(self.loop_gain)
-
-            self.dep_mic += float(np.sum(mic_b.astype(np.float64) ** 2))
-            self.dep_out += float(np.sum(emit.astype(np.float64) ** 2))
-            self.dep_samples += shift
-            if self.bs_frames + 1 >= BS_FRAMES:
-                self.bs_frames += 1
-                self._backstop_window()
-            else:
-                self.bs_frames += 1
 
             self.out_hist.extend(emit.tolist())
             wire = np.clip(emit * 32768.0, -32768.0, 32767.0)

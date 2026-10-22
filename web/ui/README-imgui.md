@@ -13,10 +13,10 @@ This project implements a web-based Dear ImGui UI that matches the desktop AEC C
 and buttons) styled to mirror the desktop Dear ImGui layout — same
 sections, labels, tab bar and footer. No canvas, no WebAssembly, so
 every control is clickable. Same PROFILES table as the desktop
-(DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC) with the same
-experimental-engines gating; options whose backend is missing are
-disabled with a note. Fixed at 16 kHz like the desktop's neural
-engines.
+(Off / DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC) with NKF-AEC gated
+behind the experimental-engines flag; options whose backend is
+missing are disabled with a note. Fixed at 16 kHz like the
+desktop's neural engines.
 
 ## Key Features
 
@@ -33,7 +33,7 @@ engines.
 - Device enumeration and selection (devices locked while running)
 - Microphone level 0–200% (More → Levels, like the desktop)
 - Noise suppression toggle (live) — DTLN-NS post stage on every engine
-- Profile section (3 engines, hot-swappable while running; extras hidden until experimental tick)
+- Profile section (4 choices with Off first, hot-swappable while running; NKF hidden until experimental tick)
 - NKF telemetry line (delay lock, exposure, notch/loop/RES trim, guard resets)
 - Start/Stop + Reset to defaults, with live status
 - Live level meters (Mic/Out), while running
