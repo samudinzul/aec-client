@@ -472,11 +472,15 @@ class Dfn48Core:
         self._arrange_spec(np.zeros(NB_DF, np.complex64),
                            self._enc_in["spec"][1])
         self._feats = _DfFeats()
+        # The upstream primes both queues with zeros (tract.rs reset):
+        # rolling_spec_buf_x = df_order entries, rolling_spec_buf_y =
+        # df_order + lookahead entries.
         self._rolling = [np.zeros(N_FREQ, dtype=np.complex64)
                          for _ in range(DF_ORDER)]
+        self._enhQ = [np.zeros(N_FREQ, dtype=np.complex64)
+                      for _ in range(DF_ORDER + LOOKAHEAD_FRAMES)]
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
-        self._la_carry = []   # lookahead delay line (frames)
         self.ready = True
         # Frame stats (probe/diagnostic only — gated, never production).
         self._trace_lsnr = False
@@ -758,11 +762,15 @@ class Dfn48Core:
 
     def reset(self):
         self._feats.reset()
+        # The upstream primes both queues with zeros (tract.rs reset):
+        # rolling_spec_buf_x = df_order entries, rolling_spec_buf_y =
+        # df_order + lookahead entries.
         self._rolling = [np.zeros(N_FREQ, dtype=np.complex64)
                          for _ in range(DF_ORDER)]
+        self._enhQ = [np.zeros(N_FREQ, dtype=np.complex64)
+                      for _ in range(DF_ORDER + LOOKAHEAD_FRAMES)]
         self._in_carry = np.zeros(0, dtype=np.float32)
         self._out_carry = np.zeros(0, dtype=np.float32)
-        self._la_carry = []   # lookahead delay line (frames)
         self.in_rms = self.out_rms = 0.0
         self._lsnr_trace = []
         for net in (self.enc, self.erb, self.df):
@@ -770,7 +778,21 @@ class Dfn48Core:
                 st["arr"].fill(0)
 
     def _run_frame(self, frame):
-        """One native 480-sample float frame in/out."""
+        """One native 480-sample float frame in/out.
+
+        The upstream runtime (libDF/src/tract.rs process()) keeps TWO
+        queues of window spectra, oldest first:
+          rolling_spec_buf_x  df_order (5) entries - the NOISY spectra,
+                             consumed by the order-5 deep filter
+          rolling_spec_buf_y  df_order + lookahead (7) entries - the
+                             spectra that get masked in place
+        At frame t the mask + coefficients computed from frame t's
+        features are applied to the y entry at index df_order-1, i.e.
+        the frame t-LOOKAHEAD window. That pairing is the model's
+        2-frame LOOKAHEAD: the decision is made from data up to t but
+        applied to an older frame, so the output stream runs 2 frames
+        behind the input.
+        """
         frame = np.asarray(frame, dtype=np.float32)
         if float(np.mean(frame * frame)) < float(_SILENCE_MS):
             # Runtime silence shortcut: states freeze, zeros out
@@ -779,8 +801,11 @@ class Dfn48Core:
                 self._lsnr_trace.append(-15.0)
             return np.zeros(HOP, dtype=np.float32)
         spec = self._feats.analyze(frame)
+        # the noisy queue (deep filter input) and the masked queue
         self._rolling.append(spec.copy())
         del self._rolling[0]
+        self._enhQ.append(spec.copy())
+        del self._enhQ[0]
         erb = self._feats.erb_feats(spec)
         nspec = self._feats.norm_spec(spec)
         lsnr, mask, coefs = self._infer(erb, nspec)
@@ -802,15 +827,17 @@ class Dfn48Core:
             gains = np.maximum(mask, self._gain_floor).astype(np.float32)
             if lsnr > float(MAX_DF_DB):
                 coefs = None
-        # ERB gains onto the newest spec (rectangular bands).
-        enh = self._rolling[-1].copy()
+        # The target frame: df_order-1 entries back in the masked queue
+        # (= LOOKAHEAD_FRAMES frames back), NOT the newest one.
+        enh = self._enhQ[DF_ORDER - 1].copy()
+        # ERB gains onto that frame (rectangular bands).
         o = 0
         for b, w in enumerate(self._feats.widths):
             enh[o:o + w] *= gains[b]
             o += w
         if coefs is not None:
             # Order-5 deep filter over the last 5 noisy specs:
-            # out[f] = sum_o X[t-4+o][f] * C[o][f], bins < 64.
+            # out[f] = sum_o X[t-4+o][f] * C[o][f], bins < NB_DF.
             acc = np.zeros(NB_DF, dtype=np.complex64)
             for oo in range(DF_ORDER):
                 acc += self._rolling[oo][:NB_DF] * coefs[:, oo]
@@ -971,18 +998,15 @@ class Dfn48Core:
             while len(self._in_carry) >= HOP:
                 blk = self._run_frame(self._in_carry[:HOP])
                 self._in_carry = self._in_carry[HOP:]
-                # The model is non-causal (lookahead 2): its output for
-                # frame t is only final once frame t+2 has been seen,
-                # so the stream is delayed by LOOKAHEAD_FRAMES frames
-                # to keep the output aligned with the input.
-                self._la_carry.append(blk)
-                if len(self._la_carry) > LOOKAHEAD_FRAMES:
-                    ready = self._la_carry.pop(0)
-                    if len(self._out_carry):
-                        self._out_carry = np.concatenate(
-                            [self._out_carry, ready])
-                    else:
-                        self._out_carry = ready
+                # No extra delay line here: the LOOKAHEAD delay is
+                # inherent — the synthesis emits the frame
+                # LOOKAHEAD_FRAMES back, so the output stream is
+                # already 2 frames behind the input.
+                if len(self._out_carry):
+                    self._out_carry = np.concatenate(
+                        [self._out_carry, blk])
+                else:
+                    self._out_carry = blk
             out = np.empty(n, dtype=np.float32)
             take = min(len(self._out_carry), n)
             if take:
