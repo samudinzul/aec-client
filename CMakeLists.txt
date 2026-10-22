@@ -41,7 +41,6 @@ add_executable(aec_gui
     src/dtln_wrapper.cpp
     src/dtln_ns_wrapper.cpp
     src/hush_wrapper.cpp
-    src/gtcrn_wrapper.cpp
     version.rc
     aec_gui.manifest
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
@@ -109,6 +108,67 @@ add_custom_command(TARGET nkf_smoke POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
         $<TARGET_FILE_DIR:nkf_smoke>)
+
+# ============================================================
+#  dtln_smoke / aec3_smoke — offline harnesses for the desktop
+#  DTLN-AEC and WebRTC AEC3 output paths (engine-only, no NS).
+#  Mirror tools/nkf_smoke.cpp pump-for-pump (160-sample frames);
+#  compare against the web side with
+#  `python -m web.test_parity --run mic ref <this out> --engine ...`.
+#  Console apps (no window). dtln_smoke loads tensorflowlite_c.dll
+#  at runtime (same as the GUI — staged next to the exe by the
+#  aec_gui rules below when present); aec3_smoke links the MSYS2
+#  WebRTC import library like aec_gui does.
+#  Build: cmake --build build --target dtln_smoke aec3_smoke
+#  Run:   build/dtln_smoke.exe mic.wav ref.wav out.wav
+#         build/aec3_smoke.exe mic.wav ref.wav out.wav
+# ============================================================
+add_executable(dtln_smoke
+    tools/dtln_smoke.cpp
+    src/dtln_wrapper.cpp
+)
+
+target_include_directories(dtln_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${NKF_DIR}
+    ${MSYS2_ROOT}/include/onnxruntime
+)
+
+target_link_libraries(dtln_smoke PRIVATE onnxruntime)
+
+if(WIN32)
+    target_link_libraries(dtln_smoke PRIVATE ole32 uuid winmm)
+endif()
+
+add_custom_command(TARGET dtln_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
+        $<TARGET_FILE_DIR:dtln_smoke>)
+
+add_executable(aec3_smoke
+    tools/aec3_smoke.cpp
+    src/aec3_wrapper.cpp
+)
+
+target_include_directories(aec3_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${MSYS2_ROOT}/include/webrtc-audio-processing-1
+)
+
+target_link_libraries(aec3_smoke PRIVATE
+    ${MSYS2_ROOT}/lib/libwebrtc-audio-processing-1.dll.a
+)
+
+if(WIN32)
+    target_link_libraries(aec3_smoke PRIVATE ole32 uuid winmm)
+endif()
+
+add_custom_command(TARGET aec3_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libwebrtc-audio-processing-1-3.dll
+        $<TARGET_FILE_DIR:aec3_smoke>)
 
 # ============================================================
 #  ONNX Runtime — official Microsoft build (v1.29.0), vendored
@@ -199,8 +259,7 @@ foreach(_dtln
     models/dtln_aec_128_1.tflite
     models/dtln_aec_128_2.tflite
     models/dtln_aec_128_1.onnx
-    models/dtln_aec_128_2.onnx
-    models/gtcrn_simple.onnx)
+    models/dtln_aec_128_2.onnx)
     if(EXISTS "${CMAKE_SOURCE_DIR}/${_dtln}")
         add_custom_command(TARGET aec_gui POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -238,6 +297,155 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/models/hush_16k_onnx.tar.gz")
 endif()
 
 # ============================================================
+#  aec_exp — the experimental fork (exp/main.cpp, "AEC Exp").
+#  Same app shape as aec_gui, PLUS the experimental engines the
+#  official build never sees: the LocalVQE v1.4-AEC engine profile
+#  and the GTCRN NS backend. Separate exe, separate window title /
+#  mutex / config file (see the header comment in exp/main.cpp), so
+#  the two can be installed side by side; shared bugfixes must be
+#  mirrored into src/main.cpp by hand.
+#  Own bundle staging below (exp/models/* + GTCRN); the release
+#  scripts never ship any of it.
+#  Build: cmake --build build --target aec_exp
+#  Run:   build/aec_exp.exe
+# ============================================================
+add_executable(aec_exp
+    exp/main.cpp
+    src/aec3_wrapper.cpp
+    src/nkf_wrapper.cpp
+    src/dtln_wrapper.cpp
+    src/dtln_ns_wrapper.cpp
+    src/hush_wrapper.cpp
+    src/gtcrn_wrapper.cpp
+    src/localvqe_wrapper.cpp
+    src/novasr_wrapper.cpp
+    third_party/localvqe/localvqe_aec_frontend.cpp
+    exp/version_exp.rc
+    exp/aec_exp.manifest
+    ${NKF_DIR}/NKFImpl.cpp
+)
+
+target_include_directories(aec_exp PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/localvqe
+    ${NKF_DIR}
+    ${MSYS2_ROOT}/include/onnxruntime
+    ${MSYS2_ROOT}/include/webrtc-audio-processing-1
+)
+
+target_link_libraries(aec_exp PRIVATE
+    imgui
+    glfw
+    OpenGL::GL
+    ${MSYS2_ROOT}/lib/libwebrtc-audio-processing-1.dll.a
+    onnxruntime
+)
+
+if(WIN32)
+    set_target_properties(aec_exp PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_libraries(aec_exp PRIVATE imm32 ole32 uuid winmm shell32)
+    set_target_properties(aec_exp PROPERTIES
+        CMAKE_EXE_LINKER_FLAGS "-s -mwindows")
+endif()
+
+add_custom_command(TARGET aec_exp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libwebrtc-audio-processing-1-3.dll
+        $<TARGET_FILE_DIR:aec_exp>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
+        $<TARGET_FILE_DIR:aec_exp>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/glfw3.dll
+        $<TARGET_FILE_DIR:aec_exp>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libwinpthread-1.dll
+        $<TARGET_FILE_DIR:aec_exp>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libgcc_s_seh-1.dll
+        $<TARGET_FILE_DIR:aec_exp>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${MSYS2_ROOT}/bin/libstdc++-6.dll
+        $<TARGET_FILE_DIR:aec_exp>
+    ${VC_COPY_COMMANDS}
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:aec_exp>/models
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/models/nkf.onnx
+        $<TARGET_FILE_DIR:aec_exp>/models/nkf.onnx
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/models/dtln_ns_128_1.tflite
+        $<TARGET_FILE_DIR:aec_exp>/models/dtln_ns_128_1.tflite
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/models/dtln_ns_128_2.tflite
+        $<TARGET_FILE_DIR:aec_exp>/models/dtln_ns_128_2.tflite
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:aec_exp>/exp/models
+    COMMENT "Copying runtime DLLs and models (exp)"
+)
+# DTLN-AEC + TFLite runtime + Hush for the exp build (same
+# optional-file rules as the official build above).
+foreach(_exp_models
+    models/dtln_aec_128_1.tflite
+    models/dtln_aec_128_2.tflite
+    models/dtln_aec_128_1.onnx
+    models/dtln_aec_128_2.onnx
+    models/hush_16k_onnx.tar.gz)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${_exp_models}")
+        add_custom_command(TARGET aec_exp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/${_exp_models}"
+                "$<TARGET_FILE_DIR:aec_exp>/${_exp_models}"
+            COMMENT "Copying ${_exp_models} (exp)")
+    endif()
+endforeach()
+foreach(_exp_dll
+    "${CMAKE_SOURCE_DIR}/libs/tensorflowlite_c.dll"
+    "${CMAKE_SOURCE_DIR}/libs/libtensorflowlite_c.dll"
+    "${CMAKE_SOURCE_DIR}/libs/weya_nc.dll")
+    if(EXISTS "${_exp_dll}")
+        add_custom_command(TARGET aec_exp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_exp_dll}"
+                "$<TARGET_FILE_DIR:aec_exp>"
+            COMMENT "Copying ${_exp_dll} (exp)")
+    endif()
+endforeach()
+# GTCRN NS backend -> build/models/ (fork loads
+# "models/gtcrn_simple.onnx"); LocalVQE v1.4-AEC engine ->
+# build/exp/models/ (fork loads "exp/models/LocalVQE*"). All
+# guarded: without the downloads the engines fail closed at Start
+# with a pointer at exp/get_models.sh.
+if(EXISTS "${CMAKE_SOURCE_DIR}/exp/models/gtcrn_simple.onnx")
+    add_custom_command(TARGET aec_exp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/exp/models/gtcrn_simple.onnx"
+            "$<TARGET_FILE_DIR:aec_exp>/models/gtcrn_simple.onnx"
+        COMMENT "Copying GTCRN model (exp)")
+endif()
+# NovaSR 48 kHz tail (exp checkbox): versioned source exp/novasr/,
+# staged exe-adjacent like the other models.
+if(EXISTS "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx")
+    add_custom_command(TARGET aec_exp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx"
+            "$<TARGET_FILE_DIR:aec_exp>/models/novasr.onnx"
+        COMMENT "Copying NovaSR model (exp)")
+endif()
+foreach(_lv exp/models/LocalVQEAECResidualMask.onnx
+             exp/models/LocalVQEAECFrontend.json
+             exp/models/LocalVQEAECConfig.json)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${_lv}")
+        add_custom_command(TARGET aec_exp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/${_lv}"
+                "$<TARGET_FILE_DIR:aec_exp>/${_lv}"
+            COMMENT "Copying ${_lv} (exp)")
+    endif()
+endforeach()
+
+# ============================================================
 #  exp/ — GTCRN + LocalVQE v1.4 experiment harnesses.
 #  Desktop-only, EXCLUDE_FROM_ALL: the default build is untouched.
 #  Build explicitly:
@@ -267,13 +475,85 @@ add_custom_command(TARGET gtcrn_smoke POST_BUILD
 
 add_executable(localvqe_smoke EXCLUDE_FROM_ALL
     exp/localvqe/localvqe_smoke.cpp
-    exp/localvqe/localvqe_wrapper.cpp
+    src/localvqe_wrapper.cpp
+    third_party/localvqe/localvqe_aec_frontend.cpp
 )
 
 target_include_directories(localvqe_smoke PRIVATE
-    ${CMAKE_SOURCE_DIR}/exp/localvqe
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/localvqe
+    ${MSYS2_ROOT}/include/onnxruntime
 )
+
+target_link_libraries(localvqe_smoke PRIVATE onnxruntime)
 
 if(WIN32)
     target_link_libraries(localvqe_smoke PRIVATE ole32 uuid winmm)
+endif()
+
+add_custom_command(TARGET localvqe_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
+        $<TARGET_FILE_DIR:localvqe_smoke>)
+
+# LocalVQE bundle (downloaded by exp/get_models.sh) next to the smoke exe.
+add_custom_command(TARGET localvqe_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:localvqe_smoke>/models
+)
+foreach(_lv exp/models/LocalVQEAECResidualMask.onnx
+             exp/models/LocalVQEAECFrontend.json
+             exp/models/LocalVQEAECConfig.json
+             exp/models/config.json)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${_lv}")
+        add_custom_command(TARGET localvqe_smoke POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/${_lv}"
+                "$<TARGET_FILE_DIR:localvqe_smoke>/models/")
+    endif()
+endforeach()
+
+# ============================================================
+#  novasr_smoke — offline NovaSR super-resolution proof harness.
+#  16 kHz mono in -> 48 kHz out with REAL highs (YatharthS/NovaSR,
+#  Apache-2.0, 52 KB -> 208 KB ONNX, torch/ORT parity 1.000000,
+#  ~11x CPU RTF). A/B line matches nkf_smoke --hb48's hiRMS meter.
+#  Desktop-only, EXCLUDE_FROM_ALL, never shipped.
+#  Build: cmake --build build --target novasr_smoke
+#  Run:   build/novasr_smoke.exe out16.wav nov48.wav
+#         build/novasr_smoke.exe --synth 5 nov48.wav
+# ============================================================
+add_executable(novasr_smoke EXCLUDE_FROM_ALL
+    exp/novasr/novasr_smoke.cpp
+)
+
+target_include_directories(novasr_smoke PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${MSYS2_ROOT}/include/onnxruntime
+)
+
+target_link_libraries(novasr_smoke PRIVATE onnxruntime)
+
+if(WIN32)
+    target_link_libraries(novasr_smoke PRIVATE ole32 uuid winmm)
+endif()
+
+add_custom_command(TARGET novasr_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
+        $<TARGET_FILE_DIR:novasr_smoke>)
+
+# NovaSR weights: versioned source exp/novasr/novasr.onnx (Apache-2.0,
+# exported + parity-checked, see exp/get_models.sh) staged next to the
+# exe; exp/models/novasr.onnx is the local-run copy (gitignored).
+add_custom_command(TARGET novasr_smoke POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:novasr_smoke>/models
+)
+if(EXISTS "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx")
+    add_custom_command(TARGET novasr_smoke POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx"
+            "$<TARGET_FILE_DIR:novasr_smoke>/models/novasr.onnx"
+        COMMENT "Copying NovaSR model")
 endif()

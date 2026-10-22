@@ -1,14 +1,14 @@
-// localvqe_smoke — offline harness for the exp LocalVQE v1.4-AEC wrapper.
+// localvqe_smoke — offline harness for the LocalVQE v1.4-AEC wrapper.
 //
-// Runs WAV mic/ref pairs through LocalVqeProcess and prints file status +
-// a per-second mic/ref/out RMS table. v0 expectation: out == mic
-// (bypass) — this validates build, WAV plumbing, and that both model files
-// resolve. V1 expectation: echo (ref content in mic) removed, voice kept.
+// Runs WAV mic/ref pairs through LocalVqeProcess and prints bundle status
+// + a per-second mic/ref/out RMS table with the frontend delay estimate.
+// Expectation: echo (ref content in mic) drops, voice holds; a silent ref
+// preserves the mic (upstream runtime rule).
 //
 // Usage (MSYS2 UCRT64, from repo root):
 //   cmake -B build -G Ninja && cmake --build build --target localvqe_smoke
-//   build/localvqe_smoke.exe mic.wav ref.wav out.wav
-//   build/localvqe_smoke.exe --synth 5 out.wav   (synth mic+ref)
+//   build/localvqe_smoke.exe mic.wav ref.wav out.wav [bundleDir]
+//   build/localvqe_smoke.exe --synth 5 out.wav
 //
 // WAVs must be 16 kHz mono int16. Never mutes: not-ready -> passthrough.
 #include <cmath>
@@ -23,7 +23,7 @@
 namespace {
 
 constexpr int kSr = 16000;
-constexpr int kFrame = 256;  // LocalVQE hop: 16 ms @ 16 kHz
+constexpr int kFrame = 160;  // app pump frame; wrapper FIFOs to 256 hops
 
 struct Wav {
     std::vector<int16_t> samples;
@@ -89,7 +89,7 @@ static inline int16_t ClampS16(int v) {
 }
 
 // Doubletalk-ish synth: ref = tonal speaker content, mic = delayed echo
-// of ref + voice bursts. AEC (V1) should remove the echo, keep bursts.
+// of ref + voice bursts. The canceller should remove the echo, keep bursts.
 void Synth(double seconds, Wav& mic, Wav& ref) {
     const size_t n = (size_t)(seconds * kSr);
     mic.samples.assign(n, 0);
@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
     bool synth = false;
     double synthSecs = 5.0;
     const char *micPath = nullptr, *refPath = nullptr, *outPath = nullptr;
+    const char* bundle = "exp/models";
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--synth") && i + 2 < argc) {
             synth = true;
@@ -127,6 +128,8 @@ int main(int argc, char** argv) {
             refPath = argv[i];
         } else if (!outPath) {
             outPath = argv[i];
+        } else {
+            bundle = argv[i];
         }
     }
 
@@ -136,7 +139,7 @@ int main(int argc, char** argv) {
         printf("synth: %.1f s echo-in-mic + voice bursts\n", synthSecs);
     } else {
         if (!micPath || !refPath || !outPath) {
-            printf("usage: localvqe_smoke mic.wav ref.wav out.wav\n"
+            printf("usage: localvqe_smoke mic.wav ref.wav out.wav [bundleDir]\n"
                    "   or: localvqe_smoke --synth SECS out.wav\n");
             return 2;
         }
@@ -148,16 +151,24 @@ int main(int argc, char** argv) {
                          : ref.samples.size();
     if (n < (size_t)kSr) { printf("need >= 1 s\n"); return 2; }
 
-    LocalVqeHandle* v = LocalVqeNew("exp/models/LocalVQEAECResidualMask.onnx",
-                                    "exp/models/LocalVQEAECFrontend.json");
+    std::string onnx = std::string(bundle) + "/LocalVQEAECResidualMask.onnx";
+    std::string front = std::string(bundle) + "/LocalVQEAECFrontend.json";
+    std::string cfg = std::string(bundle) + "/LocalVQEAECConfig.json";
+    // Fallback: upstream config filename (get_models.sh renames it to
+    // LocalVQEAECConfig.json; accept either).
+    FILE* probe = fopen(cfg.c_str(), "rb");
+    if (!probe) cfg = std::string(bundle) + "/config.json";
+    else fclose(probe);
+    LocalVqeHandle* v = LocalVqeNew(onnx.c_str(), front.c_str(), cfg.c_str());
     LocalVqeDump(v);
-    if (!LocalVqeReady(v))
+    if (!LocalVqeReady(v)) {
         printf("note: %s -> bypass (fail-open)\n", LocalVqeLastError(v));
+    }
 
     std::vector<int16_t> out;
     out.reserve(n);
     float mf[kFrame], rf[kFrame], of[kFrame];
-    printf("sec  micRMS  refRMS  outRMS\n");
+    printf("sec  micRMS  refRMS  outRMS  delay(conf)\n");
     double accMic = 0, accRef = 0, accOut = 0;
     size_t accN = 0;
     int sec = 0;
@@ -177,9 +188,12 @@ int main(int argc, char** argv) {
         }
         accN += kFrame;
         if (accN >= (size_t)kSr) {
-            printf("%3d  %6.0f  %6.0f  %6.0f\n", ++sec,
+            LocalVqeStats st = {};
+            LocalVqeStatsGet(v, &st);
+            printf("%3d  %6.0f  %6.0f  %6.0f  %5d(%.1f)\n", ++sec,
                    sqrt(accMic / accN), sqrt(accRef / accN),
-                   sqrt(accOut / accN));
+                   sqrt(accOut / accN), st.delaySamples,
+                   (double)st.delayConf);
             accMic = accRef = accOut = 0;
             accN = 0;
         }
@@ -188,9 +202,9 @@ int main(int argc, char** argv) {
     printf("wrote %s (%zu samples)\n", outPath, out.size());
     LocalVqeStats st = {};
     LocalVqeStatsGet(v, &st);
-    printf("verdict: %s (neural=%d)\n",
-           st.neural ? "host-DSP + mask engaged" : "bypass — plumbing only",
-           st.neural);
+    printf("verdict: %s (neural=%d delay=%d conf=%.1f)\n",
+           st.neural ? "mask engaged" : "bypass — plumbing only",
+           st.neural, st.delaySamples, (double)st.delayConf);
     LocalVqeDestroy(v);
     return 0;
 }
