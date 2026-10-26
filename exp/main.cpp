@@ -924,10 +924,10 @@ void LoadSettings() {
         // Post-stage prefs are engine-scoped — re-sync after load so a
         // toggle left on for another engine never leaks into this one.
         SyncStagePrefsToEngine();
-        // Sample rate is a free knob: keep the persisted value; only the
-        // 16-kHz-only engines force it back down.
+        // Sample rate is a free knob: keep the persisted value; the
+        // 16-kHz-only engines and the high-band splice force it down.
         if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN ||
-            g_engineIndex == ENGINE_LOCALVQE) {
+            g_engineIndex == ENGINE_LOCALVQE || g_highbandEnabled.load()) {
             g_sampleRateIndex = 0;
             g_sampleRate.store(rates[0]);
         } else {
@@ -1444,9 +1444,14 @@ void ReinitEngine() {
     EngineType eng = (EngineType)g_selectedEngine.load();
 
     // NKF, DTLN and LocalVQE run 16 kHz only (their models are 16 kHz
-    // by design; the LocalVQE bundle geometry check enforces it).
+    // by design; the LocalVQE bundle geometry check enforces it). The
+    // high-band splice also pins the chain to 16 kHz: it splices the
+    // real 48 kHz mic highs onto the upsampled 16 kHz low band, and its
+    // mic decimator feeds a 16 kHz ring. Only the output device runs at
+    // 48 kHz (see OutRate). Keep this in step with the rate row and the
+    // chain summary in DrawAudioTab.
     if (eng == ENGINE_NKF || eng == ENGINE_DTLN ||
-        eng == ENGINE_LOCALVQE) {
+        eng == ENGINE_LOCALVQE || g_highbandEnabled.load()) {
         g_sampleRate.store(16000);
         g_sampleRateIndex = 0;
     }
@@ -2430,7 +2435,16 @@ void DrawEngineSection() {
     ImGui::SetNextItemWidth(-1);
 
     const char* rates[] = { "16000", "48000" };
-    if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN ||
+    if (g_highbandEnabled.load()) {
+        ImGui::TextDisabled("16000 (fixed by High-band splice; 48k out)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "High-band splice always runs the 16 kHz chain: the AEC and\n"
+                "NS process 0-8 kHz, then the real 8-24 kHz mic band is\n"
+                "spliced back on at the 48 kHz output.\n\n"
+                "Untick the splice to use AEC3 natively at 48000 Hz (no NS:\n"
+                "every NS backend is 16 kHz).");
+    } else if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN ||
         g_engineIndex == ENGINE_LOCALVQE) {
         ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
@@ -2530,16 +2544,13 @@ void DrawAudioTab() {
             "LocalVQE v1.4-AEC (exp) - neural echo canceller, 16 kHz only\n"
             "(needs the exp/models/LocalVQE* bundle); chains into the NS\n"
             "backend below, e.g. LocalVQE -> GTCRN.\n"
-            "The picked NS backend below appends '-> NS' to the chain.");
-    // The label shows the engine itself, plus the chain segments while
-    // the post stage runs — no hidden state.
+            "The full chain is summarized above the devices section.");
+    // Engine name only. The full path (engine -> NS -> output) is
+    // spelled out once, in the chain line just above the devices.
     bool wasRunning = g_isRunning;
     for (int r = 0; r < PROFILE_COUNT; r++) {
         int i = r;
         std::string label = PROFILES[i].name;
-        if (g_nsBackend.load() != 0)
-            label += (g_nsBackend.load() == 3) ? " -> GTCRN" :
-                (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
         bool sel = (g_profileIndex == i);
         // Experimental engines (WebRTC AEC3 / NKF-AEC / LocalVQE-AEC)
         // are hidden unless the user ticked the Appearance checkbox —
@@ -2574,7 +2585,10 @@ void DrawAudioTab() {
                 "Hush - keyboards, mice and background talkers, slightly\n"
                 "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).\n"
                 "GTCRN (exp) - ultra-light hiss killer, 16 kHz only\n"
-                "(needs models/gtcrn_simple.onnx).");
+                "(needs models/gtcrn_simple.onnx).\n\n"
+                "All NS backends are 16 kHz. On a native 48 kHz AEC3 chain\n"
+                "(High-band splice off) the stage is skipped; the chain\n"
+                "line above the devices section shows when that happens.");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
@@ -2615,6 +2629,13 @@ void DrawAudioTab() {
         bool hb = g_highbandEnabled.load();
         if (ImGui::Checkbox("High-band splice (real 48k highs)", &hb)) {
             g_highbandEnabled.store(hb);
+            if (hb) {
+                // Splice always runs the 16 kHz chain (48 kHz is the
+                // output side). Sync the persisted/UI rate now so the
+                // More row and the next Start cannot disagree.
+                g_sampleRateIndex = 0;
+                g_sampleRate.store(16000);
+            }
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
@@ -2636,6 +2657,65 @@ void DrawAudioTab() {
         if (g_isRunning && g_highbandEnabled.load())
             ImGui::TextDisabled("HiBand: VAD level %.1f dBFS, delay %d smp",
                 (double)g_hbRatioDb.load(), g_hbDelaySamples.load());
+    }
+
+    // ---- chain summary (single source of truth for the full path) ----
+    // The engine radios above show the engine name only. This is the one
+    // place that spells out engine -> NS -> output, right above the
+    // devices it feeds.
+    {
+        const char* engineName = PROFILES[g_profileIndex].name;
+        const int engType = PROFILES[g_profileIndex].engine;
+        const bool hb = g_highbandEnabled.load();
+        // Effective chain rate: 16 kHz on the model-bound engines and
+        // whenever the splice is live (it always pins the chain; 48 kHz
+        // is the output side). StartAEC/ReinitEngine enforce the same.
+        const int chainRate =
+            (hb || engType == ENGINE_NKF || engType == ENGINE_DTLN ||
+             engType == ENGINE_LOCALVQE)
+                ? 16000 : g_sampleRate.load();
+        const int outRate = hb ? 48000 : chainRate;
+        const int nsb = g_nsBackend.load();
+        // Every NS backend is 16 kHz. A native 48 kHz AEC3 chain runs
+        // engine-only, so never claim a stage that is skipped.
+        const bool nsSkipped = (nsb != 0 && chainRate != 16000);
+
+        char nsSuffix[32] = "";
+        if (!nsSkipped) {
+            switch (nsb) {
+                case 1: snprintf(nsSuffix, sizeof nsSuffix, " -> DTLN-NS"); break;
+                case 2: snprintf(nsSuffix, sizeof nsSuffix, " -> Hush"); break;
+                case 3: snprintf(nsSuffix, sizeof nsSuffix, " -> GTCRN"); break;
+                default: break;       // 0 = Off: no NS stage in the path
+            }
+        }
+
+        char chain[192];
+        if (hb)
+            snprintf(chain, sizeof chain,
+                     "Chain: Mic -> %s%s -> 48 kHz (HiBand splice)",
+                     engineName, nsSuffix);
+        else if (nsSkipped)
+            snprintf(chain, sizeof chain,
+                     "Chain: Mic -> %s -> %d kHz (NS skipped: 16 kHz only)",
+                     engineName, outRate / 1000);
+        else
+            snprintf(chain, sizeof chain,
+                     "Chain: Mic -> %s%s -> %d kHz",
+                     engineName, nsSuffix, outRate / 1000);
+        ImGui::TextDisabled("%s", chain);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "The full voice path, in order:\n"
+                "mic -> echo engine -> noise suppression (if enabled)\n"
+                "-> hygiene (80 Hz HPF -> expander -> presence shelf)\n"
+                "-> output.\n\n"
+                "NS backends are 16 kHz only: a native 48 kHz AEC3 chain\n"
+                "(splice off) skips that stage.\n\n"
+                "With High-band splice the output is 48 kHz: the 16 kHz\n"
+                "chain carries 0-8 kHz and the real mic highs (8-24 kHz)\n"
+                "are spliced back on top, gated by the VAD and cleaned by\n"
+                "the high-band NS.");
     }
 
     ImGui::Spacing();
