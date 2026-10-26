@@ -233,14 +233,14 @@ std::atomic<int>   g_filterLengthMs(50);
 std::atomic<bool>  g_enablePreprocess(false);
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
-std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
-// NS backend: 0=off, 1=DTLN-NS (default), 2=Hush, 3=GTCRN (exp).
+std::atomic<bool>  g_nsEnabled{ true };        // noise suppression (all engines)
+// NS backend: 0=off, 1=DTLN-NS, 2=Hush, 3=GTCRN (default).
 // LocalVQE v1.4-AEC is NOT a backend: it is the 4th engine profile
 // (ENGINE_LOCALVQE) and chains into whichever backend is picked here,
 // e.g. mic -> LocalVQE -> GTCRN -> CABLE. Meaningful only
 // while g_nsEnabled; the radio sets both consistently. Global pref
 // like the tick: a profile switch never resets it.
-std::atomic<int>   g_nsBackend{ 1 };
+std::atomic<int>   g_nsBackend{ 3 };
 std::atomic<bool>  g_experimentalEngines{ false }; // show NKF-AEC / LocalVQE-AEC in the list
 // High-band splice: capture mic at 48 kHz, process the low band (0-8k)
 // through the 16 kHz engine, then splice the untouched real high band
@@ -775,7 +775,7 @@ void SaveSettings() {
        << (g_advancedOpen ? 1 : 0) << "\n"
        << 0 << "\n"  // retired: voice detector (kept for file alignment)
  << 0 << "\n"  // retired: notch flag (was custom-profile)
-        << (g_nsEnabled.load() ? 1 : 0) << "\n"    // DTLN noise reduction flag
+        << (g_nsEnabled.load() ? 1 : 0) << "\n"    // noise suppression flag (legacy DTLN name)
 << 0 << "\n"  // retired: calibrated gate open threshold
         << 0 << "\n"  // retired: calibrated gate close threshold
         << 0 << "\n"  // retired: show-legacy-engines toggle
@@ -787,7 +787,7 @@ void SaveSettings() {
       << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
-      << g_nsBackend.load() << "\n"                    // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN-exp)
+      << g_nsBackend.load() << "\n"                    // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN, exp default)
       << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (exp, default on)
       << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"; // slot 32: high-band mix (%)
 }
@@ -971,7 +971,8 @@ void LoadSettings() {
         else           g_nsEnabled.store(true);
         // Slot 30 applies here (after the tick is final): a stored
         // 0/1/2/3 wins, anything else (or a missing slot) derives from
-        // the tick so old configs keep sounding exactly as before.
+        // the tick. Missing backend + NS on = the exp default (GTCRN);
+        // old files without the slot migrate to it.
         // Stored 4 = the retired NS-radio LocalVQE slot: migrate to the
         // LocalVQE engine profile with NS off (preserves the old sound:
         // echo canceller only, no post-stage). The user can then pick
@@ -988,7 +989,7 @@ void LoadSettings() {
         } else if (nsBackendRaw >= 0 && nsBackendRaw <= 3)
             g_nsBackend.store(nsBackendRaw);
         else
-            g_nsBackend.store(g_nsEnabled.load() ? 1 : 0);
+            g_nsBackend.store(g_nsEnabled.load() ? 3 : 0);
         // Experimental engines (NKF-AEC / LocalVQE-AEC) are hidden by
         // default — only shown when the user ticks the Appearance
         // checkbox. WebRTC AEC3 is a regular profile. Older files
@@ -1034,7 +1035,7 @@ void ResetToDefaults() {
     // Post-stage pref: set the engine first, then sync (NS runs
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
-    g_nsBackend.store(1);  // DTLN-NS default backend
+    g_nsBackend.store(3);  // GTCRN default backend (exp quality pick)
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -2658,7 +2659,7 @@ void DrawAudioTab() {
     // it chains into whichever backend is picked here.
     {
         int nsb = g_nsBackend.load();
-        if (nsb < 0 || nsb > 3) nsb = 1;
+        if (nsb < 0 || nsb > 3) nsb = 3;
         int prevNsb = nsb;
         ImGui::TextUnformatted("Noise suppression");
         if (ImGui::IsItemHovered())
@@ -2670,7 +2671,7 @@ void DrawAudioTab() {
                 "Hush - best on background talkers; strongest on clicks,\n"
                 "heaviest stage (needs weya_nc.dll +\n"
                 "models/hush_16k_onnx.tar.gz).\n"
-                "GTCRN (exp) - most transparent on hiss and keyboard;\n"
+                "GTCRN - default; most transparent on hiss and keyboard;\n"
                 "weak on overlapping talkers, 16 kHz only\n"
                 "(needs models/gtcrn_simple.onnx).\n\n"
                 "All NS backends are 16 kHz. On a native 48 kHz chain\n"
@@ -2678,11 +2679,11 @@ void DrawAudioTab() {
                 "line above the devices section shows when that happens.");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
-        ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
+        ImGui::RadioButton("DTLN-NS", &nsb, 1);
         ImGui::SameLine();
         ImGui::RadioButton("Hush", &nsb, 2);
         ImGui::SameLine();
-        ImGui::RadioButton("GTCRN (exp)", &nsb, 3);
+        ImGui::RadioButton("GTCRN (default)", &nsb, 3);
         if (nsb != prevNsb) {
             g_nsBackend.store(nsb);
             g_nsEnabled.store(nsb != 0);
@@ -2696,7 +2697,7 @@ void DrawAudioTab() {
             (nsb == 0) ? "Off - no noise suppression; lowest CPU." :
             (nsb == 1) ? "DTLN-NS - cheapest stage; steady hiss only." :
             (nsb == 2) ? "Hush - background talkers; heaviest of the three." :
-                         "GTCRN (exp) - hiss + keyboard; most transparent; 16 kHz only.";
+                         "GTCRN - default; hiss + keyboard; most transparent; 16 kHz only.";
         ImGui::TextDisabled("%s", nsHint);
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.

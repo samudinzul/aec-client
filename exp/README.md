@@ -21,7 +21,7 @@ scripts never see this folder, and the two smoke tools build
 
 | Engine | Role | File | Source | License |
 |--------|------|------|--------|---------|
-| GTCRN | NS (mic-only, no ref needed) | `gtcrn_simple.onnx` ~0.5 MB | [Xiaobin-Rong/gtcrn](https://github.com/Xiaobin-Rong/gtcrn) `stream/onnx_models/` | MIT |
+| GTCRN | NS (default; mic-only, no ref needed) | `gtcrn_simple.onnx` ~0.5 MB | [Xiaobin-Rong/gtcrn](https://github.com/Xiaobin-Rong/gtcrn) `stream/onnx_models/` | MIT |
 | LocalVQE v1.4-AEC | AEC (mic + ref mandatory, echo-only) | `localvqe-v1.4-aec-200K-f32.gguf` ~3 MB | [LocalAI-io/LocalVQE](https://huggingface.co/LocalAI-io/LocalVQE) | Apache-2.0 |
 | LocalVQE v1.4-AEC | same, portable ONNX mask | `LocalVQEAECResidualMask.onnx` ~1 MB + `LocalVQEAECFrontend.json` | [soniqo/LocalVQE-v1.4-AEC-200K-ONNX-FP32](https://huggingface.co/soniqo/LocalVQE-v1.4-AEC-200K-ONNX-FP32) | Apache-2.0 |
 
@@ -43,7 +43,7 @@ Key contracts (from the model cards — read before touching the wrappers):
 
 ## Status
 
-- **GTCRN: V1 neural path live.** `GtcrnProcess` runs sqrt-Hann STFT →
+- **GTCRN: default NS backend (V1 neural path live).** `GtcrnProcess` runs sqrt-Hann STFT →
   `Run(mix + carried caches)` → ISTFT overlap-add per 256-sample hop
   (reference: sherpa-onnx `offline-speech-denoiser-gtcrn-impl.h`).
   Expect on the synth clip: hiss sections drop, voice bursts stay near
