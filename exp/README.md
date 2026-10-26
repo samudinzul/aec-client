@@ -81,8 +81,9 @@ Key contracts (from the model cards — read before touching the wrappers):
   replaced by a 193-tap linear-phase FIR pair: flat to 7.5 kHz, aliases −76 dB,
   images −55 dB, group delay exactly 32 @16 kHz per direction. The
   loopback reference is delayed by the same 32 samples. The high-band
-  mix is a live slider (0–100%, fresh default 70%, config slot 32,
-  gen 10+), so the cleaner low band can be paired with more air. Turning the
+  mix is a live slider (0–100%, fresh default 100% — the confirmed
+  natural chain; config slot 32, gen 10+), so the cleaner low band can
+  be paired with more air or pulled back if hiss bothers. Turning the
   splice off returns to the native chain rate — 48 kHz for Off/AEC3
   with NS off, 16 kHz when NS must run. `resampler_test`
   covers the DSP offline.

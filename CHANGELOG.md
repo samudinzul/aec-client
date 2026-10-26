@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   splice, automatic 48 kHz output, and LocalVQE stay desktop-only.
   Web changes are limited to security, compatibility, and release
   mechanics. The desktop app is the quality path.
+- **High-band mix defaults to 100% (exp).** Fresh configs, missing
+  slot 32, and Reset now start at full real-high-band level — the
+  confirmed natural chain (DTLN-AEC + 48 kHz splice at 100%). Stored
+  per-user values still win.
 - **Signing guidance corrected.** SignPath Foundation is the
   realistic free route for this MIT/public/released OSS project;
   Microsoft's Azure Artifact Signing is not available to

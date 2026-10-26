@@ -84,11 +84,11 @@ own 48->16 resampler contributes ~1 sample on the ref side).
 Cost: ~193 MAC per output sample per direction, well under 1% of a
 core at 16 kHz.
 
-The high-band mix is now a live UI slider (0-100%, default 70% after
-the FIR resampler; 50% = the original balance, config slot 32 / gen 10).
-The cleaner low band no longer droops at the crossover, so 70-100% is
-usable for more air; lower it if raw-top hiss or click residue bothers
-you. The slider applies without a restart.
+The high-band mix is now a live UI slider (0-100%, fresh default 100%
+after the FIR resampler; 50% = the original balance, config slot 32 /
+gen 10). The cleaner low band no longer droops at the crossover, so
+70-100% is usable for more air; lower it if raw-top hiss or click
+residue bothers you. The slider applies without a restart.
 
 Verification: `resampler_test` (desktop console target) checks DC
 gain, linear phase, passband, aliases/images, exact group delay,

@@ -250,9 +250,10 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show NKF-AEC / LocalVQE-AE
 std::atomic<bool>  g_highbandEnabled{ true };
 // High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
 // is a taste knob, not a fixed law. 0.5 = the original splice level;
-// after the FIR resampler fix the low band is flat to 7.5 kHz, so 0.7
-// is the better default and 0.7-1.0 gives more air.
-std::atomic<float> g_hbMix{ 0.7f };
+// after the FIR resampler fix the low band is flat to 7.5 kHz, so
+// 0.7-1.0 gives more air. Fresh configs default to 100% — the
+// confirmed natural chain is DTLN-AEC + splice at full high band.
+std::atomic<float> g_hbMix{ 1.0f };
 SpscRing<4096>     g_micRing48;
 // (the high-band gate depth is internal to the NS module)
 std::atomic<float> g_hbRatioDb{ 0.0f };  // diagnostics: the VAD level (dBFS)
@@ -920,9 +921,9 @@ void LoadSettings() {
         int hbRaw = 1;
         if (f >> hbRaw) g_highbandEnabled.store(hbRaw != 0);
         // Slot 32 (gen10): high-band mix (%). Old files miss it —
-        // default 70% after the FIR resampler; 50% was the original
-        // splice balance.
-        int hbMixRaw = 70;
+        // default 100% (the confirmed natural chain); 50% was the
+        // original splice balance.
+        int hbMixRaw = 100;
         if (f >> hbMixRaw) {
             if (hbMixRaw < 0) hbMixRaw = 0;
             if (hbMixRaw > 100) hbMixRaw = 100;
@@ -1059,9 +1060,10 @@ void ResetToDefaults() {
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
     g_nsBackend.store(3);  // GTCRN default backend (exp quality pick)
-    // Fresh default is 48 kHz output (splice ON). Keep the mix taste
-    // knob as-is; only the output path is restored.
+    // Fresh default is 48 kHz output (splice ON) at full high band —
+    // the confirmed natural chain.
     g_highbandEnabled.store(true);
+    g_hbMix.store(1.0f);
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -2811,9 +2813,9 @@ void DrawAudioTab() {
                 ImGui::SetTooltip(
                     "Level of the real 8-24 kHz band relative to the\n"
                     "processed low band. 50%% is the original splice balance;\n"
-                    "70%% is the default after the cleaner FIR resampler.\n"
-                    "Raise it if the top still sounds dull; lower it if hiss\n"
-                    "or click residue bothers you. Applies live.");
+                    "100%% is the default quality path after the cleaner FIR\n"
+                    "resampler. Lower it if hiss or click residue bothers\n"
+                    "you. Applies live.");
             ImGui::Unindent();
         }
         if (g_isRunning && g_highbandEnabled.load())
