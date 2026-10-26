@@ -13,6 +13,8 @@ scripts never see this folder, and the two smoke tools build
 | `probe.py` | Dumps ONNX input/output names + shapes (run on the Windows box: `python exp/probe.py exp/models/<file>.onnx`) |
 | `gtcrn/` | GTCRN NS wrapper (`Gtcrn*` C ABI, mirrors `src/hush_wrapper.h`) + `gtcrn_smoke` WAV harness |
 | `localvqe/` | LocalVQE v1.4-AEC wrapper (`LocalVqe*` C ABI) + `localvqe_smoke` WAV harness |
+| `resampler.h` | 193-tap linear-phase 48<->16 kHz polyphase FIR pair for the high-band splice |
+| `resampler_test.cpp` | Offline DSP check for `resampler.h` (`resampler_test`, `EXCLUDE_FROM_ALL`) |
 | `models/` | Downloaded weights (gitignored, never committed) |
 
 ## Models (all 16 kHz mono, all CPU-realtime)
@@ -60,6 +62,15 @@ Key contracts (from the model cards — read before touching the wrappers):
   keyboard click: click −14.2 dB, hiss −8.9 dB (−41.6 dB with the
   VAD), voice −1 to −3 dB. Design + all measurements (including the
   rejected alternatives): `exp/HB_NS_DESIGN.md`.
+- **Splice resamplers: fixed.** The old 3-tap decimator (12 kHz folded
+  to 4 kHz at only −9.5 dB, −3.5 dB droop at 8 kHz) and linear
+  upsampler (7 kHz mirrored to 9 kHz at −4 dB, top droop −6 dB) are
+  replaced by a 193-tap linear-phase FIR pair: flat to 7.5 kHz, aliases −76 dB,
+  images −55 dB, group delay exactly 32 @16 kHz per direction. The
+  loopback reference is delayed by the same 32 samples. The high-band
+  mix is a live slider (0–100%, default 50%, config slot 32/gen 10),
+  so the cleaner low band can be paired with more air. `resampler_test`
+  covers the DSP offline.
 
 ## Usage (MSYS2 UCRT64, from repo root)
 
@@ -70,6 +81,7 @@ cmake -B build -G Ninja && cmake --build build --target gtcrn_smoke localvqe_smo
 build/gtcrn_smoke.exe mic.wav out.wav
 build/localvqe_smoke.exe mic.wav ref.wav out.wav
 build/gtcrn_smoke.exe --synth 5 out.wav   # no WAVs needed
+cmake --build build --target resampler_test && build/resampler_test.exe
 ```
 
 WAVs must be 16 kHz mono int16. Both tools never mute: missing/broken model

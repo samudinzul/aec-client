@@ -62,6 +62,42 @@ generator, not white noise.)
    0-8 kHz burst is only ~13 dB above the speech, so the transient is
    masked by the voice it rides on.
 
+## 48 <-> 16 kHz resamplers (fixed)
+The splice originally used a 3-tap boxcar downsampler and linear
+interpolation upsampler. Both were measurably wrong:
+
+| metric | old | new (193-tap Kaiser FIR) |
+|---|---|---|
+| 48->16 passband | -1.9 dB @6 kHz, -3.5 dB @8 kHz | flat to 7.5 kHz (<0.1 dB) |
+| 48->16 alias | 12 kHz -> 4 kHz at -9.5 dB | -76 dB |
+| 16->48 image | 7 kHz -> 9 kHz at -4 dB; -6.1 dB droop at 7.5 kHz | -55 dB (7.5 -> 8.5 kHz) |
+| group delay | 1 / 0.5 samples | 96 @48k = 32 @16k each |
+
+Design: one symmetric 193-tap prototype, cutoff 8 kHz at 48 kHz,
+Kaiser beta 5.65326 (~60 dB), DC-normalized. Decimation runs it
+directly; interpolation splits it into three phases and scales by 3.
+The output grid starts at input sample 0, so the group delay is
+exactly 96 @48 kHz per direction. The high-band delay line therefore
+adds `2 * 96` samples, and the loopback reference is delayed by 32
+samples @16 kHz so the AEC still sees mic and ref aligned (miniaudio's
+own 48->16 resampler contributes ~1 sample on the ref side).
+Cost: ~193 MAC per output sample per direction, well under 1% of a
+core at 16 kHz.
+
+The high-band mix is now a live UI slider (0-100%, default 50% = the
+original balance, config slot 32 / gen 10). The cleaner low band no
+longer droops at the crossover, so 70-100% is usable for more air;
+lower it if raw-top hiss or click residue bothers you. The slider
+applies without a restart.
+
+Verification: `resampler_test` (desktop console target) checks DC
+gain, linear phase, passband, aliases/images, exact group delay,
+block/one-shot state continuity (including a 480+1 split frame), and
+the full 16->48->16 round trip. `ALL PASS` with g++ -O2 on the Linux
+host; on Windows:
+`cmake --build build --target resampler_test` then
+`build/resampler_test.exe`.
+
 ## Latency (measured with web/dtln.py, web/aec3.py, web/nkf.py,
 ## cross-correlation against a 4 ms burst, 16 kHz samples)
   DTLN-AEC 480 | AEC3 128 | NKF 480 | DTLN-NS 896

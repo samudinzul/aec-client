@@ -503,4 +503,17 @@ foreach(_lv exp/models/LocalVQEAECResidualMask.onnx
     endif()
 endforeach()
 
+# Offline DSP check for the high-band splice resampler pair
+# (exp/resampler.h). No models, no audio device, no ONNX Runtime:
+# pure C++, exits non-zero on failure.
+# Build: cmake --build build --target resampler_test
+# Run:   build/resampler_test.exe
+add_executable(resampler_test EXCLUDE_FROM_ALL
+    exp/resampler_test.cpp
+)
+
+target_include_directories(resampler_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/exp
+)
+
 

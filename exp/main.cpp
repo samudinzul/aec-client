@@ -41,6 +41,7 @@
 #include "gtcrn_wrapper.h"
 #include "localvqe_wrapper.h"
 #include "pocketfft_hdronly.h"
+#include "resampler.h"
 
 #include <cstdio>
 #include <cmath>
@@ -245,6 +246,10 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC
 // through the 16 kHz engine, then splice the untouched real high band
 // (8-24k) from the original 48 kHz mic onto the upsampled output.
 std::atomic<bool>  g_highbandEnabled{ false };
+// High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
+// is a taste knob, not a fixed law. 0.5 = the original splice level;
+// after the resampler fix try 0.7-1.0 for a flatter 8 kHz crossover.
+std::atomic<float> g_hbMix{ 0.5f };
 SpscRing<4096>     g_micRing48;
 // (the high-band gate depth is internal to the NS module)
 std::atomic<float> g_hbRatioDb{ 0.0f };  // diagnostics: the VAD level (dBFS)
@@ -773,14 +778,15 @@ void SaveSettings() {
         << 0 << "\n"  // retired: show-legacy-engines toggle
         << (g_experimentalEngines.load() ? 1 : 0) << "\n"  // experimental engines flag
        << 0 << "\n"  // retired: nuked DEC-toggle slot
-       << 9 << "\n"  // config gen (9: WPE/notch removed, NS on all engines)
+       << 10 << "\n"  // config gen (10: high-band mix slot 32)
       << 0 << "\n"  // retired: NKF WPE dereverb (kept for file alignment)
       << (int)(g_soundboardGain.load() * 100) << "\n"   // soundboard gain (%)
       << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
       << g_nsBackend.load() << "\n"                    // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN-exp)
-      << (g_highbandEnabled.load() ? 1 : 0) << "\n";   // slot 31: high-band splice (exp, default off)
+      << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (exp, default off)
+      << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"; // slot 32: high-band mix (%)
 }
 
 void LoadSettings() {
@@ -892,6 +898,14 @@ void LoadSettings() {
         // default OFF.
         int hbRaw = 0;
         if (f >> hbRaw) g_highbandEnabled.store(hbRaw != 0);
+        // Slot 32 (gen10): high-band mix (%). Old files miss it —
+        // default 50% preserves the original splice balance.
+        int hbMixRaw = 50;
+        if (f >> hbMixRaw) {
+            if (hbMixRaw < 0) hbMixRaw = 0;
+            if (hbMixRaw > 100) hbMixRaw = 100;
+            g_hbMix.store(hbMixRaw / 100.0f);
+        }
         // "High Quality" was cut: generation-1 indices slide down
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
@@ -1232,7 +1246,8 @@ static const double HB_GAIN_ORDER = 1.2;   // Wiener gain exponent
 static const double HB_G_MIN      = 0.10;  // gain floor (-20 dB)
 static const double HB_NOISE_UP   = 0.995; // noise tracker: slow rise
 static const double HB_NOISE_DOWN = 0.70;  // noise tracker: fast fall
-static const float  HB_MIX        = 0.5f;  // high band mix gain vs the low band
+// The high-band mix is a live user knob (g_hbMix), not a constant:
+// it trades air against the raw top's hiss/click residue.
 // The high band is closed entirely while the 16 kHz chain's post-NS
 // output says "no voice": that kills hiss, and a click typed between
 // words, with no cost to speech.
@@ -1434,11 +1449,37 @@ static HbDelay g_hbDelay;
 static std::atomic<int> g_hbDelaySamples{ 0 };  // high band delay, 48 kHz samples
 
 // High-band VAD gain (the ramped gate the splice applies while the
-// 16 kHz chain says "no voice") + the 48k -> 16k decimator phase (the
-// device may deliver a frame count that is not a multiple of 3).
-static float   g_hbVadGain = 1.0f;
-static int16_t g_decAcc[3];
-static int     g_decAccLen = 0;
+// 16 kHz chain says "no voice").
+static float g_hbVadGain = 1.0f;
+
+// 3:1 resampler state (exp/resampler.h). The old 3-tap boxcar/linear
+// pair is gone: it drooped -3.5 dB at 8 kHz and folded 12 kHz back to
+// 4 kHz at -9.5 dB. The FIR pair is flat to 7.5 kHz with -76 dB
+// aliases and -55 dB images. State is reset on every Start.
+static rs::Down3 g_down3;
+static rs::Up3   g_up3;
+
+// The decimator delays the mic by 32 samples @16k relative to the
+// loopback ref. Delay the ref by the same amount so the AEC still sees
+// the two aligned (only in splice mode; the 16 kHz path resamples both
+// through miniaudio, which keeps them matched).
+constexpr int REF_DELAY16 = rs::kHalf / 3;   // 32
+static int16_t g_refDelayBuf[REF_DELAY16];
+static int     g_refDelayPos = 0;
+
+static void RefDelayReset() {
+    memset(g_refDelayBuf, 0, sizeof(g_refDelayBuf));
+    g_refDelayPos = 0;
+}
+
+static void RefDelayProcess(int16_t* x, int n) {
+    for (int i = 0; i < n; ++i) {
+        const int16_t d = g_refDelayBuf[g_refDelayPos];
+        g_refDelayBuf[g_refDelayPos] = x[i];
+        if (++g_refDelayPos == REF_DELAY16) g_refDelayPos = 0;
+        x[i] = d;
+    }
+}
 
 
 void ReinitEngine() {
@@ -1535,17 +1576,22 @@ void ReinitEngine() {
     g_hbDelay.reset();       // high band delay line: fresh every Start
     HbNsInit(g_hbNs);         // high-band NS: fresh state every Start
     g_hbVadGain = 1.0f;       // high-band VAD: open every Start
+    g_down3.reset();          // 48 -> 16 kHz FIR: fresh every Start
+    g_up3.reset();            // 16 -> 48 kHz FIR: fresh every Start
+    RefDelayReset();          // ref delay matching the decimator
     // High-band delay: the chain's algorithmic latency (AEC + NS), so
     // the spliced high band lands on the same instant as the processed
     // low band. In 48 kHz samples (the chain runs at 16 kHz).
     // The high-band NS has its own 256-sample STFT latency, so the
     // delay line is that much shorter: the spliced high band then
     // lands on the same instant as the processed low band.
+    // The two 3:1 FIRs add 96 samples each @48 kHz (group delay), so
+    // the high band must wait for them too.
     int hbDelay = (AecLatency16(g_engine.type) +
-                   NsLatency16(g_nsBackend.load())) * 3 - 256;
+                   NsLatency16(g_nsBackend.load())) * 3 - 256 +
+                  2 * rs::kHalf;
     if (hbDelay < 0) hbDelay = 0;
     g_hbDelaySamples.store(hbDelay);
-    g_decAccLen = 0;       // 48 kHz -> 16 kHz decimator phase
 }
 
 // Soft limiter for the final gain stage: linear to -3 dBFS, tanh knee
@@ -1585,24 +1631,15 @@ void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     const int16_t* in = (const int16_t*)pInput;
     if (g_highbandEnabled.load()) {
         // Capture is 48 kHz here: store the raw high band, then
-        // downsample (3:1 with a 3-tap anti-alias) for the 16 kHz engine.
+        // downsample 3:1 through the linear-phase FIR for the 16 kHz
+        // engine (flat to 7.5 kHz, aliases below -76 dB). The phase
+        // carries over between callbacks, so a frame count that is not
+        // a multiple of 3 cannot shift the output grid.
         g_micRing48.write(in, frameCount);
-        // The 48 kHz -> 16 kHz ratio is exact, but a device may deliver
-        // a frame count that is not a multiple of 3, so the decimation
-        // phase carries over between callbacks.
         static int16_t ds[2048];
-        int dsLen = 0;
-        for (ma_uint32 i = 0; i < frameCount && dsLen < 2048; i++) {
-            g_decAcc[g_decAccLen++] = in[i];
-            if (g_decAccLen == 3) {
-                ds[dsLen++] = (int16_t)(((int)g_decAcc[0] + g_decAcc[1] +
-                                         g_decAcc[2]) / 3);
-                g_decAccLen = 0;
-            }
-        }
+        const int dsLen = g_down3.process(in, (int)frameCount, ds, 2048);
         if (dsLen > 0) g_micRing.write(ds, dsLen);
     } else {
-        g_decAccLen = 0;  // resync the phase if the mode was toggled
         g_micRing.write(in, frameCount);
     }
 }
@@ -1679,6 +1716,12 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         memset(refFrame, 0, fs * sizeof(int16_t));  // speakers idle: silent ref
     else
         g_refRing.read(refFrame, fs);
+    // In splice mode the mic reaches the engine through our FIR (32
+    // samples @16k of delay) while the loopback reference reaches it
+    // through miniaudio's resampler (~1 sample). Delay the reference
+    // to match, or the AEC sees a ~2 ms offset.
+    if (hb)
+        RefDelayProcess(refFrame, fs);
 
     if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
         Aec3CancelEcho(g_engine.aec3, micFrame, refFrame, cleanedFrame, fs);
@@ -1797,18 +1840,12 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         // High-band splice: 16 kHz chain output (processed lows) upsampled
         // to 48 kHz, plus the real high band (8-24 kHz) cut from the
         // original 48 kHz mic. Real highs, not synthesized.
-        float nvIn[MAX_FRAME_SIZE];
         float nvOut[MAX_FRAME_SIZE];
-        for (int i = 0; i < fs; i++)
-            nvIn[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        // Linear 3x upsample of the processed low band (0-8 kHz).
-        for (int i = 0; i < fsOut; i++) {
-            float t = (float)i / 3.0f;
-            int a = (int)floorf(t);
-            if (a >= fs - 1) a = fs - 2;
-            float frac = t - (float)a;
-            nvOut[i] = nvIn[a] * (1.0f - frac) + nvIn[a+1] * frac;
-        }
+        // Linear-phase 3x FIR upsample of the processed low band
+        // (0-8 kHz): flat to 7.5 kHz, images below -55 dB. (The old
+        // linear interpolation mirrored 7 kHz to 9 kHz at -4 dB and
+        // drooped the top of the low band by >6 dB.)
+        g_up3.process(cleanedFrame, fs, nvOut);
         // --- high band, delayed to land on the processed low band -----
         // The chain delays its output (AEC + NS latency), so the raw
         // 48 kHz mic is AHEAD of the low band by that much. Read the
@@ -1861,8 +1898,12 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         FeedMonitor(sbBuf, fsOut);
         const float sbGain = g_soundboardGain.load() * g_outputGain.load();
         float gain = g_micGain.load() * g_outputGain.load();
+        // The high band is raw mic, so its level is taste, not a fixed
+        // law: g_hbMix lets the user trade air against hiss/click
+        // residue. 50% preserves the original splice balance.
+        const float hbMix = g_hbMix.load();
         for (int i = 0; i < fsOut; i++)
-            out[i] = SoftLimit((nvOut[i] + high[i] * HB_MIX) * gain + sbBuf[i] * sbGain);
+            out[i] = SoftLimit((nvOut[i] + high[i] * hbMix) * gain + sbBuf[i] * sbGain);
     } else {
         MixSoundboard(sbBuf, fs, g_sampleRate.load());
         FeedMonitor(sbBuf, fs);
@@ -2685,10 +2726,34 @@ void DrawAudioTab() {
                 "click -11 dB, hiss -9 dB, voice -1 dB.\n\n"
                 "The high band is also gated off entirely while the 16 kHz\n"
                 "chain says 'no voice' — that removes hiss and clicks typed\n"
-                "between words.");
+                "between words.\n\n"
+                "48<->16 kHz uses a 193-tap linear-phase FIR pair: flat to\n"
+                "7.5 kHz, aliases below -76 dB, images below -55 dB. The old\n"
+                "3-tap/linear pair drooped -3.5 dB at 8 kHz and mirrored the\n"
+                "low band's top into the air band.");
+        // High-band mix: the top band is raw mic, so its level is a
+        // taste knob, not a fixed law. 50% preserves the old balance;
+        // the cleaner resampler makes 70-100% usable for more air.
+        if (g_highbandEnabled.load()) {
+            ImGui::Indent();
+            float mixPct = g_hbMix.load() * 100.0f;
+            ImGui::SetNextItemWidth(180.0f);
+            if (ImGui::SliderFloat("High-band mix", &mixPct, 0.0f, 100.0f, "%.0f%%"))
+                g_hbMix.store(mixPct / 100.0f);
+            if (ImGui::IsItemDeactivatedAfterEdit()) SaveSettings();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Level of the real 8-24 kHz band relative to the\n"
+                    "processed low band. 50%% is the original splice balance.\n"
+                    "Raise it if the top sounds dull after the cleaner\n"
+                    "resampler; lower it if hiss or click residue bothers\n"
+                    "you. Applies live.");
+            ImGui::Unindent();
+        }
         if (g_isRunning && g_highbandEnabled.load())
-            ImGui::TextDisabled("HiBand: VAD level %.1f dBFS, delay %d smp",
-                (double)g_hbRatioDb.load(), g_hbDelaySamples.load());
+            ImGui::TextDisabled("HiBand: VAD level %.1f dBFS, delay %d smp, mix %.0f%%",
+                (double)g_hbRatioDb.load(), g_hbDelaySamples.load(),
+                (double)(g_hbMix.load() * 100.0f));
     }
 
     // ---- chain summary (single source of truth for the full path) ----
@@ -3250,6 +3315,10 @@ int main(int, char**) {
     // at file scope above main().)
     std::set_terminate(CrashOnTerminate);
     SetUnhandledExceptionFilter(CrashOnUnhandledException);
+
+    // High-band resampler prototype: pure computation, no allocation.
+    // Must run before any audio device starts (ReinitEngine uses it).
+    rs::Init();
 
     if (!glfwInit()) return 1;
     const char* glslVersion = "#version 130";
