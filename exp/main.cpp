@@ -241,7 +241,7 @@ std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engi
 // while g_nsEnabled; the radio sets both consistently. Global pref
 // like the tick: a profile switch never resets it.
 std::atomic<int>   g_nsBackend{ 1 };
-std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC / LocalVQE-AEC in the list
+std::atomic<bool>  g_experimentalEngines{ false }; // show NKF-AEC / LocalVQE-AEC in the list
 // High-band splice: capture mic at 48 kHz, process the low band (0-8k)
 // through the 16 kHz engine, then splice the untouched real high band
 // (8-24k) from the original 48 kHz mic onto the upsampled output.
@@ -866,7 +866,7 @@ void LoadSettings() {
         int le_skip = 0;
         if (f >> le_skip) { (void)le_skip; }
         // Slot 19: experimental engines flag (gen8+); older files don't
-        // carry it — default OFF (DTLN only), per the release notes.
+        // carry it — default OFF (NKF-AEC / LocalVQE-AEC hidden).
         int expRaw = 0;
         if (f >> expRaw) { (void)expRaw; }
         // (Retired field: nuked DEC-toggle slot, always 0. Read to keep
@@ -985,15 +985,16 @@ void LoadSettings() {
             g_nsBackend.store(nsBackendRaw);
         else
             g_nsBackend.store(g_nsEnabled.load() ? 1 : 0);
-        // Experimental engines (WebRTC AEC3 / NKF-AEC / LocalVQE-AEC) are
-        // hidden by default — only shown when the user ticks the
-        // Appearance checkbox. Older files default OFF (DTLN only).
+        // Experimental engines (NKF-AEC / LocalVQE-AEC) are hidden by
+        // default — only shown when the user ticks the Appearance
+        // checkbox. WebRTC AEC3 is a regular profile. Older files
+        // default OFF.
         if (pgen >= 8) g_experimentalEngines.store(expRaw != 0);
         else           g_experimentalEngines.store(false);
         // If the persisted engine is hidden, fall back to DTLN so the
         // selection can't be left on an engine that isn't in the list.
         if (!g_experimentalEngines.load() &&
-            (g_engineIndex == ENGINE_AEC3 || g_engineIndex == ENGINE_NKF ||
+            (g_engineIndex == ENGINE_NKF ||
              g_engineIndex == ENGINE_LOCALVQE)) {
             g_engineIndex = ENGINE_DTLN;
             g_selectedEngine.store(ENGINE_DTLN);
@@ -2605,9 +2606,14 @@ void DrawAudioTab() {
             "Echo engine selection (applies immediately):\n"
             "Off - no echo cancellation; at 16 kHz the mic passes\n"
             "straight to the noise-suppression stage (denoise-only).\n"
-            "DTLN-AEC 128 - default; best echo + reverb handling, no post filter.\n"
-            "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
-            "NKF-AEC - weak CPUs, still full cleanup.\n"
+            "Best for sealed earphones/headsets: no echo path, zero CPU.\n"
+            "DTLN-AEC 128 - default; best double-talk and loudspeaker\n"
+            "quality. Use it for leaky earphones too.\n"
+            "WebRTC AEC3 - lowest-CPU canceller; strongest on echo-only,\n"
+            "but weaker in double-talk and avoid it for sealed earphones\n"
+            "(an active reference with no echo path damages the near-end).\n"
+            "NKF-AEC (exp) - legacy low-spec fallback; not competitive in\n"
+            "the offline harness.\n"
             "LocalVQE v1.4-AEC (exp) - neural echo canceller, 16 kHz only\n"
             "(needs the exp/models/LocalVQE* bundle); chains into the NS\n"
             "backend below, e.g. LocalVQE -> GTCRN.\n"
@@ -2620,12 +2626,11 @@ void DrawAudioTab() {
         int i = ENGINE_RADIO_ORDER[r];
         std::string label = PROFILES[i].name;
         bool sel = (g_profileIndex == i);
-        // Experimental engines (WebRTC AEC3 / NKF-AEC / LocalVQE-AEC)
-        // are hidden unless the user ticked the Appearance checkbox —
-        // the default is DTLN only. Off and DTLN always show.
+        // Experimental engines (NKF-AEC / LocalVQE-AEC) are hidden
+        // unless the user ticked the Appearance checkbox — WebRTC AEC3
+        // is a regular profile. Off, DTLN and AEC3 always show.
         if (!g_experimentalEngines.load() &&
-            ((EngineType)PROFILES[i].engine == ENGINE_AEC3 ||
-             (EngineType)PROFILES[i].engine == ENGINE_NKF ||
+            ((EngineType)PROFILES[i].engine == ENGINE_NKF ||
              (EngineType)PROFILES[i].engine == ENGINE_LOCALVQE)) continue;
         if (!firstVisible) ImGui::SameLine();
         firstVisible = false;
@@ -2635,6 +2640,11 @@ void DrawAudioTab() {
             if (wasRunning) { StopAEC(); StartAEC(); }
         }
     }
+
+    // Use-case guidance from the AEC harness: the radios stay names-only.
+    ImGui::TextDisabled(
+        "Loudspeaker: DTLN-AEC  |  sealed earphone/headset: Off  |  "
+        "leaky earphone: DTLN-AEC");
 
     // Post stage: NS backend radio for every engine (Off / DTLN-NS /
     // Hush / GTCRN-exp). Live restart on switch (same path as switching
@@ -2880,16 +2890,15 @@ void DrawAppearanceTab() {
         ImGui::TextDisabled("Right-click the tray icon to Exit the app.");
     }
 
-    // Experimental engines: WebRTC AEC3, NKF-AEC and LocalVQE-AEC are
-    // hidden from the profile list by default (Off and DTLN are all
-    // most users need). Tick this to show them — unticking falls back
-    // to DTLN only if the selection is one of the hidden engines.
+    // Experimental engines: NKF-AEC and LocalVQE-AEC are hidden from the
+    // profile list by default. WebRTC AEC3 is a regular profile. Tick
+    // this to show the experimental pair — unticking falls back to DTLN
+    // only if the selection is one of the hidden engines.
     bool exp = g_experimentalEngines.load();
-    if ( ImGui::Checkbox("Show experimental engines (WebRTC AEC3, NKF-AEC, LocalVQE-AEC)", &exp)) {
+    if ( ImGui::Checkbox("Show experimental engines (NKF-AEC, LocalVQE-AEC)", &exp)) {
         g_experimentalEngines.store(exp);
         if (!exp &&
-            (PROFILES[g_profileIndex].engine == ENGINE_AEC3 ||
-             PROFILES[g_profileIndex].engine == ENGINE_NKF ||
+            (PROFILES[g_profileIndex].engine == ENGINE_NKF ||
              PROFILES[g_profileIndex].engine == ENGINE_LOCALVQE)) {
             // Hiding them: fall back to DTLN so the selection can't be
             // left on an engine that is no longer in the list.
@@ -2903,9 +2912,10 @@ void DrawAppearanceTab() {
     }
     if ( ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Off (default): the profile list shows Off and DTLN-AEC 128 only.\n"
-            "On: also shows WebRTC AEC3, NKF-AEC and LocalVQE v1.4-AEC.\n"
-            "These are real engines but less tested than the default -\n"
+            "Off (default): the profile list shows Off, DTLN-AEC 128 and\n"
+            "WebRTC AEC3.\n"
+            "On: also shows NKF-AEC and LocalVQE v1.4-AEC.\n"
+            "Those two are real engines but less tested than the default -\n"
             "untick to hide them (falls back to DTLN if one is selected).\n"
             "LocalVQE chains into the NS backend (Off / DTLN-NS / Hush /\n"
             "GTCRN), e.g. mic -> LocalVQE -> GTCRN; 16 kHz only and it\n"
@@ -3094,7 +3104,7 @@ void DrawAboutTab() {
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Four processing profiles (DTLN / WebRTC AEC3 / NKF-AEC / LocalVQE-AEC-exp)");
+    ImGui::BulletText("Five processing profiles (Off / DTLN / WebRTC AEC3 / NKF-AEC / LocalVQE-AEC-exp)");
     ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN-exp)");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
