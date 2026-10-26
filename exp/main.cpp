@@ -40,7 +40,6 @@
 #include "hush_wrapper.h"
 #include "gtcrn_wrapper.h"
 #include "localvqe_wrapper.h"
-#include "novasr_wrapper.h"
 #include "pocketfft_hdronly.h"
 
 #include <cstdio>
@@ -177,7 +176,6 @@ struct EngineState {
     HushHandle* hush = nullptr;   // Hush NS backend (all engines, 16 kHz)
     GtcrnHandle* gtcrn = nullptr;  // GTCRN NS backend, experimental (all engines, 16 kHz)
     LocalVqeHandle* localvqe = nullptr;  // LocalVQE v1.4-AEC, experimental (echo canceller)
-    NovasrHandle* novasr = nullptr;  // NovaSR 48 kHz tail, experimental (chain stays 16 kHz)
 };
 
 // ============================================================
@@ -234,11 +232,6 @@ std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engi
 // like the tick: a profile switch never resets it.
 std::atomic<int>   g_nsBackend{ 1 };
 std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC / LocalVQE-AEC in the list
-// NovaSR 48 kHz tail (exp only): chain stays 16 kHz (all models are
-// 16 kHz), output + monitor devices run 48 kHz through the baked
-// NovaSR graph. Off by default; fail-closed at Start when ticked
-// without the staged model. Global pref like the NS backend.
-std::atomic<bool>  g_novasrEnabled{ false };
 // High-band splice: capture mic at 48 kHz, process the low band (0-8k)
 // through the 16 kHz engine, then splice the untouched real high band
 // (8-24k) from the original 48 kHz mic onto the upsampled output.
@@ -246,7 +239,6 @@ std::atomic<bool>  g_highbandEnabled{ false };
 SpscRing<4096>     g_micRing48;
 // (the high-band gate depth is internal to the NS module)
 std::atomic<float> g_hbRatioDb{ 0.0f };  // diagnostics: the VAD level (dBFS)
-std::atomic<float> g_novaMs{ 0.0f };  // NovaSR inference ms EMA (audio thread writes, UI reads)
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -284,14 +276,13 @@ static inline int16_t clamp_s16(int v) {
 }
 static inline int frameSizeForRate(int sr) { return sr / 100; }
 
-// Output-device rate: 48 kHz while the NovaSR tail is live (chain stays
-// 16 kHz — only the tail upsamples), else the chain rate. Read at
-// Start/device-open and per output tick; the toggle restarts the
-// stream, so it never changes mid-callback.
+// Output-device rate: 48 kHz while the high-band splice is live
+// (chain stays at the chain rate — only the splice upsamples to 48 kHz),
+// else the chain rate. Read at Start/device-open and per output tick;
+// the toggle restarts the stream, so it never changes mid-callback.
 static inline int OutRate() {
     if (g_highbandEnabled.load()) return 48000;
-    return (g_novasrEnabled.load() && g_engine.novasr &&
-            NovasrReady(g_engine.novasr)) ? 48000 : g_sampleRate.load();
+    return g_sampleRate.load();
 }
 
 std::string FormatUptime() {
@@ -780,8 +771,7 @@ void SaveSettings() {
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
       << g_nsBackend.load() << "\n"                    // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN-exp)
-      << (g_novasrEnabled.load() ? 1 : 0) << "\n"      // slot 31: NovaSR 48 kHz tail (exp, default off)
-      << (g_highbandEnabled.load() ? 1 : 0) << "\n";   // slot 32: high-band splice (exp, default off)
+      << (g_highbandEnabled.load() ? 1 : 0) << "\n";   // slot 31: high-band splice (exp, default off)
 }
 
 void LoadSettings() {
@@ -887,11 +877,7 @@ void LoadSettings() {
         // it; validated at apply time below, -1 = absent).
         int nsBackendRaw = -1;
         if (f >> nsBackendRaw) { (void)nsBackendRaw; }
-        // Slot 31: NovaSR 48 kHz tail (exp). Old files miss it —
-        // default OFF (DTLN-only chain behavior unchanged).
-        int novaRaw = 0;
-        if (f >> novaRaw) g_novasrEnabled.store(novaRaw != 0);
-        // Slot 32: high-band splice (exp). Old files miss it —
+        // Slot 31: high-band splice (exp). Old files miss it —
         // default OFF.
         int hbRaw = 0;
         if (f >> hbRaw) g_highbandEnabled.store(hbRaw != 0);
@@ -1078,10 +1064,9 @@ void ApplyProfile(int idx) {
 // ============================================================
 // Voice-path hygiene (mirrors src/main.cpp + web/chain.py — same
 // math, same order, same constants; pinned three-way by test_parity
-// --constants). The exp pump runs them post-NS, pre-meter, ahead of
-// the NovaSR tail: clean in-band first, synthesized air last. Rate-
+// --constants). The exp pump runs them post-NS, pre-meter. Rate-
 // generic (init follows the chain rate: 16 kHz under the neural
-// engines/tail, 48 kHz on the native AEC3 path).
+// engines, 48 kHz on the native AEC3 path).
 // High-pass filter for the voice path: 2nd-order Butterworth
 // (RBJ cookbook), 80 Hz, Q = 1/sqrt(2). Cuts what denoisers leave
 // in the basement — mains hum, room rumble, mic thumps, DC offset —
@@ -1455,16 +1440,13 @@ void ReinitEngine() {
         LocalVqeDestroy(g_engine.localvqe);
         g_engine.localvqe = nullptr;
     }
-    if (g_engine.novasr) { NovasrDestroy(g_engine.novasr); g_engine.novasr = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
     // NKF, DTLN and LocalVQE run 16 kHz only (their models are 16 kHz
-    // by design; the LocalVQE bundle geometry check enforces it). The
-    // NovaSR tail also pins the chain to 16 kHz (its input contract) —
-    // only the output device goes 48 kHz (see OutRate).
+    // by design; the LocalVQE bundle geometry check enforces it).
     if (eng == ENGINE_NKF || eng == ENGINE_DTLN ||
-        eng == ENGINE_LOCALVQE || g_novasrEnabled.load()) {
+        eng == ENGINE_LOCALVQE) {
         g_sampleRate.store(16000);
         g_sampleRateIndex = 0;
     }
@@ -1521,11 +1503,6 @@ void ReinitEngine() {
     // to the limiter. (Previously the DTLN-NS handle was built for
     // backend 0 too and the output pump ran it anyway, so Off never
     // actually turned the stage off.)
-    // NovaSR 48 kHz tail (exp): 16 kHz chain output -> 48 kHz air for
-    // the cable. Created whenever ticked (readiness fail-closes Start
-    // below); the output pump uses it only while Ready (see OutRate).
-    if (g_novasrEnabled.load())
-        g_engine.novasr = NovasrNew("models/novasr.onnx");
     // Voice-path hygiene follows the chain rate (engines that force
     // 16 kHz re-anchor it here, every Start — same as the HPF rule in
     // src/main.cpp).
@@ -1615,13 +1592,12 @@ static void FeedMonitor(const float* sb, int fs);
 
 void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
     int16_t* out = (int16_t*)pOutput;
-    // Tail rate: 48 kHz while NovaSR is live (chain stays 16 kHz — mic
-    // and loopback devices run the chain rate, this device the tail
-    // rate; both tick every 10 ms, so one chain step feeds one tail).
-    const bool nova = g_novasrEnabled.load() && g_engine.novasr &&
-                      NovasrReady(g_engine.novasr);
+    // Output rate: 48 kHz in high-band splice mode, else the chain rate.
+    // Mic and loopback devices run the chain rate; this output device
+    // runs the tail rate. Both tick every 10 ms, so one chain step feeds
+    // one output tick.
     const bool hb = g_highbandEnabled.load();
-    const int outRate = (hb || nova) ? 48000 : g_sampleRate.load();
+    const int outRate = hb ? 48000 : g_sampleRate.load();
     const int fsOut = frameSizeForRate(outRate);
     if ((int)frameCount != fsOut) { EmitFading(out, frameCount); return; }
     int fs = frameSizeForRate(g_sampleRate.load());
@@ -1763,8 +1739,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
 
     // Voice-path hygiene (post-NS, pre-meter — meters read the shipped
     // signal): high-pass, then expander, then presence shelf. Same
-    // order as src/main.cpp; the NovaSR tail (when live) extends this
-    // cleaned signal to 48 kHz downstream.
+    // order as src/main.cpp.
     HpfProcess(g_hpf, cleanedFrame, fs);
     ExpanderProcess(g_expst, cleanedFrame, fs, g_sampleRate.load());
     PresProcess(g_pres, cleanedFrame, fs);
@@ -1792,12 +1767,9 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // hear, before the shared limiter so mic + sounds can never clip
     // each other into distortion. (The Out meter above stays on the
     // cleaned mic only — it measures AEC reduction, not programme.
-    // With the NovaSR tail live the meters stay on the 16 kHz chain
-    // output by design: they diagnose the canceller, not the tail.)
     float sbBuf[MAX_FRAME_SIZE];
-    // fs == 160 whenever the tail is live (Reinit pins the chain to
-    // 16 kHz while ticked); anything else falls through to the legacy
-    // path rather than overrunning the 480-sample tail buffers.
+    // fs == 160 in high-band mode (Reinit pins the chain to 16 kHz
+    // while ticked); anything else falls through to the legacy path.
     if (g_highbandEnabled.load() && fs == 160) {
         // High-band splice: 16 kHz chain output (processed lows) upsampled
         // to 48 kHz, plus the real high band (8-24 kHz) cut from the
@@ -1868,26 +1840,6 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         float gain = g_micGain.load() * g_outputGain.load();
         for (int i = 0; i < fsOut; i++)
             out[i] = SoftLimit((nvOut[i] + high[i] * HB_MIX) * gain + sbBuf[i] * sbGain);
-    } else if (nova && fs == 160 && g_engine.novasr) {
-        // NovaSR tail: 16 kHz chain output -> 48 kHz air for the cable
-        // (one chain step per tail tick, exact 160->480). Gains and the
-        // limiter run at the tail rate, after the graph — the graph sees
-        // mic-level speech, like its training data. Fail-open: a bad
-        // tick ships linear-upsampled chain output (never silence).
-        float nvIn[MAX_FRAME_SIZE];
-        float nvOut[MAX_FRAME_SIZE];
-        for (int i = 0; i < fs; i++)
-            nvIn[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        NovasrProcess(g_engine.novasr, nvIn, nvOut, fs);
-        NovasrStats nst = {};
-        NovasrStatsGet(g_engine.novasr, &nst);
-        g_novaMs.store(nst.ms);
-        MixSoundboard(sbBuf, fsOut, outRate);
-        FeedMonitor(sbBuf, fsOut);
-        const float sbGain = g_soundboardGain.load() * g_outputGain.load();
-        float gain = g_micGain.load() * g_outputGain.load();
-        for (int i = 0; i < fsOut; i++)
-            out[i] = SoftLimit(nvOut[i] * gain + sbBuf[i] * sbGain);
     } else {
         MixSoundboard(sbBuf, fs, g_sampleRate.load());
         FeedMonitor(sbBuf, fs);
@@ -2191,26 +2143,16 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Hush unavailable - %.90s", why);
         return;
     }
-    // NovaSR tail is fail-closed at Start (like LocalVQE/GTCRN/Hush):
-    // a ticked tail without its staged model must refuse with the
-    // reason, never silently ship 16 kHz while the UI claims 48 kHz air.
-    if (g_novasrEnabled.load() &&
-        (!g_engine.novasr || !NovasrReady(g_engine.novasr))) {
-        const char* why = (g_engine.novasr && NovasrLastError(g_engine.novasr)[0])
-            ? NovasrLastError(g_engine.novasr) : "models/novasr.onnx missing (rebuild with the staged bundle)";
-        snprintf(g_statusText, 128, "NovaSR unavailable - %.90s", why);
-        return;
-    }
     g_micRing.reset();
     g_refRing.reset();
     g_micRing48.reset();
 
-    int sr = g_sampleRate.load();   // chain rate (16 kHz while NovaSR is live)
+    int sr = g_sampleRate.load();
     int fs = frameSizeForRate(sr);
-    // Output + monitor run at the tail rate (48 kHz with NovaSR or the
-    // high-band splice, else the chain rate). Mic/loopback stay at the
-    // chain rate EXCEPT in high-band mode, where the mic is captured at
-    // 48 kHz (downsampled in the callback) so real highs survive.
+    // Output + monitor run at 48 kHz in high-band mode, else the chain
+    // rate. Mic/loopback stay at the chain rate EXCEPT in high-band mode,
+    // where the mic is captured at 48 kHz (downsampled in the callback)
+    // so real highs survive.
     int outRate = OutRate();
     int fsOut = frameSizeForRate(outRate);
     int micRate = g_highbandEnabled.load() ? 48000 : sr;
@@ -2292,14 +2234,9 @@ void StartAEC() {
     if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
     else if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
     else if (g_engine.ns) nsTag = " + DTLN-NS";
-    const bool novaLive = g_novasrEnabled.load() && g_engine.novasr &&
-                          NovasrReady(g_engine.novasr);
     const bool hbLive = g_highbandEnabled.load();
     if (hbLive)
         snprintf(g_statusText, 128, "Running (16000->48000 Hz, %s%s + HiBand)%s",
-                 engineName, nsTag, g_listenToSelf ? " [monitor]" : "");
-    else if (novaLive)
-        snprintf(g_statusText, 128, "Running (16000->48000 Hz, %s%s + NovaSR)%s",
                  engineName, nsTag, g_listenToSelf ? " [monitor]" : "");
     else
         snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", sr, engineName,
@@ -2670,33 +2607,6 @@ void DrawAudioTab() {
             ImGui::TextDisabled("%s", LocalVqeLastError(g_engine.localvqe));
     }
 
-    // NovaSR 48 kHz tail (exp): 16 kHz chain output -> 48 kHz air for
-    // the cable through the baked NovaSR graph (whole-file proven in
-    // novasr_smoke). Live restart on switch. Costs ~8 ms algorithmic
-    // delay (graph lookahead) + ~1-2 ms inference per 10 ms tick.
-    {
-        bool nova = g_novasrEnabled.load();
-        if (ImGui::Checkbox("NovaSR 48 kHz tail (exp)", &nova)) {
-            g_novasrEnabled.store(nova);
-            SaveSettings();
-            if (g_isRunning) { StopAEC(); StartAEC(); }
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Neural super-resolution tail (YatharthS/NovaSR, Apache-2.0):\n"
-                "synthesizes real 8-16 kHz highs the 16 kHz chain cannot\n"
-                "carry. Chain stays 16 kHz (all models unchanged); output +\n"
-                "monitor devices run 48 kHz. Needs models/novasr.onnx\n"
-                "(staged by the build). Fail-closed at Start without it;\n"
-                "per-tick failures fall back to linear upsampling.");
-        if (g_engine.novasr && NovasrLastError(g_engine.novasr)[0])
-            ImGui::TextDisabled("%s", NovasrLastError(g_engine.novasr));
-        if (g_isRunning && g_novasrEnabled.load() && g_engine.novasr)
-            ImGui::TextDisabled("NovaSR: %s, %.2f ms/tick",
-                NovasrReady(g_engine.novasr) ? "neural" : "fallback",
-                (double)g_novaMs.load());
-    }
-
     // High-band splice (exp): capture mic at 48 kHz, run the 16 kHz
     // engine on the low band, then splice the real (untouched) high
     // band (8-24 kHz) from the original mic onto the 48 kHz output.
@@ -3022,7 +2932,6 @@ void DrawAboutTab() {
     ImGui::BulletText("Hush - pulp-vision (Apache-2.0)");
     ImGui::BulletText("GTCRN - Xiaobin Rong et al. (ICASSP 2024, MIT, experimental)");
     ImGui::BulletText("LocalVQE v1.4-AEC - localai-org (Apache-2.0, experimental)");
-    ImGui::BulletText("NovaSR 16->48 kHz tail - YatharthS (Apache-2.0, experimental)");
     ImGui::BulletText("ONNX Runtime - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio - David Reid (MIT-0)");

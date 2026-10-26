@@ -23,13 +23,4 @@ have "$OUT/LocalVQEAECFrontend.json" || curl -L -o "$OUT/LocalVQEAECFrontend.jso
 have "$OUT/LocalVQEAECConfig.json" || curl -L -o "$OUT/LocalVQEAECConfig.json" \
   "https://huggingface.co/soniqo/LocalVQE-v1.4-AEC-200K-ONNX-FP32/resolve/main/config.json"
 
-# NovaSR super-resolution source weights (~53 KB, Apache-2.0). The desktop
-# harness runs the baked ONNX (exp/novasr/novasr.onnx, exported + ORT
-# parity-checked 1.000000, ~11x CPU RTF) — this .bin is the refresh
-# source if the upstream checkpoint ever moves. Provenance:
-# https://huggingface.co/YatharthS/NovaSR
-# Code: https://github.com/ysharma3501/NovaSR
-have "$OUT/pytorch_model_v1.bin" || curl -L -o "$OUT/pytorch_model_v1.bin" \
-  "https://huggingface.co/YatharthS/NovaSR/resolve/main/pytorch_model_v1.bin"
-
 echo "---"; ls -lh "$OUT"; sha256sum "$OUT"/* 2>/dev/null | sed 's#.*/##' || true

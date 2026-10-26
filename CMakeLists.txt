@@ -318,7 +318,6 @@ add_executable(aec_exp
     src/hush_wrapper.cpp
     src/gtcrn_wrapper.cpp
     src/localvqe_wrapper.cpp
-    src/novasr_wrapper.cpp
     third_party/localvqe/localvqe_aec_frontend.cpp
     exp/version_exp.rc
     exp/aec_exp.manifest
@@ -424,15 +423,6 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/exp/models/gtcrn_simple.onnx")
             "$<TARGET_FILE_DIR:aec_exp>/models/gtcrn_simple.onnx"
         COMMENT "Copying GTCRN model (exp)")
 endif()
-# NovaSR 48 kHz tail (exp checkbox): versioned source exp/novasr/,
-# staged exe-adjacent like the other models.
-if(EXISTS "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx")
-    add_custom_command(TARGET aec_exp POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx"
-            "$<TARGET_FILE_DIR:aec_exp>/models/novasr.onnx"
-        COMMENT "Copying NovaSR model (exp)")
-endif()
 foreach(_lv exp/models/LocalVQEAECResidualMask.onnx
              exp/models/LocalVQEAECFrontend.json
              exp/models/LocalVQEAECConfig.json)
@@ -513,47 +503,4 @@ foreach(_lv exp/models/LocalVQEAECResidualMask.onnx
     endif()
 endforeach()
 
-# ============================================================
-#  novasr_smoke — offline NovaSR super-resolution proof harness.
-#  16 kHz mono in -> 48 kHz out with REAL highs (YatharthS/NovaSR,
-#  Apache-2.0, 52 KB -> 208 KB ONNX, torch/ORT parity 1.000000,
-#  ~11x CPU RTF). A/B line matches nkf_smoke --hb48's hiRMS meter.
-#  Desktop-only, EXCLUDE_FROM_ALL, never shipped.
-#  Build: cmake --build build --target novasr_smoke
-#  Run:   build/novasr_smoke.exe out16.wav nov48.wav
-#         build/novasr_smoke.exe --synth 5 nov48.wav
-# ============================================================
-add_executable(novasr_smoke EXCLUDE_FROM_ALL
-    exp/novasr/novasr_smoke.cpp
-)
 
-target_include_directories(novasr_smoke PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${MSYS2_ROOT}/include/onnxruntime
-)
-
-target_link_libraries(novasr_smoke PRIVATE onnxruntime)
-
-if(WIN32)
-    target_link_libraries(novasr_smoke PRIVATE ole32 uuid winmm)
-endif()
-
-add_custom_command(TARGET novasr_smoke POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/libs/onnxruntime.dll
-        $<TARGET_FILE_DIR:novasr_smoke>)
-
-# NovaSR weights: versioned source exp/novasr/novasr.onnx (Apache-2.0,
-# exported + parity-checked, see exp/get_models.sh) staged next to the
-# exe; exp/models/novasr.onnx is the local-run copy (gitignored).
-add_custom_command(TARGET novasr_smoke POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        $<TARGET_FILE_DIR:novasr_smoke>/models
-)
-if(EXISTS "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx")
-    add_custom_command(TARGET novasr_smoke POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/exp/novasr/novasr.onnx"
-            "$<TARGET_FILE_DIR:novasr_smoke>/models/novasr.onnx"
-        COMMENT "Copying NovaSR model")
-endif()
