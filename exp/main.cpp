@@ -163,10 +163,11 @@ struct SpscRing {
 //  Engine abstraction
 // ============================================================
 // Numeric values keep their historical meaning so saved aec_config.txt
-// indices keep loading: 0 (SpeexDSP) and 3 (old LocalVQE code) were retired
-// and remap to DTLN (the default) on load. ENGINE_LOCALVQE = 8 is the live
+// indices keep loading: 0 is engine Off (it used to be SpeexDSP; the
+// profile slot is authoritative for gen5+ configs), 3 (old LocalVQE
+// code) remaps to DTLN on load. ENGINE_LOCALVQE = 8 is the live
 // LocalVQE v1.4-AEC echo-canceller profile.
-enum EngineType { ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4, ENGINE_LOCALVQE = 8 };
+enum EngineType { ENGINE_OFF = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4, ENGINE_LOCALVQE = 8 };
 struct EngineState {
     EngineType  type  = ENGINE_DTLN;
     Aec3Handle* aec3  = nullptr;
@@ -196,8 +197,16 @@ static const Profile PROFILES[] = {
     { "WebRTC AEC3",  ENGINE_AEC3, 2 },
     { "NKF-AEC",      ENGINE_NKF,  0 },
     { "LocalVQE v1.4-AEC", ENGINE_LOCALVQE, 0 },
+    { "Off (no AEC)", ENGINE_OFF, 0 },
 };
+// Radio display order: Off first, then the engines. PROFILES itself
+// stays append-order so saved profile slots keep loading unchanged.
+// (4 = Off, 0 = DTLN, 1 = AEC3, 2 = NKF, 3 = LocalVQE.)
+static const int ENGINE_RADIO_ORDER[] = { 4, 0, 1, 2, 3 };
 const int PROFILE_COUNT = (int)(sizeof(PROFILES) / sizeof(PROFILES[0]));
+static_assert((int)(sizeof(ENGINE_RADIO_ORDER) / sizeof(ENGINE_RADIO_ORDER[0])) ==
+                  PROFILE_COUNT,
+              "ENGINE_RADIO_ORDER must cover every profile");
 
 // ============================================================
 //  Globals
@@ -789,15 +798,17 @@ void LoadSettings() {
         // out-of-range index land on 48 kHz — no stranded configs.
         if (g_sampleRateIndex == 0) { g_sampleRate.store(16000); }
         else { g_sampleRateIndex = 1; g_sampleRate.store(48000); }
-        // Retired engines (SpeexDSP=0, LocalVQE=3): remap to the default
-        // (DTLN) so old configs never point at a deleted engine.
-        if (g_engineIndex == 0 || g_engineIndex == 3) {
+        // Retired engine 3 (old LocalVQE code) remaps to the default
+        // (DTLN). Value 0 used to be SpeexDSP and now means engine Off;
+        // gen5+ profile slots are authoritative anyway.
+        if (g_engineIndex == 3) {
             g_engineIndex = ENGINE_DTLN;
             g_sampleRateIndex = 0;
             g_sampleRate.store(16000);
         }
-        if (g_engineIndex != ENGINE_AEC3 && g_engineIndex != ENGINE_NKF &&
-            g_engineIndex != ENGINE_DTLN && g_engineIndex != ENGINE_LOCALVQE)
+        if (g_engineIndex != ENGINE_OFF && g_engineIndex != ENGINE_AEC3 &&
+            g_engineIndex != ENGINE_NKF && g_engineIndex != ENGINE_DTLN &&
+            g_engineIndex != ENGINE_LOCALVQE)
             g_engineIndex = ENGINE_DTLN;
         g_selectedEngine.store(g_engineIndex);
         g_preprocessEnabled = false;
@@ -1381,6 +1392,7 @@ static void HbNsProcess(HbNsState& h, const int16_t* in, float* out, int n) {
 // the click suppression does not depend on it.
 static int AecLatency16(EngineType t) {
     switch (t) {
+        case ENGINE_OFF:  return 0;     // no canceller: mic path only
         case ENGINE_AEC3: return 128;   // measured
         case ENGINE_NKF:  return 480;   // measured
         case ENGINE_DTLN: return 480;   // measured
@@ -1487,6 +1499,12 @@ void ReinitEngine() {
     } else if (eng == ENGINE_DTLN) {
         g_engine.dtln = DtlnNew("models/dtln_aec_128");
         g_engine.type = ENGINE_DTLN;
+    } else if (eng == ENGINE_OFF) {
+        // Engine Off: no echo canceller — the mic passes straight to
+        // the picked NS backend (denoise-only mode). Nothing to create;
+        // the output pump's fallthrough ships mic, and Start needs no
+        // fail-closed check for it.
+        g_engine.type = ENGINE_OFF;
     }
 
     // DTLN noise reduction: the echo canceller leaves background
@@ -2232,6 +2250,7 @@ void StartAEC() {
     g_sessionStart = Clock::now();
     StartMonitor();   // local soundboard monitoring (fail-open)
     const char* engineName =
+        (g_engine.type == ENGINE_OFF) ? "Off" :
         (g_engine.type == ENGINE_LOCALVQE) ? "LocalVQE-AEC" :
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
@@ -2442,8 +2461,8 @@ void DrawEngineSection() {
                 "High-band splice always runs the 16 kHz chain: the AEC and\n"
                 "NS process 0-8 kHz, then the real 8-24 kHz mic band is\n"
                 "spliced back on at the 48 kHz output.\n\n"
-                "Untick the splice to use AEC3 natively at 48000 Hz (no NS:\n"
-                "every NS backend is 16 kHz).");
+                "Untick the splice to return to the native chain rate (AEC3\n"
+                "can run at 48000 Hz there; NS still needs 16 kHz).");
     } else if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN ||
         g_engineIndex == ENGINE_LOCALVQE) {
         ImGui::TextDisabled("16 kHz (automatic)");
@@ -2455,8 +2474,13 @@ void DrawEngineSection() {
             SaveSettings();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Higher = better quality, more CPU\nAEC3 best at 48000\n"
-                              "Sticks with your setup until the engine forces 16 kHz.");
+            ImGui::SetTooltip(
+                (g_engineIndex == ENGINE_OFF)
+                    ? "No echo canceller to rate.\n"
+                      "16000 lets the NS stage run; 48000 passes the mic\n"
+                      "through and skips NS (all backends are 16 kHz)."
+                    : "Higher = better quality, more CPU\nAEC3 best at 48000\n"
+                      "Sticks with your setup until the engine forces 16 kHz.");
     }
 
     ImGui::EndDisabled();
@@ -2538,6 +2562,8 @@ void DrawAudioTab() {
     if ( ImGui::IsItemHovered())
         ImGui::SetTooltip(
             "Echo engine selection (applies immediately):\n"
+            "Off - no echo cancellation; at 16 kHz the mic passes\n"
+            "straight to the noise-suppression stage (denoise-only).\n"
             "DTLN-AEC 128 - default; best echo + reverb handling, no post filter.\n"
             "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
             "NKF-AEC - weak CPUs, still full cleanup.\n"
@@ -2548,18 +2574,20 @@ void DrawAudioTab() {
     // Engine name only. The full path (engine -> NS -> output) is
     // spelled out once, in the chain line just above the devices.
     bool wasRunning = g_isRunning;
+    bool firstVisible = true;
     for (int r = 0; r < PROFILE_COUNT; r++) {
-        int i = r;
+        int i = ENGINE_RADIO_ORDER[r];
         std::string label = PROFILES[i].name;
         bool sel = (g_profileIndex == i);
         // Experimental engines (WebRTC AEC3 / NKF-AEC / LocalVQE-AEC)
         // are hidden unless the user ticked the Appearance checkbox —
-        // the default is DTLN only.
+        // the default is DTLN only. Off and DTLN always show.
         if (!g_experimentalEngines.load() &&
             ((EngineType)PROFILES[i].engine == ENGINE_AEC3 ||
              (EngineType)PROFILES[i].engine == ENGINE_NKF ||
              (EngineType)PROFILES[i].engine == ENGINE_LOCALVQE)) continue;
-        if (r > 0) ImGui::SameLine();
+        if (!firstVisible) ImGui::SameLine();
+        firstVisible = false;
         if ( ImGui::RadioButton(label.c_str(), sel) && !sel) {
             ApplyProfile(i);
             SaveSettings();
@@ -2586,8 +2614,8 @@ void DrawAudioTab() {
                 "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).\n"
                 "GTCRN (exp) - ultra-light hiss killer, 16 kHz only\n"
                 "(needs models/gtcrn_simple.onnx).\n\n"
-                "All NS backends are 16 kHz. On a native 48 kHz AEC3 chain\n"
-                "(High-band splice off) the stage is skipped; the chain\n"
+                "All NS backends are 16 kHz. On a native 48 kHz chain\n"
+                "(AEC3 or Off, splice off) the stage is skipped; the chain\n"
                 "line above the devices section shows when that happens.");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
@@ -2602,11 +2630,15 @@ void DrawAudioTab() {
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
-        // Use-case hint only when the default isn't picked — with
-        // DTLN-NS selected it restates the obvious (detail stays in
-        // the hover tooltip).
-        if (nsb != 1)
-            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers - GTCRN: light hiss (exp).");
+        // One-line use-case hint for the selected backend. (Previously
+        // only non-defaults got a hint, which left DTLN-NS with a stray
+        // "ok" status line from DtnsLastError instead.)
+        const char* nsHint =
+            (nsb == 0) ? "Off - no noise suppression; lowest CPU." :
+            (nsb == 1) ? "DTLN-NS - general background hiss; the cheapest stage." :
+            (nsb == 2) ? "Hush - keyboards, mice and background talkers." :
+                         "GTCRN (exp) - light hiss; 16 kHz only.";
+        ImGui::TextDisabled("%s", nsHint);
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.
         const char* nsErr = "";
@@ -2784,13 +2816,16 @@ void DrawAppearanceTab() {
     }
 
     // Experimental engines: WebRTC AEC3, NKF-AEC and LocalVQE-AEC are
-    // hidden from the profile list by default (DTLN is the only thing
-    // most users need). Tick this to show them — switching back to DTLN
-    // afterwards hides them again and leaves the selection on DTLN.
+    // hidden from the profile list by default (Off and DTLN are all
+    // most users need). Tick this to show them — unticking falls back
+    // to DTLN only if the selection is one of the hidden engines.
     bool exp = g_experimentalEngines.load();
     if ( ImGui::Checkbox("Show experimental engines (WebRTC AEC3, NKF-AEC, LocalVQE-AEC)", &exp)) {
         g_experimentalEngines.store(exp);
-        if (!exp) {
+        if (!exp &&
+            (PROFILES[g_profileIndex].engine == ENGINE_AEC3 ||
+             PROFILES[g_profileIndex].engine == ENGINE_NKF ||
+             PROFILES[g_profileIndex].engine == ENGINE_LOCALVQE)) {
             // Hiding them: fall back to DTLN so the selection can't be
             // left on an engine that is no longer in the list.
             g_engineIndex = ENGINE_DTLN;
@@ -2803,10 +2838,10 @@ void DrawAppearanceTab() {
     }
     if ( ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Off (default): the profile list shows DTLN-AEC 128 only.\n"
+            "Off (default): the profile list shows Off and DTLN-AEC 128 only.\n"
             "On: also shows WebRTC AEC3, NKF-AEC and LocalVQE v1.4-AEC.\n"
             "These are real engines but less tested than the default -\n"
-            "switch back to DTLN-AEC 128 to hide them again.\n"
+            "untick to hide them (falls back to DTLN if one is selected).\n"
             "LocalVQE chains into the NS backend (Off / DTLN-NS / Hush /\n"
             "GTCRN), e.g. mic -> LocalVQE -> GTCRN; 16 kHz only and it\n"
             "needs the exp/models/LocalVQE* bundle.");
