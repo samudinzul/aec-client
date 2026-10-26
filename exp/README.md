@@ -48,6 +48,15 @@ Key contracts (from the model cards — read before touching the wrappers):
   (reference: sherpa-onnx `offline-speech-denoiser-gtcrn-impl.h`).
   Expect on the synth clip: hiss sections drop, voice bursts stay near
   input level. Any `Run` failure latches to passthrough (never mute).
+  Offline comparison against DTLN-NS/Hush (`tools/ns_eval.py`, engine
+  Off, real speech plus hiss/keyboard/babble at 15 dB): GTCRN is the
+  most transparent on hiss and keyboard (−11 / −46 dB noise, speech
+  within 0.3 dB, best STOI), Hush is the only backend that reliably
+  removes background talkers (−34 dB) but ducks speech 2–3 dB and costs
+  the most, and DTLN-NS is the cheapest yet barely touches clicks or
+  talkers. Pick GTCRN for hiss/keyboard, Hush for talkers, DTLN-NS for
+  the weakest CPU; Off in a quiet room. Full tables and caveats:
+  `tools/AEC_EVAL.md`.
 - **LocalVQE: still v0 plumbing** (files validated, mic passthrough until
   the Kalman host DSP is ported — see contract above).
 - **High-band splice (48 kHz output, default ON):** the other route to
@@ -70,7 +79,7 @@ Key contracts (from the model cards — read before touching the wrappers):
   replaced by a 193-tap linear-phase FIR pair: flat to 7.5 kHz, aliases −76 dB,
   images −55 dB, group delay exactly 32 @16 kHz per direction. The
   loopback reference is delayed by the same 32 samples. The high-band
-  mix is a live slider (0–100%, default 50%, config slot 32/gen 10),
+  mix is a live slider (0–100%, fresh default 70%, config slot 32/gen 10),
   so the cleaner low band can be paired with more air. `resampler_test`
   covers the DSP offline.
 

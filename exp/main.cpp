@@ -2665,10 +2665,13 @@ void DrawAudioTab() {
             ImGui::SetTooltip(
                 "Noise suppression backend (runs after the engine):\n"
                 "Off - raw echo-cancelled voice, lowest CPU.\n"
-                "DTLN-NS - general background hiss, cheapest stage.\n"
-                "Hush - keyboards, mice and background talkers, slightly\n"
-                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).\n"
-                "GTCRN (exp) - ultra-light hiss killer, 16 kHz only\n"
+                "DTLN-NS - cheapest stage; steady hiss only, weak on\n"
+                "keyboard clicks and background talkers.\n"
+                "Hush - best on background talkers; strongest on clicks,\n"
+                "heaviest stage (needs weya_nc.dll +\n"
+                "models/hush_16k_onnx.tar.gz).\n"
+                "GTCRN (exp) - most transparent on hiss and keyboard;\n"
+                "weak on overlapping talkers, 16 kHz only\n"
                 "(needs models/gtcrn_simple.onnx).\n\n"
                 "All NS backends are 16 kHz. On a native 48 kHz chain\n"
                 "(AEC3 or Off, splice off) the stage is skipped; the chain\n"
@@ -2691,9 +2694,9 @@ void DrawAudioTab() {
         // "ok" status line from DtnsLastError instead.)
         const char* nsHint =
             (nsb == 0) ? "Off - no noise suppression; lowest CPU." :
-            (nsb == 1) ? "DTLN-NS - general background hiss; the cheapest stage." :
-            (nsb == 2) ? "Hush - keyboards, mice and background talkers." :
-                         "GTCRN (exp) - light hiss; 16 kHz only.";
+            (nsb == 1) ? "DTLN-NS - cheapest stage; steady hiss only." :
+            (nsb == 2) ? "Hush - background talkers; heaviest of the three." :
+                         "GTCRN (exp) - hiss + keyboard; most transparent; 16 kHz only.";
         ImGui::TextDisabled("%s", nsHint);
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.

@@ -6,9 +6,11 @@
   Engine Off passes mic straight to the NS stage (denoise-only).
   NS stage (float -> float, fail-open — runs after the engine on
   every path, like the desktop). Backend is selectable: "dtln"
-  (DTLN-NS pair, default, ships in models/) or "hush" (Hush via
+  (DTLN-NS pair, default, ships in models/), "hush" (Hush via
   the user-supplied weya_nc library + bundle — see web/hush.py;
-  "off" skips the stage).
+  "off" skips the stage). "gtcrn" is the experimental desktop
+  backend ported to Python (web/gtcrn.py) for tools/ns_eval.py
+  and tools/aec_eval.py; it is not exposed in the web UI.
   mic preamp gain + float -> int16 (round-half-even + clamp,
   like ``clamp_s16(lrintf)``)
 
@@ -33,6 +35,7 @@ import numpy as np
 from . import dsp
 from .dtln import DtlnAec
 from .dtln_ns import DtlnNs
+from .gtcrn import gtcrn_available
 from .hush import HushNs, hush_available
 
 
@@ -53,8 +56,11 @@ EXPERIMENTAL_ENGINES = ("nkf",)
 
 # NS-stage backends: "off" skips the stage, "dtln" is the shipped
 # DTLN-NS pair, "hush" is the user-supplied Hush library (fail-closed
-# at selection while its files are absent — see web/hush.py).
-NS_BACKENDS = ("off", "dtln", "hush")
+# at selection while its files are absent — see web/hush.py), and
+# "gtcrn" is the experimental desktop backend ported to Python
+# (web/gtcrn.py; used by the aec_eval/ns_eval harnesses, not
+# exposed in the web UI).
+NS_BACKENDS = ("off", "dtln", "hush", "gtcrn")
 
 
 # Backend probe cache: state() calls engine_available() for every
@@ -151,6 +157,9 @@ class Chain:
         self.hush = None  # lazy HushNs (user-supplied files; None until
         # first "hush" selection — never loaded unless picked).
         self.hush_error = ""
+        self.gtcrn = None  # lazy GtcrnNs (experimental harness backend;
+        # None until first "gtcrn" selection — never loaded otherwise).
+        self.gtcrn_error = ""
         self.mic_gain = 1.0
         self.running = False
         self.last_error = ""
@@ -302,10 +311,18 @@ class Chain:
                     self.last_error = (self.hush_error
                                        or "hush load failed")
                     return False
+            elif name == "gtcrn":
+                self._ensure_gtcrn()
+                if self.gtcrn is None or not self.gtcrn.ready:
+                    self.last_error = (self.gtcrn_error
+                                       or "gtcrn load failed")
+                    return False
             with self._swap_lock:
                 self.ns_backend = name
                 if name == "hush" and self.hush is not None:
                     self.hush.reset()
+                elif name == "gtcrn" and self.gtcrn is not None:
+                    self.gtcrn.reset()
         return True
 
     def _load_engines(self):
@@ -343,6 +360,26 @@ class Chain:
         except Exception as e:
             self.hush = None
             self.hush_error = f"hush init failed: {e}"
+
+    def _ensure_gtcrn(self):
+        """Create the GTCRN backend on first pick (caller holds _load_lock).
+
+        Harness/experimental backend only — the model ships in
+        models/, so this normally succeeds; a missing/broken model
+        fails closed at selection rather than silently denoising
+        nothing.
+        """
+        if self.gtcrn is not None:
+            return
+        try:
+            from .gtcrn import GtcrnNs
+            self.gtcrn = GtcrnNs(model_dir=self.model_dir,
+                                 num_threads=self.num_threads)
+            self.gtcrn_error = ("" if self.gtcrn.ready
+                                else self.gtcrn.last_error)
+        except Exception as e:
+            self.gtcrn = None
+            self.gtcrn_error = f"gtcrn init failed: {e}"
 
     def set_engine(self, name):
         """Select the echo engine (hot-swappable while running —
@@ -425,6 +462,14 @@ class Chain:
                 self.last_error = (self.hush_error if self.hush is None
                                    else ("" if self.hush.ready
                                          else self.hush.last_error))
+            elif ns_backend == "gtcrn":
+                self._ensure_gtcrn()
+                if self.gtcrn is not None:
+                    self.gtcrn.reset()
+                self.last_error = (self.gtcrn_error
+                                   if self.gtcrn is None
+                                   else ("" if self.gtcrn.ready
+                                         else self.gtcrn.last_error))
             else:
                 self.last_error = "" if self.ns.ready else self.ns.last_error
             return True
@@ -440,6 +485,8 @@ class Chain:
                 self.ns.reset()
             if self.hush is not None:
                 self.hush.reset()
+            if self.gtcrn is not None:
+                self.gtcrn.reset()
             with self._swap_lock:
                 if self._backend is not None:
                     self._backend.reset()
@@ -476,6 +523,10 @@ class Chain:
                     if ns_backend == "hush" and self.hush is not None:
                         f = self.hush.process(f)
                         staged = True
+                    elif (ns_backend == "gtcrn" and self.gtcrn is not None
+                            and self.gtcrn.ready):
+                        f = self.gtcrn.process(f)
+                        staged = True
                     elif (ns_backend == "dtln" and self.ns is not None
                             and self.ns.ready):
                         f = self.ns.process(f)
@@ -507,6 +558,7 @@ class Chain:
         # race here killed the WebSocket on every Stop.
         ns_obj = self.ns
         hush_obj = self.hush
+        gtcrn_obj = self.gtcrn
         dtln_obj = self.dtln
         with self._swap_lock:
             engine, backend = self.engine, self._backend
@@ -516,6 +568,12 @@ class Chain:
                 "backend": 0, "rCount": 0, "inRms": 0.0,
                 "outRms": 0.0, "dropped": 0,
                 "error": self.hush_error,
+            })
+        elif ns_backend == "gtcrn":
+            ns = (gtcrn_obj.stats() if gtcrn_obj is not None else {
+                "backend": 0, "rCount": 0, "inRms": 0.0,
+                "outRms": 0.0, "dropped": 0,
+                "error": self.gtcrn_error,
             })
         elif ns_backend == "off":
             # Stage skipped: report it off (backend 0), not the
@@ -539,7 +597,8 @@ class Chain:
             except Exception:
                 nkf_st = None
         ns_tag = " + Hush" if (ns_backend == "hush" and ns_active) else (
-            " + DTLN-NS" if ns_active else "")
+            " + GTCRN" if (ns_backend == "gtcrn" and ns_active) else (
+                " + DTLN-NS" if ns_active else ""))
         return {
             "running": self.running,
             "engine": name if self.running else "",
@@ -554,6 +613,9 @@ class Chain:
                 # The model ships in models/ (release) or the data dir;
                 # only the DLL stays user-supplied.
                 "hush": hush_available(model_dir=self.model_dir),
+                # Experimental harness backend; model ships in models/.
+                "gtcrn": (gtcrn_obj.ready if gtcrn_obj is not None
+                          else gtcrn_available(model_dir=self.model_dir)),
             },
             "micGain": self.mic_gain,
             "sampleRate": 16000,

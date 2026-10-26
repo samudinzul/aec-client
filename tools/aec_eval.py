@@ -31,6 +31,13 @@ Examples (from repo root):
 
   # Quick smoke
   python3 tools/aec_eval.py --seconds 6 --engines off,aec3 --ns off --modes raw
+
+For the noise-suppression choice itself (steady hiss vs keyboard vs
+background talkers, with the engine Off so only the NS stage acts), use
+the companion harness:
+
+  python3 tools/ns_eval.py --near-wav /tmp/asr_3.flac \
+      --beds pink,keyboard,babble --ns off,dtln,hush,gtcrn
 """
 
 from __future__ import annotations
@@ -418,7 +425,9 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=12.0)
     ap.add_argument("--engines", default="off,aec3,dtln,nkf")
-    ap.add_argument("--ns", default="off")
+    ap.add_argument("--ns", default="off",
+                    help="NS backend(s): off,dtln,hush,gtcrn "
+                         "(gtcrn is the experimental desktop port)")
     ap.add_argument("--modes", default="raw",
                     help="raw (no hygiene DSP), full, or raw,full")
     ap.add_argument("--scenarios",
