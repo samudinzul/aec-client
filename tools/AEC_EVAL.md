@@ -68,9 +68,9 @@ Full chain with DTLN-NS:
 | WebRTC AEC3 | 0.714 | 0.891 | 0.359 | 0.062 |
 | DTLN-AEC | 0.927 | 0.977 | 0.988 | 0.086 |
 
-Hush was also checked end-to-end. It does not change the engine
-ranking (STOI within 0.01–0.02 of DTLN-NS) and is heavier in the Python
-harness. It remains a noise-type choice, not an AEC choice.
+Hush was also checked end-to-end for Off and DTLN. It does not change
+their ordering (STOI within 0.01–0.02 of DTLN-NS) and is heavier in the
+Python harness. It remains a noise-type choice, not an AEC choice.
 
 ## Reading the numbers
 
@@ -79,10 +79,15 @@ harness. It remains a noise-type choice, not an AEC choice.
 - **AEC3 is unsafe for sealed earphones/headsets.** An active reference
   with no echo path makes it suppress the near-end (STOI 0.411 vs 1.000
   for Off). DTLN stays transparent (0.996). Use Off for sealed use.
-- **DTLN is the loudspeaker and leaky-earphone choice.** It gives up
+- **DTLN is the loudspeaker and audible-leakage choice.** It gives up
   ~5 dB of echo-only ERLE to AEC3 but keeps far more of the near-end in
   double-talk (STOI 0.934 vs 0.708). It also does not collapse when the
   reference is active but acoustically isolated.
+- **Leakage level matters.** On the same 10 s pair, earphone-double-talk
+  STOI was: −20 dB Off 0.994 / DTLN 0.984; −12 dB Off 0.969 / DTLN
+  0.973; −6 dB Off 0.922 / DTLN 0.948. Off wins for sealed/very low
+  leakage; DTLN starts winning once the far end is audible (around
+  −12 dB and louder).
 - **NKF is dominated here.** Lower ERLE, lower double-talk STOI and the
   highest Python RTF. The 45 KB model may still be cheap in C++, but its
   quality is behind; keep it experimental.
@@ -96,7 +101,7 @@ harness. It remains a noise-type choice, not an AEC choice.
 |---|---|---|
 | Loudspeaker | DTLN-AEC | Best double-talk quality; enough ERLE for a small room |
 | Sealed earphone / headset | Off | No echo path; zero CPU and fully transparent |
-| Leaky earphone | DTLN-AEC | Handles the small leakage path without hurting near-end |
+| Earphone with audible leakage | DTLN-AEC | Beats Off around −12 dB leakage and louder |
 | Weak CPU + loudspeaker | WebRTC AEC3 | Cheapest canceller; accept the double-talk cost |
 | NKF / LocalVQE | Experimental only | Not competitive / not yet measured |
 
