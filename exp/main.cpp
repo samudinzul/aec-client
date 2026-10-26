@@ -2303,9 +2303,11 @@ void StartAEC() {
         (g_engine.type == ENGINE_AEC3) ? "AEC3" :
         (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
     const char* nsTag = "";
-    if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
-    else if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
-    else if (g_engine.ns) nsTag = " + DTLN-NS";
+    if (sr == 16000) {
+        if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
+        else if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
+        else if (g_engine.ns) nsTag = " + DTLN-NS";
+    }
     const bool hbLive = g_highbandEnabled.load();
     if (hbLive)
         snprintf(g_statusText, 128, "Running (16000->48000 Hz, %s%s + HiBand)%s",
@@ -2699,6 +2701,16 @@ void DrawAudioTab() {
             (nsb == 2) ? "Hush - background talkers; heaviest of the three." :
                          "GTCRN - default; hiss + keyboard; most transparent; 16 kHz only.";
         ImGui::TextDisabled("%s", nsHint);
+        // A 48 kHz native chain (Off/AEC3, splice off) skips every NS
+        // backend — say so before Start instead of letting the status
+        // line claim a stage that will not run.
+        if (nsb != 0 && !g_highbandEnabled.load() &&
+            g_sampleRate.load() != 16000) {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                "NS skipped at 48 kHz: all NS backends are 16 kHz.");
+            ImGui::TextDisabled(
+                "Enable 48 kHz output (high-band splice) to keep NS.");
+        }
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.
         const char* nsErr = "";
