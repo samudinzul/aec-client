@@ -41,8 +41,8 @@ Every tool follows the same vocabulary and error contract:
 | `-v`, `--verbose` | stream full output / trace every command | all |
 | `--fresh` | wipe generated state first (`build/`, `.venv`, caches) | desktop + web build |
 | `--run` | after building, launch the app | desktop + web build |
-| `--exp` | build only `aec_exp.exe` (never touches `aec_gui.exe`) | desktop build |
-| `--with-smoke` | also build the smoke tools | desktop build |
+| `--exp` | select the experimental app (`aec_exp.exe`), never builds `aec_gui.exe` | desktop build |
+| `--with-smoke` | **add** the offline smoke tools (`nkf_smoke`, `dtln_smoke`, `aec3_smoke`) to the app build | desktop build |
 | `--native-only` | native suite only | `test.sh` |
 | `--web-only` | web suites only | `test.sh` |
 | `--` | end of flags; later args are positional | all |
@@ -54,7 +54,17 @@ Every tool follows the same vocabulary and error contract:
   `unknown flag: X (see --help)` (or `too many arguments: ...`) and
   exit **2**. Runtime failures exit **1**; success exits **0**. CI can
   therefore tell a misuse from a failed build.
-- `--exp` and `--with-smoke` are mutually exclusive.
+- `--exp` and `--with-smoke` are independent: `--exp` picks **which app**
+  gets built, `--with-smoke` **adds tools** to that build. You normally
+  do not need `--with-smoke` at all — only when you want to run
+  `scripts/test.sh --native-only`.
+
+```bash
+scripts/make-desktop-build.sh                 # aec_gui.exe only
+scripts/make-desktop-build.sh --exp           # aec_exp.exe only
+scripts/make-desktop-build.sh --with-smoke    # aec_gui.exe + smoke tools
+scripts/make-desktop-build.sh --exp --with-smoke  # aec_exp.exe + smoke tools
+```
 
 ## What the scripts do
 
