@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   splice, automatic 48 kHz output, and LocalVQE stay desktop-only.
   Web changes are limited to security, compatibility, and release
   mechanics. The desktop app is the quality path.
+- **Signing guidance corrected.** SignPath Foundation is the
+  realistic free route for this MIT/public/released OSS project;
+  Microsoft's Azure Artifact Signing is not available to
+  individuals outside the US/Canada. A commercial certificate
+  remains the paid alternative.
 
 ## [1.14.0] - 2026-10-16
 

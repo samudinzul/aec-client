@@ -57,8 +57,11 @@ enforced, not advisory:
   tampering to every heuristic.
 
 Residual risk, stated plainly: none of the above is code signing.
-**A code-signing certificate (~$200/yr) is the only reliable fix**
-for the exe.** Until then the exe carries nonzero flag risk, and
+**A code-signing certificate is the only reliable fix for the
+exe.** A commercial certificate costs ~$200–400/yr; the free route
+for an MIT/public/released OSS project is **SignPath Foundation**
+(CI-built artifacts, manual release approval, published policy).
+Until a signed build ships, the exe carries nonzero flag risk, and
 that is why the web build exists.
 
 ## Web build (`AEC-Web-vX-win64.zip`) — zero by construction

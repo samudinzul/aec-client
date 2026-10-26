@@ -187,11 +187,11 @@ Done. Talk normally with speakers on.
 > never "fixed" with packers or obfuscation.
 >
 > **Why anything flags it at all.** The app is unsigned, and signing
-> is the only full fix. A code-signing certificate costs ~$200–400/yr,
-> and the free Microsoft route (Azure Artifact Signing) requires
-> US/Canada residency for individual developers — neither is
-> available for this personal build. Signing instructions are in
-> [Signing releases](#signing-releases) if that ever changes. The
+> is the only full fix. A commercial certificate costs ~$200–400/yr;
+> Microsoft's Azure route is not available to individuals outside
+> the US/Canada. The realistic free route is **SignPath Foundation**
+> for OSS — see [Signing releases](#signing-releases). Until that
+> lands, the web build remains the zero-flag fallback. The desktop
 > build otherwise uses the stock MSYS2 UCRT64 MinGW-w64 toolchain,
 > unchanged — no packers, full version metadata, declared
 > no-elevation manifest.
@@ -223,13 +223,25 @@ current builds (metadata + manifest + reputation), and the standing
 rule is zero detections before any ship (see `SECURITY.md` for the
 verdict record and process).
 
-**A code-signing certificate is the only fix.** Two routes:
+**A code-signing certificate is the only fix.** The realistic routes:
 
-- **Paid** — DigiCert or Sectigo EV code-signing cert (~$200–400/yr).
-- **Free** — Microsoft **Trusted Signing** (Azure account, no cost).
-  Sign with the `az signtool` flow or `signtool sign /f <cert.pfx>`.
+- **SignPath Foundation — free for OSS.** The repo is MIT, public,
+  released, and maintained, which fits their stated conditions.
+  Signing runs through SignPath's CI: every signed binary must be
+  built from the public repo, each release needs manual approval,
+  and the project publishes a code-signing policy. The certificate
+  is issued to SignPath Foundation, so the signer is the foundation,
+  not this project. Apply at <https://signpath.org/apply>. This is
+  the route to pursue for a signed desktop release.
+- **Commercial certificate** — DigiCert or Sectigo EV
+  (~$200–400/yr), signed locally with the flow below.
+- **Azure Artifact Signing** (formerly Trusted Signing) is not a
+  workable free route here: it requires a US/Canada individual or
+  organization and an Azure account. It stays documented for
+  completeness, not as the plan.
 
-To sign a release, rebuild and re-zip with signing enabled:
+To sign a release with a local certificate, rebuild and re-zip with
+signing enabled:
 
 ```bash
 # 1. Install the cert in your cert store (or keep the .pfx)
