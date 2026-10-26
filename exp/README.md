@@ -56,7 +56,9 @@ Key contracts (from the model cards — read before touching the wrappers):
   the most, and DTLN-NS is the cheapest yet barely touches clicks or
   talkers. Pick GTCRN for hiss/keyboard, Hush for talkers, DTLN-NS for
   the weakest CPU; Off in a quiet room. Full tables and caveats:
-  `tools/AEC_EVAL.md`.
+  `tools/AEC_EVAL.md`. Selecting NS with the splice off turns 48 kHz
+  output back on automatically; with every stage off, Off/AEC3 chains
+  run natively at 48 kHz. The NS itself still runs at 16 kHz.
 - **LocalVQE: still v0 plumbing** (files validated, mic passthrough until
   the Kalman host DSP is ported — see contract above).
 - **High-band splice (48 kHz output, default ON):** the other route to
@@ -79,8 +81,10 @@ Key contracts (from the model cards — read before touching the wrappers):
   replaced by a 193-tap linear-phase FIR pair: flat to 7.5 kHz, aliases −76 dB,
   images −55 dB, group delay exactly 32 @16 kHz per direction. The
   loopback reference is delayed by the same 32 samples. The high-band
-  mix is a live slider (0–100%, fresh default 70%, config slot 32/gen 10),
-  so the cleaner low band can be paired with more air. `resampler_test`
+  mix is a live slider (0–100%, fresh default 70%, config slot 32,
+  gen 10+), so the cleaner low band can be paired with more air. Turning the
+  splice off returns to the native chain rate — 48 kHz for Off/AEC3
+  with NS off, 16 kHz when NS must run. `resampler_test`
   covers the DSP offline.
 
 ## Usage (MSYS2 UCRT64, from repo root)

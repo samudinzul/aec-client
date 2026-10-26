@@ -302,6 +302,24 @@ static inline int OutRate() {
     return g_sampleRate.load();
 }
 
+// Re-derive the chain rate from the stage selection. 48 kHz output is
+// the exp quality default, so the chain only stays at / drops to
+// 16 kHz when something genuinely needs it: the high-band splice
+// (48 kHz is the output side), any NS backend (all are 16 kHz), or a
+// 16-kHz-only engine. With the splice off and no NS, Off/AEC3 run
+// natively at 48 kHz. Called on every stage change, settings load
+// (old file generations) and profile switch; the More combo can still
+// override the choice for the current session.
+static void SyncChainRate() {
+    const int eng = g_selectedEngine.load();
+    const bool force16 =
+        g_highbandEnabled.load() ||
+        g_nsBackend.load() != 0 ||
+        eng == ENGINE_DTLN || eng == ENGINE_NKF || eng == ENGINE_LOCALVQE;
+    g_sampleRateIndex = force16 ? 0 : 1;
+    g_sampleRate.store(force16 ? 16000 : 48000);
+}
+
 std::string FormatUptime() {
     if (!g_isRunning) return "";
     auto secs = std::chrono::duration_cast<std::chrono::seconds>(
@@ -781,7 +799,7 @@ void SaveSettings() {
         << 0 << "\n"  // retired: show-legacy-engines toggle
         << (g_experimentalEngines.load() ? 1 : 0) << "\n"  // experimental engines flag
        << 0 << "\n"  // retired: nuked DEC-toggle slot
-       << 10 << "\n"  // config gen (10: high-band mix slot 32)
+       << 11 << "\n"  // config gen (11: auto 48 kHz migration; 10: high-band mix slot 32)
       << 0 << "\n"  // retired: NKF WPE dereverb (kept for file alignment)
       << (int)(g_soundboardGain.load() * 100) << "\n"   // soundboard gain (%)
       << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
@@ -1008,6 +1026,11 @@ void LoadSettings() {
         }
         g_filterLengthMs.store(filters[g_filterIndex]);
         g_selectedEngine.store(g_engineIndex);
+        // Gen < 11 stored whatever chain rate was last set by hand, so
+        // an all-off config could be stranded at 16 kHz after the user
+        // turned every stage off. Re-derive once; gen 11+ files keep
+        // an explicit rate choice (the combo is a session override).
+        if (pgen < 11) SyncChainRate();
     }
 }
 
@@ -1036,6 +1059,9 @@ void ResetToDefaults() {
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
     g_nsBackend.store(3);  // GTCRN default backend (exp quality pick)
+    // Fresh default is 48 kHz output (splice ON). Keep the mix taste
+    // knob as-is; only the output path is restored.
+    g_highbandEnabled.store(true);
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -1057,9 +1083,9 @@ void ResetToDefaults() {
     snprintf(g_statusText, 128, "Defaults restored - press Start");
 }
 
-// Apply a profile: engine and filter length follow. Sample rate,
-// gains, devices and the NS tick are untouched (NS runs on every
-// engine, so there is nothing engine-scoped left to sync).
+// Apply a profile: engine and filter length follow. Sample rate is
+// re-derived from the new engine plus the current NS/splice choice;
+// gains, devices and the NS backend stay untouched.
     static void SyncStagePrefsToEngine() {
         // NS runs on every engine: restore the global default.
         g_nsEnabled.store(true);
@@ -1078,16 +1104,14 @@ void ApplyProfile(int idx) {
     g_filterLengthMs.store(filters[p.filterIdx]);
     g_enablePreprocess.store(false);
     g_profileIndex = idx;
-    // Rate is a free knob, but 16-kHz-only engines force it down.
-    if (p.engine == ENGINE_NKF || p.engine == ENGINE_DTLN ||
-        p.engine == ENGINE_LOCALVQE) {
-        g_sampleRateIndex = 0;
-        g_sampleRate.store(16000);
-    }
     // Post-stage pref sync: NS runs on every engine, so switching
     // engines only restores the global default (never leaks a stale
     // toggle into a chain, which once made Start look broken).
     SyncStagePrefsToEngine();
+    // Choose the chain rate from the new engine plus the current NS /
+    // splice selection (16 kHz-only engines and splice/NS force 16,
+    // an all-off Off/AEC3 chain goes to 48).
+    SyncChainRate();
 }
 
 // ============================================================
@@ -2528,7 +2552,8 @@ void DrawEngineSection() {
                 (g_engineIndex == ENGINE_OFF)
                     ? "No echo canceller to rate.\n"
                       "16000 lets the NS stage run; 48000 passes the mic\n"
-                      "through and skips NS (all backends are 16 kHz)."
+                      "through and skips NS (all backends are 16 kHz).\n"
+                      "Turning the splice off with NS off selects 48000."
                     : "Higher = better quality, more CPU\nAEC3 best at 48000\n"
                       "Sticks with your setup until the engine forces 16 kHz.");
     }
@@ -2678,7 +2703,9 @@ void DrawAudioTab() {
                 "(needs models/gtcrn_simple.onnx).\n\n"
                 "All NS backends are 16 kHz. On a native 48 kHz chain\n"
                 "(AEC3 or Off, splice off) the stage is skipped; the chain\n"
-                "line above the devices section shows when that happens.");
+                "line above the devices section shows when that happens.\n\n"
+                "Picking NS with the splice off turns 48 kHz output on\n"
+                "automatically, so NS still runs at its native 16 kHz.");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS", &nsb, 1);
@@ -2689,6 +2716,13 @@ void DrawAudioTab() {
         if (nsb != prevNsb) {
             g_nsBackend.store(nsb);
             g_nsEnabled.store(nsb != 0);
+            // 48 kHz output is the exp quality default. Every NS
+            // backend is 16 kHz, so with the splice off a picked
+            // backend would drop the output to 16 kHz. Turn the
+            // splice on so the output stays 48 kHz.
+            if (nsb != 0 && !g_highbandEnabled.load())
+                g_highbandEnabled.store(true);
+            SyncChainRate();
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
@@ -2733,13 +2767,11 @@ void DrawAudioTab() {
         bool hb = g_highbandEnabled.load();
         if (ImGui::Checkbox("48 kHz output (high-band splice)", &hb)) {
             g_highbandEnabled.store(hb);
-            if (hb) {
-                // Splice always runs the 16 kHz chain (48 kHz is the
-                // output side). Sync the persisted/UI rate now so the
-                // More row and the next Start cannot disagree.
-                g_sampleRateIndex = 0;
-                g_sampleRate.store(16000);
-            }
+            // Splice on always runs the 16 kHz chain (48 kHz is the
+            // output side). Splice off returns to the best native
+            // rate: 48 kHz for an all-off Off/AEC3 chain, 16 kHz
+            // while NS or a 16 kHz-only engine needs it.
+            SyncChainRate();
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
@@ -2750,6 +2782,8 @@ void DrawAudioTab() {
                 "(0-8 kHz) is cleaned; the real 8-24 kHz mic band is\n"
                 "spliced back on top. This is output fidelity, not 48 kHz\n"
                 "echo cancellation. No synthesis, no metallic edge.\n\n"
+                "Turning it off returns to the native chain rate: 48 kHz\n"
+                "for Off/AEC3 with NS off, 16 kHz when NS must run.\n\n"
                 "The 16 kHz NS models cannot reach above 8 kHz, so a broadband\n"
                 "transient (keyboard click) would keep its sharp part. A\n"
                 "dedicated high-band NS fixes that: STFT spectral subtraction\n"
