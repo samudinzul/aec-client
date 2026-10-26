@@ -622,7 +622,9 @@ void DtlnNsDestroy(DtlnNsHandle* h) {
 
 const char* DtnsLastError(const DtlnNsHandle* h) {
     if (!h) return "null handle";
-    return h->lastError[0] ? h->lastError : "ok";
+    // Empty while healthy: the UI prints this only when there is a real
+    // failure. DtlnNsDump keeps its own "ok" fallback for logs.
+    return h->lastError;
 }
 
 void DtlnNsStatsGet(const DtlnNsHandle* h, DtlnNsStats* s) {

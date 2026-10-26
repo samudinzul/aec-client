@@ -31,6 +31,7 @@ void DtlnNsReset(DtlnNsHandle* h);
 
 void DtlnNsDestroy(DtlnNsHandle* h);
 
+// Last failure message, or "" while healthy.
 const char* DtnsLastError(const DtlnNsHandle* h);
 
 // Live diagnostics for the NS stage: backend kind, ring fill, and the
