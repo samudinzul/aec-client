@@ -26,6 +26,12 @@
 # themselves keep the flat GitHub-asset layout (zip root = asset
 # folder).
 #
+# FROZEN at 16 kHz: this is the zero-flag fallback, not desktop
+# parity. It ships the DTLN/AEC3/NKF + DTLN-NS/Hush chain only;
+# GTCRN, the 48 kHz high-band splice, automatic 48 kHz output, and
+# LocalVQE stay desktop-only. Web changes are limited to security,
+# compatibility, and release mechanics (see SECURITY.md).
+#
 # No .exe, no DLL, no .pyd, no .venv, no __pycache__. A third-party
 # user-supplied library (e.g. Hush's weya_nc for the optional NS
 # backend) must NEVER be committed or staged: any PE binary ships

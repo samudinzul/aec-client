@@ -1,9 +1,17 @@
-# aec-web — local web UI for AEC Client
+# aec-web — local web UI for AEC Client (frozen 16 kHz fallback)
 
 Real-time echo cancellation + noise suppression in a
 native app window (or your browser), powered
 by a plain Python script on your own machine. No `.exe`, no installer,
 nothing for antivirus heuristics to flag.
+
+> **Frozen at 16 kHz.** This build remains the zero-flag fallback,
+> but it no longer tracks desktop features. It has the proven
+> DTLN-AEC / WebRTC AEC3 / NKF-AEC chain with DTLN-NS or Hush.
+> It does **not** have GTCRN, the 48 kHz high-band splice,
+> automatic 48 kHz output, or LocalVQE. For the best sound
+> quality, use the desktop app (v1.15.0 or newer). Maintenance
+> here is limited to security, compatibility, and release fixes.
 
 ## What you need first
 
@@ -145,7 +153,10 @@ Open http://localhost:8000 — that page IS the GUI.
   (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
   the mic before the engine, for quiet microphones.
 
-16 kHz only (same auto-lock as the desktop neural engines).
+16 kHz only (same auto-lock as the desktop neural engines). This
+is the complete web feature set: the frozen build deliberately
+stops here, so GTCRN and the 48 kHz high-band splice remain
+desktop-only.
 
 ## Files
 

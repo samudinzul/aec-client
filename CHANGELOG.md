@@ -5,6 +5,18 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Web UI frozen at 16 kHz.** The pure-Python web build remains
+  the zero-flag fallback (its ZIP scans clean), but it no longer
+  tracks desktop features. It keeps the DTLN-AEC / WebRTC AEC3 /
+  NKF-AEC chain with DTLN-NS or Hush; GTCRN, the 48 kHz high-band
+  splice, automatic 48 kHz output, and LocalVQE stay desktop-only.
+  Web changes are limited to security, compatibility, and release
+  mechanics. The desktop app is the quality path.
+
 ## [1.14.0] - 2026-10-16
 
 ### Added

@@ -63,6 +63,12 @@ that is why the web build exists.
 
 ## Web build (`AEC-Web-vX-win64.zip`) — zero by construction
 
+- **Frozen at 16 kHz as the zero-flag fallback.** It stays
+  downloadable and scan-clean, but it does not track desktop-only
+  features (GTCRN, the 48 kHz high-band splice, automatic 48 kHz
+  output, LocalVQE). Web changes are limited to security,
+  compatibility, and release mechanics — no new audio features.
+  The desktop app is the quality path.
 - Pure script + data only. `scripts/make-release-web.sh` asserts
   **twice** (staging + zip contents) that no `.exe`, `.dll`, `.pyd`,
   cache, or venv is present — the build fails otherwise. No

@@ -6,7 +6,7 @@
 |---|---|
 | *Desktop `aec_gui.exe`* | *Web UI in its native window (`web/start.bat`)* |
 
-*Same three profiles, same chain, same telemetry — pick the window you prefer.*
+*The desktop app is the quality path. The pure-Python web UI is the frozen 16 kHz zero-flag fallback.*
 
 **Built entirely with open-source tools.** No proprietary SDKs. No cloud dependencies. No telemetry.
 
@@ -94,6 +94,14 @@ call). If your machine is very low-end, in order of impact:
 
 ## Web UI (Python, no installer)
 
+> **Status: frozen 16 kHz fallback.** The web UI remains
+> downloadable because its Python-only ZIP scans clean, but it
+> no longer tracks desktop features. It has the 16 kHz
+> **DTLN-AEC / WebRTC AEC3 / NKF-AEC** chain with **DTLN-NS or
+> Hush**. It does **not** have GTCRN, the 48 kHz high-band
+> splice, automatic 48 kHz output, or LocalVQE. For the best
+> sound quality, use the desktop app.
+
 All three engine profiles (**DTLN-AEC 128**, **WebRTC AEC3**,
 **NKF-AEC**, each optionally followed by an NS stage — DTLN-NS or Hush) also run as a
 **pure-Python local web app**: no `.exe`, no installer, nothing
@@ -125,8 +133,9 @@ free), VB-CABLE, ~500 MB free.
 Then close and reopen your terminal (or reboot) so `python` is
 on PATH.
 
-Same DSP, same models, same device model as the desktop app —
-mic + speaker loopback in, cleaned voice out to CABLE.
+Same 16 kHz DSP, models, and device model as the desktop's
+16 kHz path — but no GTCRN and no 48 kHz splice. Mic + speaker
+loopback in, cleaned voice out to CABLE.
 Full docs: [web/README.md](web/README.md).
 
 ---
@@ -134,10 +143,10 @@ Full docs: [web/README.md](web/README.md).
 ## Quick Start
 
 > **Prefer no installer, zero false positives?** The
-> [web UI](#web-ui-python-no-installer) is the same DTLN chain
-> as a pure-Python local server — double-click
-> `web\start.bat` and you're done. The steps below
-> are for the desktop app.
+> [web UI](#web-ui-python-no-installer) is the same 16 kHz
+> DTLN chain as a pure-Python local server — double-click
+> `web\start.bat` and you're done. It has no GTCRN or 48 kHz
+> splice. The steps below are for the desktop app.
 
 1. **Install [VB-CABLE](https://vb-audio.com/Cable/)** (free virtual audio cable). Reboot.
 2. **Download** the latest release from [Releases](https://github.com/samudinzul/aec-client/releases/latest). Right-click the ZIP → Properties → **Unblock** → extract it anywhere (skips SmartScreen first-run prompts from the download mark).
@@ -202,7 +211,7 @@ Done. Talk normally with speakers on.
 >
 > **Zero-flag alternative.** The [web UI](#web-ui-python-no-installer)
 > is pure Python + data (release asserts ban all binaries), and its
-> ZIP scans 0 detections. Same engines, same models, one click.
+> ZIP scans 0 detections. Same 16 kHz engines (no GTCRN/48k), one click.
 
 ---
 
@@ -439,7 +448,7 @@ aec-client/
 │   └── dtln_ns_128_{1,2}.tflite    DTLN noise reduction pair
 │   └── hush_16k_onnx.tar.gz        Hush NS bundle (optional backend)
 │
-├── web/                        Pure-Python web UI (no .exe — see above)
+├── web/                        Pure-Python 16 kHz fallback (frozen; no .exe)
 │   ├── start.bat               One-click launcher (venv + packages + native window)
 │   ├── gui.py                  Native window (pywebview/WebView2) + in-process server; browser fallback
 │   ├── server.py               FastAPI REST + WebSocket, serves ui/
