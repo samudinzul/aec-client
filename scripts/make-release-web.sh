@@ -4,7 +4,8 @@
 # desktop AEC-Client-vX-win64.zip (both sit on the
 # same GitHub release page).
 #
-# Usage:  scripts/make-release-web.sh [version]  (default: APP_VERSION)
+# Usage:  scripts/make-release-web.sh [version] [-v]
+#         (default: APP_VERSION from src/main.cpp)
 #
 # Contract:
 #   release/vX/
@@ -35,16 +36,38 @@
 #
 # release/ is gitignored; run from the repo root.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
-if [ $# -gt 1 ]; then
-    echo "usage: $0 [version]   (default: APP_VERSION from src/main.cpp)" >&2
-    exit 1
+VERBOSE=0
+END=0
+POSITIONAL=()
+for a in "$@"; do
+    if [ "$END" -ne 0 ]; then POSITIONAL+=("$a"); continue; fi
+    case "$a" in
+        --) END=1 ;;
+        -v|--verbose) VERBOSE=1 ;;
+        -h|--help)
+            usage_from_header "$0"; exit 0 ;;
+        -*) usage_error "unknown flag: $a" ;;
+        *) POSITIONAL+=("$a") ;;
+    esac
+done
+if [ "${#POSITIONAL[@]}" -gt 1 ]; then
+    usage_error "too many arguments: ${POSITIONAL[*]}"
 fi
-VER="${1:-$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)}"
+require_dir web
+require_dir models
+require_file web/start.bat
+require_file src/main.cpp
+if [ "${#POSITIONAL[@]}" -eq 1 ]; then
+    VER="${POSITIONAL[0]}"
+else
+    VER="$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)"
+fi
 echo "-- version: $VER"
-test -d web -a -d models -a -f web/start.bat || {
-    echo "run from the repo root" >&2; exit 1; }
-command -v zip >/dev/null || { echo "zip not found" >&2; exit 1; }
+if [ "$VERBOSE" -ne 0 ]; then set -x; fi
+need_cmd zip "pacman -S zip"
+need_cmd python3 "pacman -S python"
 
 RELDIR="release/v${VER}"
 mkdir -p "$RELDIR"

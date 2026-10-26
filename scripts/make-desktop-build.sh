@@ -50,15 +50,19 @@
 # bloat is visible immediately. Pair with scripts/make-release-desktop.sh
 # to ship.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 FRESH=0
 WITH_SMOKE=0
 WITH_EXP=0
 RUN=0
 VERBOSE=0
+END=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
+    if [ "$END" -ne 0 ]; then usage_error "unexpected argument: $a"; fi
     case "$a" in
+        --) END=1 ;;
         --fresh) FRESH=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
         --exp) WITH_EXP=1 ;;
@@ -66,8 +70,8 @@ for a in "$@"; do
         --run) RUN=1 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,50p' "$0"; exit 0 ;;
-        *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
+            usage_from_header "$0"; exit 0 ;;
+        *) usage_error "unknown flag: $a" ;;
     esac
 done
 
@@ -75,14 +79,13 @@ done
 # narrower, explicit choice. Reject the ambiguous combo so nobody
 # assumes --exp also built the smoke tools.
 if [ "$WITH_EXP" -ne 0 ] && [ "$WITH_SMOKE" -ne 0 ]; then
-    echo "--exp builds aec_exp only; --with-smoke builds everything — pick one" >&2
-    exit 1
+    usage_error "--exp builds aec_exp only; --with-smoke builds everything — pick one"
 fi
 
-test -f CMakeLists.txt -a -d src || {
-    echo "run from the repo root" >&2; exit 1; }
-command -v cmake >/dev/null || { echo "cmake not found" >&2; exit 1; }
-command -v ninja >/dev/null || { echo "ninja not found" >&2; exit 1; }
+require_file CMakeLists.txt
+require_dir src
+need_cmd cmake
+need_cmd ninja
 
 if [ "$FRESH" -ne 0 ]; then
     # Windows locks a running program's file AND its folder: wiping
