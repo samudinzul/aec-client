@@ -43,11 +43,12 @@ installs itself on first run.
 `aec_gui.exe` is unsigned and bundles ONNX Runtime + TFLite, so
 aggressive AI heuristics flag it (standing: SecureAge APEX only,
 1/71, clean behavior tab — disputed per release, see `SECURITY.md`).
-A code-signing certificate (~$200/yr) is the only fix for
-the exe — this project sidesteps it instead: **ship `.py`, not `.exe`.**
-Every ML package here is a mainstream reputable wheel; nothing we write
-is a PE binary. **Never freeze this with PyInstaller/Nuitka** — that
-reintroduces the exact problem.
+A code-signing certificate is the only fix for the exe. SignPath
+Foundation provides free signing for OSS projects; until a signed
+desktop build ships, this project sidesteps the flag instead:
+**ship `.py`, not `.exe`.** Every ML package here is a mainstream
+reputable wheel; nothing we write is a PE binary. **Never freeze this
+with PyInstaller/Nuitka** — that reintroduces the exact problem.
 
 ## Setup
 
