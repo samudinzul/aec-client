@@ -115,7 +115,8 @@ them.
 - The harness runs the Python chain. Desktop C++ CPU and latency differ.
 - One real-speech pair plus deterministic synthetic scenarios is enough
   to rank these engines, not to certify a room.
-- The 48 kHz high-band splice is output fidelity; it is separate from
-  the mic-cleanliness decision and is not measured here.
+- The 48 kHz high-band splice is output fidelity; the engine ranking
+  above still applies to its 0-8 kHz chain. The splice itself is not
+  measured here. The exp build defaults to 48 kHz output on.
 - AEC3 at 48 kHz is not in the web chain (16 kHz only). Re-measure on
   the desktop if the native 48 kHz path matters.

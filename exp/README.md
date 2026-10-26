@@ -50,18 +50,20 @@ Key contracts (from the model cards — read before touching the wrappers):
   input level. Any `Run` failure latches to passthrough (never mute).
 - **LocalVQE: still v0 plumbing** (files validated, mic passthrough until
   the Kalman host DSP is ported — see contract above).
-- **High-band splice (checkbox):** the other route to 48 kHz — capture
-  the mic at 48 kHz, run the 16 kHz engine on the low band, and splice
-  the REAL 8–24 kHz band from the original mic onto the output. No
-  synthesis, so no metallic edge. The 16 kHz NS models cannot reach
-  above 8 kHz, so a broadband transient (keyboard click) would come back
-  with its sharp part intact: a dedicated **high-band NS** (STFT
-  spectral subtraction with a decision-directed a priori SNR, over the
-  8–24 kHz bins) removes it, and a VAD closes the high band while the
-  chain says "no voice". Measured on real speech with a realistic
-  keyboard click: click −14.2 dB, hiss −8.9 dB (−41.6 dB with the
-  VAD), voice −1 to −3 dB. Design + all measurements (including the
-  rejected alternatives): `exp/HB_NS_DESIGN.md`.
+- **High-band splice (48 kHz output, default ON):** the other route to
+  48 kHz — capture the mic at 48 kHz, run the 16 kHz engine on the low
+  band, and splice the REAL 8–24 kHz band from the original mic onto
+  the output. No synthesis, so no metallic edge. The chain itself stays
+  16 kHz (every NS backend is 16 kHz); only the output is 48 kHz. The
+  16 kHz NS models cannot reach above 8 kHz, so a broadband transient
+  (keyboard click) would come back with its sharp part intact: a
+  dedicated **high-band NS** (STFT spectral subtraction with a
+  decision-directed a priori SNR, over the 8–24 kHz bins) removes it,
+  and a VAD closes the high band while the chain says "no voice".
+  Measured on real speech with a realistic keyboard click: click
+  −14.2 dB, hiss −8.9 dB (−41.6 dB with the VAD), voice −1 to −3 dB.
+  Design + all measurements (including the rejected alternatives):
+  `exp/HB_NS_DESIGN.md`.
 - **Splice resamplers: fixed.** The old 3-tap decimator (12 kHz folded
   to 4 kHz at only −9.5 dB, −3.5 dB droop at 8 kHz) and linear
   upsampler (7 kHz mirrored to 9 kHz at −4 dB, top droop −6 dB) are

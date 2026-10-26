@@ -245,11 +245,14 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show NKF-AEC / LocalVQE-AE
 // High-band splice: capture mic at 48 kHz, process the low band (0-8k)
 // through the 16 kHz engine, then splice the untouched real high band
 // (8-24k) from the original 48 kHz mic onto the upsampled output.
-std::atomic<bool>  g_highbandEnabled{ false };
+// Default ON in exp: 48 kHz output is the quality path; the chain
+// itself stays 16 kHz because every NS backend is 16 kHz.
+std::atomic<bool>  g_highbandEnabled{ true };
 // High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
 // is a taste knob, not a fixed law. 0.5 = the original splice level;
-// after the resampler fix try 0.7-1.0 for a flatter 8 kHz crossover.
-std::atomic<float> g_hbMix{ 0.5f };
+// after the FIR resampler fix the low band is flat to 7.5 kHz, so 0.7
+// is the better default and 0.7-1.0 gives more air.
+std::atomic<float> g_hbMix{ 0.7f };
 SpscRing<4096>     g_micRing48;
 // (the high-band gate depth is internal to the NS module)
 std::atomic<float> g_hbRatioDb{ 0.0f };  // diagnostics: the VAD level (dBFS)
@@ -785,7 +788,7 @@ void SaveSettings() {
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
       << g_nsBackend.load() << "\n"                    // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN-exp)
-      << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (exp, default off)
+      << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (exp, default on)
       << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"; // slot 32: high-band mix (%)
 }
 
@@ -895,12 +898,13 @@ void LoadSettings() {
         int nsBackendRaw = -1;
         if (f >> nsBackendRaw) { (void)nsBackendRaw; }
         // Slot 31: high-band splice (exp). Old files miss it —
-        // default OFF.
-        int hbRaw = 0;
+        // default ON: 48 kHz output is the exp quality path.
+        int hbRaw = 1;
         if (f >> hbRaw) g_highbandEnabled.store(hbRaw != 0);
         // Slot 32 (gen10): high-band mix (%). Old files miss it —
-        // default 50% preserves the original splice balance.
-        int hbMixRaw = 50;
+        // default 70% after the FIR resampler; 50% was the original
+        // splice balance.
+        int hbMixRaw = 70;
         if (f >> hbMixRaw) {
             if (hbMixRaw < 0) hbMixRaw = 0;
             if (hbMixRaw > 100) hbMixRaw = 100;
@@ -1901,7 +1905,8 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         float gain = g_micGain.load() * g_outputGain.load();
         // The high band is raw mic, so its level is taste, not a fixed
         // law: g_hbMix lets the user trade air against hiss/click
-        // residue. 50% preserves the original splice balance.
+        // residue. 50% preserves the original splice balance; 70% is
+        // the better default after the FIR resampler fix.
         const float hbMix = g_hbMix.load();
         for (int i = 0; i < fsOut; i++)
             out[i] = SoftLimit((nvOut[i] + high[i] * hbMix) * gain + sbBuf[i] * sbGain);
@@ -2710,7 +2715,7 @@ void DrawAudioTab() {
     // Real highs instead of synthesized ones. Live restart on switch.
     {
         bool hb = g_highbandEnabled.load();
-        if (ImGui::Checkbox("High-band splice (real 48k highs)", &hb)) {
+        if (ImGui::Checkbox("48 kHz output (high-band splice)", &hb)) {
             g_highbandEnabled.store(hb);
             if (hb) {
                 // Splice always runs the 16 kHz chain (48 kHz is the
@@ -2724,10 +2729,11 @@ void DrawAudioTab() {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "Captures the mic at 48 kHz, runs the 16 kHz engine on the\n"
-                "low band (0-8 kHz), then mixes in the real high band\n"
-                "(8-24 kHz) from the original mic. No synthesis, no metallic\n"
-                "edge.\n\n"
+                "Outputs 48 kHz. The echo engine and NS still run at\n"
+                "16 kHz (all NS backends are 16 kHz), so only the low band\n"
+                "(0-8 kHz) is cleaned; the real 8-24 kHz mic band is\n"
+                "spliced back on top. This is output fidelity, not 48 kHz\n"
+                "echo cancellation. No synthesis, no metallic edge.\n\n"
                 "The 16 kHz NS models cannot reach above 8 kHz, so a broadband\n"
                 "transient (keyboard click) would keep its sharp part. A\n"
                 "dedicated high-band NS fixes that: STFT spectral subtraction\n"
@@ -2754,10 +2760,10 @@ void DrawAudioTab() {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(
                     "Level of the real 8-24 kHz band relative to the\n"
-                    "processed low band. 50%% is the original splice balance.\n"
-                    "Raise it if the top sounds dull after the cleaner\n"
-                    "resampler; lower it if hiss or click residue bothers\n"
-                    "you. Applies live.");
+                    "processed low band. 50%% is the original splice balance;\n"
+                    "70%% is the default after the cleaner FIR resampler.\n"
+                    "Raise it if the top still sounds dull; lower it if hiss\n"
+                    "or click residue bothers you. Applies live.");
             ImGui::Unindent();
         }
         if (g_isRunning && g_highbandEnabled.load())
@@ -3108,7 +3114,7 @@ void DrawAboutTab() {
     ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN-exp)");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
-    ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
+    ImGui::BulletText("Selectable sample rate (16 / 48 kHz; 48k output via high-band splice)");
     ImGui::BulletText("Live level meters");
     ImGui::BulletText("Soundboard - play sounds over your voice");
     ImGui::BulletText("Optional minimize to system tray");
