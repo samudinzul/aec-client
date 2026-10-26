@@ -21,11 +21,19 @@ scripts/make-desktop-build.sh --fresh   # wipe + rebuild aec_gui.exe only (smoke
 scripts/test.sh                        # offline tests (native + web)
 ```
 
+Rebuilding the experimental fork after an `exp/` edit — never touches
+`aec_gui.exe`, so the shipped official build stays exactly as released:
+
+```bash
+scripts/make-desktop-build.sh --exp        # build aec_exp.exe only
+scripts/make-desktop-build.sh --exp --run  # build + launch it
+```
+
 ## Full command reference
 
 | Script | Purpose | Typical use |
 |--------|---------|-------------|
-| `make-desktop-build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags) | `scripts/make-desktop-build.sh --fresh` · `--run` builds then launches the app · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
+| `make-desktop-build.sh` | Configure + build the app only — clean output is the default (no smoke tools, no stray logs). `--fresh` wipes `build/` first; `--debug` switches MinSizeRel → Debug (orthogonal flags); `--exp` builds only `aec_exp.exe` (experimental fork, `aec_gui.exe` untouched) | `scripts/make-desktop-build.sh --fresh` · `--run` builds then launches the app (`aec_exp.exe` with `--exp`) · `--with-smoke` also builds `nkf_smoke.exe` (for `test.sh --native-only`) · `-v` streams full tool output |
 | `make-web-build.sh` | Prepare + verify the web runtime (venv, packages, compile, engine smoke — no compiler involved) | `scripts/make-web-build.sh` · `--fresh` rebuilds `.venv` · `--run` builds then launches the GUI |
 | `test.sh` | Offline test suite, no audio hardware needed | `scripts/test.sh` · `--native-only` / `--web-only` |
 | `make-release-desktop.sh [ver]` | Stage + zip the desktop release (contract asserts included) | `scripts/make-release-desktop.sh` (version defaults to `APP_VERSION`) |

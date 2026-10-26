@@ -8,6 +8,7 @@
 # Two different kinds of "clean", kept apart on purpose:
 #   - CLEAN OUTPUT (always, no flag): builds ONLY the app
 #     (aec_gui.exe) — no nkf_smoke, no stray logs left in build/.
+#     --exp swaps the target to the experimental aec_exp.exe.
 #   - FRESH CONFIGURE (--fresh): wipe build/ first, then configure
 #     from scratch. Use after CMakeLists changes or when the cache
 #     looks stale.
@@ -16,10 +17,18 @@
 #   scripts/make-desktop-build.sh              # build app (MinSizeRel)
 #   scripts/make-desktop-build.sh --fresh      # wipe build/, then build app
 #   scripts/make-desktop-build.sh --debug      # debuggable build instead of size build
+#   scripts/make-desktop-build.sh --exp        # build ONLY aec_exp.exe (experimental fork)
 #   scripts/make-desktop-build.sh --with-smoke # also build nkf_smoke.exe (needed by
 #                                              # scripts/test.sh --native-only)
 #   scripts/make-desktop-build.sh --run        # build, then launch aec_gui.exe
+#                                              # (aec_exp.exe with --exp)
 #   scripts/make-desktop-build.sh -v           # verbose: full cmake/ninja output
+#
+# --exp is the intended way to rebuild the experimental fork after an
+# exp/ edit: it builds the aec_exp target only, never aec_gui, so the
+# official shipped exe is left untouched. Combine it with --run to
+# rebuild + launch in one go:
+#   scripts/make-desktop-build.sh --exp --run
 #
 # --run launches build/aec_gui.exe detached (terminal stays free).
 # DLLs + models are staged next to the exe by CMake, and the app
@@ -44,6 +53,7 @@ set -euo pipefail
 
 FRESH=0
 WITH_SMOKE=0
+WITH_EXP=0
 RUN=0
 VERBOSE=0
 BUILD_TYPE="MinSizeRel"
@@ -51,14 +61,23 @@ for a in "$@"; do
     case "$a" in
         --fresh) FRESH=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
+        --exp) WITH_EXP=1 ;;
         --with-smoke) WITH_SMOKE=1 ;;
         --run) RUN=1 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,42p' "$0"; exit 0 ;;
+            sed -n '2,50p' "$0"; exit 0 ;;
         *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
     esac
 done
+
+# --exp and --with-smoke overlap (both build aec_exp); --exp is the
+# narrower, explicit choice. Reject the ambiguous combo so nobody
+# assumes --exp also built the smoke tools.
+if [ "$WITH_EXP" -ne 0 ] && [ "$WITH_SMOKE" -ne 0 ]; then
+    echo "--exp builds aec_exp only; --with-smoke builds everything — pick one" >&2
+    exit 1
+fi
 
 test -f CMakeLists.txt -a -d src || {
     echo "run from the repo root" >&2; exit 1; }
@@ -69,7 +88,7 @@ if [ "$FRESH" -ne 0 ]; then
     # Windows locks a running program's file AND its folder: wiping
     # build/ while the app is open dies with "Device or resource busy"
     # (possibly after half-deleting the contents). Fail upfront.
-    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|nkf_smoke.exe\|dtln_smoke.exe\|aec3_smoke.exe\|gtcrn_smoke.exe\|localvqe_smoke.exe"; then
+    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|aec_exp.exe\|nkf_smoke.exe\|dtln_smoke.exe\|aec3_smoke.exe\|gtcrn_smoke.exe\|localvqe_smoke.exe"; then
         echo "close the app and any smoke exe first — running programs lock build/" >&2
         exit 1
     fi
@@ -134,7 +153,12 @@ run_step "configure (${BUILD_TYPE})" \
     "${CC_LAUNCHER[@]:-}"
 
 NPROC=$(nproc 2>/dev/null || echo 4)
-if [ "$WITH_SMOKE" -ne 0 ]; then
+if [ "$WITH_EXP" -ne 0 ]; then
+    # Experimental fork only. Deliberately does NOT touch aec_gui:
+    # rebuilding exp must never replace the official shipped exe.
+    run_step "build aec_exp (-j${NPROC})" \
+        cmake --build build -j "$NPROC" --target aec_exp
+elif [ "$WITH_SMOKE" -ne 0 ]; then
     run_step "build all (-j${NPROC})" \
         cmake --build build -j "$NPROC"
 else
@@ -142,13 +166,15 @@ else
         cmake --build build -j "$NPROC" --target aec_gui
     # A clean build leaves no diagnostic tools or logs behind.
     # (aec_exp is the experimental fork — never part of a clean
-    # official build; build it explicitly by target when needed.)
+    # official build; use --exp to build it explicitly.)
     rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
 fi
 
 echo ""
 echo "-- size audit (bloat check)"
-if [ "$WITH_SMOKE" -ne 0 ]; then
+if [ "$WITH_EXP" -ne 0 ]; then
+    ls -la build/aec_exp.exe 2>/dev/null || true
+elif [ "$WITH_SMOKE" -ne 0 ]; then
     ls -la build/aec_gui.exe build/aec_exp.exe build/nkf_smoke.exe build/dtln_smoke.exe build/aec3_smoke.exe 2>/dev/null || true
 else
     ls -la build/aec_gui.exe 2>/dev/null || true
@@ -158,9 +184,16 @@ echo "DLLs next to the exe:"
 du -h build/*.dll 2>/dev/null || echo "(no DLLs staged)"
 echo ""
 echo "Models (bundled, unchanged by build flags):"
-du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflite 2>/dev/null || true
+if [ "$WITH_EXP" -ne 0 ]; then
+    du -h -c exp/models/gtcrn_simple.onnx exp/models/LocalVQEAECResidualMask.onnx 2>/dev/null || true
+else
+    du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflite 2>/dev/null || true
+fi
 echo ""
-if [ "$WITH_SMOKE" -ne 0 ]; then
+if [ "$WITH_EXP" -ne 0 ]; then
+    echo "BUILD OK: build/aec_exp.exe"
+    echo "Next: scripts/make-desktop-build.sh --exp --run (or run build/aec_exp.exe directly)"
+elif [ "$WITH_SMOKE" -ne 0 ]; then
     echo "BUILD OK: build/aec_gui.exe + build/aec_exp.exe + smoke exes"
     echo "Next: scripts/test.sh --native-only, or ship with scripts/make-release-desktop.sh"
 else
@@ -170,9 +203,13 @@ fi
 
 if [ "$RUN" -ne 0 ]; then
     echo ""
-    if [ ! -x build/aec_gui.exe ]; then
-        echo "cannot --run: build/aec_gui.exe missing" >&2; exit 1
+    RUN_EXE="build/aec_gui.exe"
+    if [ "$WITH_EXP" -ne 0 ]; then
+        RUN_EXE="build/aec_exp.exe"
     fi
-    ./build/aec_gui.exe & disown
-    echo "launched aec_gui.exe (pid $!)"
+    if [ ! -x "$RUN_EXE" ]; then
+        echo "cannot --run: ${RUN_EXE} missing" >&2; exit 1
+    fi
+    "./${RUN_EXE}" & disown
+    echo "launched ${RUN_EXE#build/} (pid $!)"
 fi
