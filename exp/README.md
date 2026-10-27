@@ -1,4 +1,4 @@
-# exp/ — GTCRN + LocalVQE v1.4 experiments (desktop-only, never shipped)
+# exp/ — LocalVQE v1.4 experiment (desktop-only, never shipped)
 
 Isolated playground for two candidate engines. Nothing here touches the
 main app (`src/`, `web/`, `models/`, `scripts/make-release-*`): the release

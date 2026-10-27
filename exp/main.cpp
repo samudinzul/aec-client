@@ -2229,7 +2229,7 @@ void StartAEC() {
     if (g_nsEnabled.load() && g_nsBackend.load() == 3 &&
         (!g_engine.gtcrn || !GtcrnReady(g_engine.gtcrn))) {
         const char* why = (g_engine.gtcrn && GtcrnLastError(g_engine.gtcrn)[0])
-            ? GtcrnLastError(g_engine.gtcrn) : "models/gtcrn_simple.onnx missing (run exp/get_models.sh + rebuild)";
+            ? GtcrnLastError(g_engine.gtcrn) : "models/gtcrn_simple.onnx missing";
         snprintf(g_statusText, 128, "GTCRN unavailable - %.90s", why);
         return;
     }
@@ -2323,11 +2323,7 @@ void StartAEC() {
     g_isRunning = true;
     g_sessionStart = Clock::now();
     StartMonitor();   // local soundboard monitoring (fail-open)
-    const char* engineName =
-        (g_engine.type == ENGINE_OFF) ? "Off" :
-        (g_engine.type == ENGINE_LOCALVQE) ? "LocalVQE-AEC" :
-        (g_engine.type == ENGINE_AEC3) ? "AEC3" :
-        (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
+    const char* engineName = PROFILES[g_profileIndex].name;
     const char* nsTag = "";
     if (sr == 16000) {
         if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
@@ -2506,6 +2502,12 @@ void DrawDevicesSection() {
 
     ImGui::Spacing();
     if (ImGui::Checkbox("Listen to myself", &g_listenToSelf)) {
+        // When Listen to myself is on, the output device should match
+        // the Speaker Reference (your speakers) so you hear yourself
+        // through the same speakers.
+        if (g_listenToSelf) {
+            g_outIndex = g_refIndex;
+        }
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
@@ -2642,8 +2644,8 @@ void DrawAudioTab() {
             "Off - no echo cancellation; at 16 kHz the mic passes\n"
             "straight to the noise-suppression stage (denoise-only).\n"
             "Best for sealed earphones/headsets: no echo path, zero CPU.\n"
-            "DTLN-AEC 128 - default; best double-talk and loudspeaker\n"
-            "quality. Use it for leaky earphones too.\n"
+            "DTLN-AEC 128 - best double-talk and loudspeaker\n"
+            "performance.\n"
             "WebRTC AEC3 - lowest-CPU canceller; strongest on echo-only,\n"
             "but weaker in double-talk and avoid it for sealed earphones\n"
             "(an active reference with no echo path damages the near-end).\n"
@@ -2666,7 +2668,8 @@ void DrawAudioTab() {
         // is a regular profile. Off, DTLN and AEC3 always show.
         if (!g_experimentalEngines.load() &&
             ((EngineType)PROFILES[i].engine == ENGINE_NKF ||
-             (EngineType)PROFILES[i].engine == ENGINE_LOCALVQE)) continue;
+             (EngineType)PROFILES[i].engine == ENGINE_LOCALVQE ||
+             (EngineType)PROFILES[i].engine == ENGINE_AEC3)) continue;
         if (!firstVisible) ImGui::SameLine();
         firstVisible = false;
         if ( ImGui::RadioButton(label.c_str(), sel) && !sel) {
@@ -2678,8 +2681,7 @@ void DrawAudioTab() {
 
     // Use-case guidance from the AEC harness: the radios stay names-only.
     ImGui::TextDisabled(
-        "Loudspeaker: DTLN-AEC  |  sealed earphone/headset: Off  |  "
-        "leaky earphone: DTLN-AEC");
+        "Loudspeaker: DTLN-AEC  |  sealed earphone/headset: Off");
 
     // Post stage: NS backend radio for every engine (Off / DTLN-NS /
     // Hush / GTCRN-exp). Live restart on switch (same path as switching
@@ -2700,8 +2702,7 @@ void DrawAudioTab() {
                 "Hush - best on background talkers; strongest on clicks,\n"
                 "heaviest stage (needs weya_nc.dll +\n"
                 "models/hush_16k_onnx.tar.gz).\n"
-                "GTCRN - default; most transparent on hiss and keyboard;\n"
-                "weak on overlapping talkers, 16 kHz only\n"
+                "GTCRN - default; hiss + keyboard.\n"
                 "(needs models/gtcrn_simple.onnx).\n\n"
                 "All NS backends are 16 kHz. On a native 48 kHz chain\n"
                 "(AEC3 or Off, splice off) the stage is skipped; the chain\n"
@@ -2735,7 +2736,7 @@ void DrawAudioTab() {
             (nsb == 0) ? "Off - no noise suppression; lowest CPU." :
             (nsb == 1) ? "DTLN-NS - cheapest stage; steady hiss only." :
             (nsb == 2) ? "Hush - background talkers; heaviest of the three." :
-                         "GTCRN - default; hiss + keyboard; most transparent; 16 kHz only.";
+                         "GTCRN - default; hiss + keyboard.";
         ImGui::TextDisabled("%s", nsHint);
         // A 48 kHz native chain (Off/AEC3, splice off) skips every NS
         // backend — say so before Start instead of letting the status
@@ -2799,29 +2800,22 @@ void DrawAudioTab() {
                 "7.5 kHz, aliases below -76 dB, images below -55 dB. The old\n"
                 "3-tap/linear pair drooped -3.5 dB at 8 kHz and mirrored the\n"
                 "low band's top into the air band.");
-        // High-band mix: the top band is raw mic, so its level is a
-        // taste knob, not a fixed law. 50% preserves the old balance;
-        // the cleaner resampler makes 70-100% usable for more air.
         if (g_highbandEnabled.load()) {
-            ImGui::Indent();
             float mixPct = g_hbMix.load() * 100.0f;
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::SliderFloat("High-band mix", &mixPct, 0.0f, 100.0f, "%.0f%%"))
+            ImGui::SameLine();
+            ImGui::PushItemWidth(120);
+            if (ImGui::SliderFloat("##hbMix", &mixPct, 0.0f, 100.0f, "%.0f%%"))
                 g_hbMix.store(mixPct / 100.0f);
-            if (ImGui::IsItemDeactivatedAfterEdit()) SaveSettings();
+            ImGui::PopItemWidth();
+            ImGui::SameLine();
+            ImGui::TextDisabled("High-band mix");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(
-                    "Level of the real 8-24 kHz band relative to the\n"
-                    "processed low band. 50%% is the original splice balance;\n"
-                    "100%% is the default quality path after the cleaner FIR\n"
-                    "resampler. Lower it if hiss or click residue bothers\n"
-                    "you. Applies live.");
-            ImGui::Unindent();
+                    "The spliced high band is raw mic, so its level is\n"
+                    "taste, not a fixed law. Trade air against hiss/click\n"
+                    "residue. 50% preserves the original splice balance;\n"
+                    "70-100% gives more air after the FIR resampler fix.");
         }
-        if (g_isRunning && g_highbandEnabled.load())
-            ImGui::TextDisabled("HiBand: VAD level %.1f dBFS, delay %d smp, mix %.0f%%",
-                (double)g_hbRatioDb.load(), g_hbDelaySamples.load(),
-                (double)(g_hbMix.load() * 100.0f));
     }
 
     // ---- chain summary (single source of truth for the full path) ----
@@ -2953,11 +2947,12 @@ void DrawAppearanceTab() {
     // this to show the experimental pair — unticking falls back to DTLN
     // only if the selection is one of the hidden engines.
     bool exp = g_experimentalEngines.load();
-    if ( ImGui::Checkbox("Show experimental engines (NKF-AEC, LocalVQE-AEC)", &exp)) {
+    if ( ImGui::Checkbox("Show other AEC engines", &exp)) {
         g_experimentalEngines.store(exp);
         if (!exp &&
             (PROFILES[g_profileIndex].engine == ENGINE_NKF ||
-             PROFILES[g_profileIndex].engine == ENGINE_LOCALVQE)) {
+             PROFILES[g_profileIndex].engine == ENGINE_LOCALVQE ||
+             PROFILES[g_profileIndex].engine == ENGINE_AEC3)) {
             // Hiding them: fall back to DTLN so the selection can't be
             // left on an engine that is no longer in the list.
             g_engineIndex = ENGINE_DTLN;
@@ -2970,11 +2965,9 @@ void DrawAppearanceTab() {
     }
     if ( ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Off (default): the profile list shows Off, DTLN-AEC 128 and\n"
-            "WebRTC AEC3.\n"
-            "On: also shows NKF-AEC and LocalVQE v1.4-AEC.\n"
-            "Those two are real engines but less tested than the default -\n"
-            "untick to hide them (falls back to DTLN if one is selected).\n"
+            "Off (default): the profile list shows Off and DTLN-AEC 128.\n"
+            "On: also shows WebRTC AEC3, NKF-AEC and LocalVQE v1.4-AEC.\n"
+            "Untick to hide them (falls back to DTLN if one is selected).\n"
             "LocalVQE chains into the NS backend (Off / DTLN-NS / Hush /\n"
             "GTCRN), e.g. mic -> LocalVQE -> GTCRN; 16 kHz only and it\n"
             "needs the exp/models/LocalVQE* bundle.");

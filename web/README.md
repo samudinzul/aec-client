@@ -10,7 +10,7 @@ nothing for antivirus heuristics to flag.
 > DTLN-AEC / WebRTC AEC3 / NKF-AEC chain with DTLN-NS or Hush.
 > It does **not** have GTCRN, the 48 kHz high-band splice,
 > automatic 48 kHz output, or LocalVQE. For the best sound
-> quality, use the desktop app (v1.15.0 or newer). Maintenance
+> quality, use the desktop app (v1.14.0 or newer). Maintenance
 > here is limited to security, compatibility, and release fixes.
 
 ## What you need first
@@ -59,7 +59,7 @@ native window, and all 3 engines), then opens the GUI
 in a native app window (Edge WebView2 — built into
 Windows 10/11, so no browser is needed) once the models
 are loaded. The NKF-AEC profile appears
-once you tick "Show experimental engines" on the Appearance
+once you tick "Show other AEC engines" on the Appearance
 tab (WebRTC AEC3 is a regular choice now). Click it again any time to open another
 window against the running server. Stop: close the
 window — the server stops with it — or press Ctrl+C in

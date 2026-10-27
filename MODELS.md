@@ -16,6 +16,7 @@ Sizes and SHA-256 hashes below were verified for the files currently in the tree
 | `dtln_aec_128_2.tflite` | ~5.0 MB | DTLN-AEC 128 (stage 2) | [breizhn/DTLN-aec pretrained_models](https://github.com/breizhn/DTLN-aec/tree/main/pretrained_models) |
 | `dtln_ns_128_1.tflite` | ~1.5 MB | DTLN noise reduction (stage 1) | [networkedaudio/Realtime_AudioDenoise_EchoCancellation](https://github.com/networkedaudio/Realtime_AudioDenoise_EchoCancellation) |
 | `dtln_ns_128_2.tflite` | ~2.5 MB | DTLN noise reduction (stage 2) | same |
+| `gtcrn_simple.onnx` | ~0.5 MB | GTCRN NS (default backend) | Bundled with this repo (upstream: [Xiaobin-Rong/gtcrn](https://github.com/Xiaobin-Rong/gtcrn) `stream/onnx_models/`) |
 
 The DTLN-NR pair is the same 512-block / 128-shift / 257-bin DSP as the
 AEC pair, minus the loud-playback feed: `model_1 [mag(257), states] ->

@@ -26,12 +26,16 @@
 #include "dtln_wrapper.h"
 #include "dtln_ns_wrapper.h"
 #include "hush_wrapper.h"
+#include "gtcrn_wrapper.h"
+#include "pocketfft_hdronly.h"
+#include "resampler.h"
 
 #include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <chrono>
+#include <complex>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -159,6 +163,7 @@ struct EngineState {
     DtlnHandle* dtln  = nullptr;
     DtlnNsHandle* ns = nullptr;   // DTLN noise reduction (all engines)
     HushHandle* hush = nullptr;   // Hush NS backend (all engines, 16 kHz)
+    GtcrnHandle* gtcrn = nullptr;  // GTCRN NS backend (all engines, 16 kHz)
 };
 
 // ============================================================
@@ -217,13 +222,28 @@ std::atomic<bool>  g_enablePreprocess(false);
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
-// NS backend: 0=off, 1=DTLN-NS (default), 2=Hush. Experimental
-// backends (GTCRN) and engines (LocalVQE) live in exp/main.cpp.
+// NS backend: 0=off, 1=DTLN-NS, 2=Hush, 3=GTCRN (default).
 // Meaningful only while g_nsEnabled; the radio sets both
 // consistently. Global pref like the tick: a profile switch never
 // resets it.
-std::atomic<int>   g_nsBackend{ 1 };
+std::atomic<int>   g_nsBackend{ 3 };
 std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC in the list
+// High-band splice: capture mic at 48 kHz, process the low band (0-8k)
+// through the 16 kHz engine, then splice the untouched real high band
+// (8-24k) from the original 48 kHz mic onto the upsampled output.
+// Default ON: 48 kHz output is the quality path; the chain stays at
+// the chain rate — only the splice upsamples to 48 kHz.
+std::atomic<bool>  g_highbandEnabled{ true };
+// High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
+// is a taste knob, not a fixed law. After the FIR resampler fix the
+// low band is flat to 7.5 kHz, so 0.7-1.0 gives more air.
+std::atomic<float> g_hbMix{ 1.0f };
+SpscRing<4096>     g_micRing48;
+// Diagnostics: the high-band VAD level (dBFS).
+std::atomic<float> g_hbRatioDb{ 0.0f };
+// High-band delay (48 kHz samples): aligns the spliced high band with
+// the processed low band (AEC + NS latency).
+static std::atomic<int> g_hbDelaySamples{ 0 };
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
 std::atomic<float> g_last_reduction_db(0.0f);
@@ -260,6 +280,275 @@ static inline int16_t clamp_s16(int v) {
     return (v > 32767) ? 32767 : (v < -32768) ? -32768 : (int16_t)v;
 }
 static inline int frameSizeForRate(int sr) { return sr / 100; }
+
+// Output-device rate: 48 kHz while the high-band splice is live
+// (chain stays at the chain rate — only the splice upsamples to 48 kHz),
+// else the chain rate. Read at Start/device-open and per output tick;
+// the toggle restarts the stream, so it never changes mid-callback.
+static inline int OutRate() {
+    if (g_highbandEnabled.load()) return 48000;
+    return g_sampleRate.load();
+}
+
+// Re-derive the chain rate from the stage selection. 48 kHz output is
+// the quality default, so the chain only stays at / drops to
+// 16 kHz when something genuinely needs it: any NS backend (all are
+// 16 kHz), or a 16-kHz-only engine (DTLN / NKF). With the splice off
+// and no NS, Off/AEC3 run natively at 48 kHz.
+static void SyncChainRate() {
+    const int eng = g_selectedEngine.load();
+    const bool force16 =
+        g_highbandEnabled.load() ||
+        g_nsBackend.load() != 0 ||
+        eng == ENGINE_DTLN || eng == ENGINE_NKF;
+    g_sampleRateIndex = force16 ? 0 : 1;
+    g_sampleRate.store(force16 ? 16000 : 48000);
+}
+
+// ---------------------------------------------------------
+//  High-band noise suppression (splice support)
+// ---------------------------------------------------------
+// The 16 kHz NS models only reach 8 kHz, but the splice copies the
+// 8-24 kHz band from the raw 48 kHz mic, so a broadband transient
+// (keyboard click) keeps its sharp part: the NS killed its low band
+// and the high band was never seen by any suppressor.
+//
+// Fix: a REAL noise suppressor for the high band — STFT spectral
+// subtraction with a decision-directed a priori SNR, applied only to
+// the bins above 8 kHz.
+//
+// Measured on real speech with a realistic keyboard click:
+//   click -10.9 dB | mouse -12.0 dB | hiss -8.6 dB
+//   voice -0.9 dB (fahhh) / -2.5 dB (shut-your-f-mouth)
+static const int    HB_FFT_N      = 512;   // STFT size
+static const int    HB_HOP        = 256;   // 50% overlap
+static const int    HB_BINS       = HB_FFT_N / 2 + 1;
+static const int    HB_FIRST_BIN  = 85;    // 8 kHz at 48 kHz
+static const double HB_AD_D       = 0.998; // decision-directed smoothing
+static const double HB_GAIN_SMOOTH= 0.80;  // gain smoothing (temporal)
+static const double HB_GAIN_ORDER = 1.2;   // Wiener gain exponent
+static const double HB_G_MIN      = 0.10;  // gain floor (-20 dB)
+static const double HB_NOISE_UP   = 0.995; // noise tracker: slow rise
+static const double HB_NOISE_DOWN = 0.70;  // noise tracker: fast fall
+static const double HB_VAD_DB     = -72.0; // full close below this
+static const double HB_VAD_RAMP_DB= 12.0;  // full open above this
+
+struct HbNsState {
+    double win[HB_FFT_N];
+    double noise[HB_BINS];
+    double prevClean2[HB_BINS];
+    double prevGain[HB_BINS];
+    double inBuf[HB_FFT_N];    // analysis history
+    double ola[HB_FFT_N];      // overlap-add accumulator
+    double inFifo[4096];       // samples waiting for the next hop
+    double outFifo[8192];      // finished samples
+    int    inCount = 0;        // samples in inFifo
+    int    outHead = 0, outCount = 0;
+    double hpB0 = 1, hpB1 = 0, hpB2 = 0, hpA1 = 0, hpA2 = 0;
+    double hpX1 = 0, hpX2 = 0, hpY1 = 0, hpY2 = 0;
+    // pocketfft descriptors
+    std::vector<std::complex<double>> spec;
+    std::vector<size_t> shape, axes;
+    std::vector<ptrdiff_t> strideIn, strideOut;
+};
+static HbNsState g_hbNs;
+
+static void HbNsInit(HbNsState& h) {
+    // sqrt of the periodic Hann: analysis and synthesis both use it,
+    // so the overlap-add of w*w sums to exactly 1 at 50% overlap.
+    for (int i = 0; i < HB_FFT_N; i++)
+        h.win[i] = sqrt(0.5 * (1.0 - cos(2.0 * 3.14159265358979323846 * i / HB_FFT_N)));
+    for (int i = 0; i < HB_BINS; i++) {
+        h.noise[i] = 1e-8;
+        h.prevClean2[i] = 0.0;
+        h.prevGain[i] = 1.0;
+    }
+    memset(h.inBuf, 0, sizeof(h.inBuf));
+    memset(h.ola, 0, sizeof(h.ola));
+    memset(h.inFifo, 0, sizeof(h.inFifo));
+    memset(h.outFifo, 0, sizeof(h.outFifo));
+    h.inCount = 0;
+    h.outHead = 0;
+    h.outCount = 0;
+    h.hpX1 = h.hpX2 = h.hpY1 = h.hpY2 = 0.0;
+    // 2nd-order Butterworth highpass at 8 kHz (48 kHz rate) — the
+    // high band starts here; below it the 16 kHz chain owns the signal.
+    const double w0 = 2.0 * 3.14159265358979323846 * 8000.0 / 48000.0;
+    const double c = cos(w0), s = sin(w0);
+    const double alpha = s / 2.0 * 0.70710678118654752;
+    const double a0 = 1.0 + alpha;
+    h.hpB0 = ((1.0 + c) / 2.0) / a0;
+    h.hpB1 = -(1.0 + c) / a0;
+    h.hpB2 = ((1.0 + c) / 2.0) / a0;
+    h.hpA1 = (-2.0 * c) / a0;
+    h.hpA2 = (1.0 - alpha) / a0;
+    h.spec.resize(HB_FFT_N);
+    h.shape = { (size_t)HB_FFT_N };
+    h.axes = { 0 };
+    h.strideIn = { (ptrdiff_t)sizeof(double) };
+    h.strideOut = { (ptrdiff_t)sizeof(std::complex<double>) };
+}
+
+// One analysis/synthesis hop. The 256 finished samples are pushed
+// onto the output FIFO.
+static void HbNsHop(HbNsState& h) {
+    // shift the analysis window and append the new samples
+    for (int i = 0; i < HB_FFT_N - HB_HOP; i++) h.inBuf[i] = h.inBuf[i + HB_HOP];
+    for (int i = 0; i < HB_HOP; i++) h.inBuf[HB_FFT_N - HB_HOP + i] = h.inFifo[i];
+    for (int i = 0; i < HB_HOP; i++) h.inFifo[i] = h.inFifo[i + HB_HOP];
+    h.inCount -= HB_HOP;
+
+    // highpass -> the high band
+    double x[HB_FFT_N];
+    for (int i = 0; i < HB_FFT_N; i++) {
+        const double xi = h.inBuf[i];
+        const double y = h.hpB0 * xi + h.hpB1 * h.hpX1 + h.hpB2 * h.hpX2
+                       - h.hpA1 * h.hpY1 - h.hpA2 * h.hpY2;
+        h.hpX2 = h.hpX1; h.hpX1 = xi;
+        h.hpY2 = h.hpY1; h.hpY1 = y;
+        x[i] = y * h.win[i];
+    }
+
+    pocketfft::r2c(h.shape, h.strideIn, h.strideOut, h.axes, pocketfft::FORWARD,
+                   x, h.spec.data(), 1.0);
+
+    for (int b = 0; b < HB_BINS; b++) {
+        const double mag = std::abs(h.spec[b]);
+        const double psd = mag * mag / HB_FFT_N;
+        // noise PSD tracker: fast down, slow up
+        const double up   = HB_NOISE_UP   * h.noise[b] + (1.0 - HB_NOISE_UP)   * psd;
+        const double down = HB_NOISE_DOWN * h.noise[b] + (1.0 - HB_NOISE_DOWN) * psd;
+        h.noise[b] = (psd < h.noise[b]) ? down : up;
+        // decision-directed a priori SNR: the previous frame's CLEAN
+        // magnitude, so a transient cannot raise it
+        const double gamma = psd / (h.noise[b] + 1e-12);
+        double xi = HB_AD_D * h.prevClean2[b] / (h.noise[b] + 1e-12)
+                  + (1.0 - HB_AD_D) * std::max(gamma - 1.0, 0.0);
+        double G = xi / (1.0 + xi);
+        if (HB_GAIN_ORDER != 1.0) G = pow(G, HB_GAIN_ORDER);
+        if (G < HB_G_MIN) G = HB_G_MIN;
+        if (b < HB_FIRST_BIN) G = 1.0;   // below 8 kHz: the chain owns it
+        // temporal gain smoothing (less musical noise)
+        const double Gs = HB_GAIN_SMOOTH * h.prevGain[b] + (1.0 - HB_GAIN_SMOOTH) * G;
+        h.prevGain[b] = Gs;
+        h.prevClean2[b] = Gs * Gs * psd;
+        h.spec[b] *= Gs;
+    }
+
+    double y[HB_FFT_N];
+    pocketfft::c2r(h.shape, h.strideOut, h.strideIn, h.axes, pocketfft::BACKWARD,
+                   h.spec.data(), y, 1.0);
+    for (int i = 0; i < HB_FFT_N; i++) {
+        h.ola[i] += (y[i] / HB_FFT_N) * h.win[i];
+    }
+    // the first HB_HOP samples of the accumulator are finished
+    for (int i = 0; i < HB_HOP; i++) {
+        const int slot = (h.outHead + h.outCount) % (int)(sizeof(h.outFifo) / sizeof(h.outFifo[0]));
+        h.outFifo[slot] = h.ola[i];
+        h.outCount++;
+    }
+    for (int i = 0; i < HB_FFT_N - HB_HOP; i++) h.ola[i] = h.ola[i + HB_HOP];
+    for (int i = HB_FFT_N - HB_HOP; i < HB_FFT_N; i++) h.ola[i] = 0.0;
+}
+
+// Process n samples of 48 kHz audio; the cleaned HIGH BAND comes out
+// (float, same scale as the input). Fail-soft: zeros while priming.
+static void HbNsProcess(HbNsState& h, const int16_t* in, float* out, int n) {
+    const int CAP = (int)(sizeof(h.inFifo) / sizeof(h.inFifo[0]));
+    const int OCAP = (int)(sizeof(h.outFifo) / sizeof(h.outFifo[0]));
+    for (int i = 0; i < n; i++) {
+        if (h.inCount < CAP) h.inFifo[h.inCount++] = (double)in[i] * (1.0 / 32768.0);
+        while (h.inCount >= HB_HOP) {
+            HbNsHop(h);
+        }
+        if (h.outCount > 0) {
+            out[i] = (float)h.outFifo[h.outHead];
+            h.outHead = (h.outHead + 1) % OCAP;
+            h.outCount--;
+        } else {
+            out[i] = 0.0f;   // still priming
+        }
+    }
+}
+
+// Algorithmic latency of the 16 kHz chain, in 16 kHz samples.
+// The high band is delayed by the chain latency so it lands on the
+// same instant as the processed low band.
+static int AecLatency16(EngineType t) {
+    switch (t) {
+        case ENGINE_OFF:  return 0;     // no canceller: mic path only
+        case ENGINE_AEC3: return 128;   // measured
+        case ENGINE_NKF:  return 480;   // measured
+        case ENGINE_DTLN: return 480;   // measured
+        default:          return 512;   // estimate
+    }
+}
+static int NsLatency16(int backend) {
+    switch (backend) {
+        case 3: return 512;   // GTCRN: estimate (512-pt STFT / 256 hop)
+        case 2: return 320;   // Hush: estimate (~2 native frames)
+        case 1: return 896;   // DTLN-NS: measured
+        default: return 0;
+    }
+}
+
+// Delay line for the 48 kHz mic: the high band is read this many
+// samples back so it matches the processed low band.
+struct HbDelay {
+    static const int CAP = 16384;   // power of two
+    int16_t buf[CAP];
+    int   w = 0;
+    int   fill = 0;
+    void reset() { w = 0; fill = 0; memset(buf, 0, sizeof(buf)); }
+    void push(const int16_t* in, int n) {
+        for (int i = 0; i < n; i++) buf[(w + i) & (CAP - 1)] = in[i];
+        w = (w + n) & (CAP - 1);
+        fill += n;
+    }
+    // The n samples written `delay` samples ago. Zeros until primed.
+    void readDelayed(int16_t* out, int n, int delay) {
+        if (delay < 0) delay = 0;
+        if (delay > CAP - n) delay = CAP - n;
+        if (fill < delay + n) { memset(out, 0, n * sizeof(int16_t)); return; }
+        int r = (w - delay) & (CAP - 1);
+        for (int i = 0; i < n; i++) out[i] = buf[(r + i) & (CAP - 1)];
+    }
+};
+static HbDelay g_hbDelay;
+
+// High-band VAD gain (the ramped gate the splice applies while the
+// 16 kHz chain says "no voice").
+static float g_hbVadGain = 1.0f;
+
+// 3:1 resampler state (exp/resampler.h). The FIR pair is flat to 7.5
+// kHz with -76 dB aliases and -55 dB images. State is reset on every
+// Start.
+static rs::Down3 g_down3;
+static rs::Up3   g_up3;
+
+// The decimator delays the mic by 32 samples @16k relative to the
+// loopback ref. Delay the ref by the same amount so the AEC still sees
+// the two aligned (only in splice mode).
+constexpr int REF_DELAY16 = rs::kHalf / 3;   // 32
+static int16_t g_refDelayBuf[REF_DELAY16];
+static int     g_refDelayPos = 0;
+
+static void RefDelayReset() {
+    g_refDelayPos = 0;
+    memset(g_refDelayBuf, 0, sizeof(g_refDelayBuf));
+}
+
+static void RefDelayProcess(int16_t* frame, int n) {
+    // Shift the ref by REF_DELAY16 samples (decimator group delay)
+    // so it lines up with the downsampled mic.
+    static thread_local int16_t tmp[MAX_FRAME_SIZE];
+    for (int i = 0; i < n; i++) {
+        tmp[i] = g_refDelayBuf[g_refDelayPos];
+        g_refDelayBuf[g_refDelayPos] = frame[i];
+        g_refDelayPos = (g_refDelayPos + 1) % REF_DELAY16;
+        frame[i] = tmp[i];
+    }
+}
 
 std::string FormatUptime() {
     if (!g_isRunning) return "";
@@ -740,13 +1029,15 @@ void SaveSettings() {
         << 0 << "\n"  // retired: show-legacy-engines toggle
         << (g_experimentalEngines.load() ? 1 : 0) << "\n"  // experimental engines flag
        << 0 << "\n"  // retired: nuked DEC-toggle slot
-       << 9 << "\n"  // config gen (9: WPE/notch removed, NS on all engines)
+       << 11 << "\n"  // config gen (11: auto 48 kHz migration; 10: high-band mix slot 32)
       << 0 << "\n"  // retired: NKF WPE dereverb (kept for file alignment)
       << (int)(g_soundboardGain.load() * 100) << "\n"   // soundboard gain (%)
       << (g_monitorEnabled.load() ? 1 : 0) << "\n"      // soundboard monitor on/off
       << (int)(g_monitorGain.load() * 100) << "\n"      // monitor gain (%)
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
-      << g_nsBackend.load() << "\n";                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush)
+      << g_nsBackend.load() << "\n"                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN)
+      << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (default ON)
+      << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"; // slot 32: high-band mix (%)
 }
 
 void LoadSettings() {
@@ -853,6 +1144,16 @@ void LoadSettings() {
         // it; validated at apply time below, -1 = absent).
         int nsBackendRaw = -1;
         if (f >> nsBackendRaw) { (void)nsBackendRaw; }
+        // Slot 31: high-band splice (default ON when missing).
+        int hbRaw = 1;
+        if (f >> hbRaw) g_highbandEnabled.store(hbRaw != 0);
+        // Slot 32: high-band mix (default 100% when missing).
+        int hbMixRaw = 100;
+        if (f >> hbMixRaw) {
+            if (hbMixRaw < 0) hbMixRaw = 0;
+            if (hbMixRaw > 100) hbMixRaw = 100;
+            g_hbMix.store(hbMixRaw / 100.0f);
+        }
         // "High Quality" was cut: generation-1 indices slide down
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
@@ -904,6 +1205,9 @@ void LoadSettings() {
         } else {
             g_sampleRate.store(rates[g_sampleRateIndex == 0 ? 0 : 1]);
         }
+        // SyncChainRate() moves to the quality default 48 kHz output unless
+        // NS or a 16-kHz-only engine genuinely forces 16.
+        SyncChainRate();
         // (Retired slots: gen6 WPE + notch live toggles. Read
         // positionally above; the stages no longer exist, so the
         // values are ignored and NS is the only post stage.)
@@ -912,13 +1216,12 @@ void LoadSettings() {
         if (pgen >= 7) g_nsEnabled.store(nsRaw != 0);
         else           g_nsEnabled.store(true);
         // Slot 30 applies here (after the tick is final): a stored
-        // 0/1/2 wins, anything else (retired exp slots 3/4, or a
-        // missing slot) derives from the tick so old configs keep
-        // sounding exactly as before.
-        if (nsBackendRaw >= 0 && nsBackendRaw <= 2)
+        // 0/1/2/3 wins, anything else derives from the tick so old
+        // configs keep sounding exactly as before.
+        if (nsBackendRaw >= 0 && nsBackendRaw <= 3)
             g_nsBackend.store(nsBackendRaw);
         else
-            g_nsBackend.store(g_nsEnabled.load() ? 1 : 0);
+            g_nsBackend.store(g_nsEnabled.load() ? 3 : 0);
         // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden by
         // default — only shown when the user ticks the Appearance
         // checkbox. Older files default OFF (DTLN only).
@@ -964,7 +1267,10 @@ void ResetToDefaults() {
     // Post-stage pref: set the engine first, then sync (NS runs
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
-    g_nsBackend.store(1);  // DTLN-NS default backend
+    g_nsBackend.store(3);  // GTCRN default backend
+    // Fresh default is 48 kHz output (splice ON) at full high band.
+    g_highbandEnabled.store(true);
+    g_hbMix.store(1.0f);
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -1016,6 +1322,10 @@ void ApplyProfile(int idx) {
     // engines only restores the global default (never leaks a stale
     // toggle into a chain, which once made Start look broken).
     SyncStagePrefsToEngine();
+    // Re-derive the rate from the new engine plus the current NS
+    // choice (16 kHz-only engines and any NS backend force 16, an
+    // all-off Off/AEC3 chain goes to 48).
+    SyncChainRate();
 }
 
 // ============================================================
@@ -1162,6 +1472,7 @@ void ReinitEngine() {
     if (g_engine.dtln)  { DtlnDestroy(g_engine.dtln);  g_engine.dtln  = nullptr; }
     if (g_engine.ns)   { DtlnNsDestroy(g_engine.ns);   g_engine.ns   = nullptr; }
     if (g_engine.hush) { HushDestroy(g_engine.hush); g_engine.hush = nullptr; }
+    if (g_engine.gtcrn) { GtcrnDestroy(g_engine.gtcrn); g_engine.gtcrn = nullptr; }
 
     EngineType eng = (EngineType)g_selectedEngine.load();
 
@@ -1191,13 +1502,13 @@ void ReinitEngine() {
         g_engine.type = ENGINE_OFF;
     }
 
-    // DTLN noise reduction: the echo canceller leaves background
-    // noise; the DTLN-NR pair (same 512/128/257 DSP, single mic feed)
-    // runs after the engine on every path (WebRTC NS is retired, and
-    // the NKF-only WPE + notch stages are gone). Hush (prebuilt weya_nc
-    // library + models/hush_16k_onnx.tar.gz) is the alternative NS
-    // stage, picked by the radio; only one is created.
-    if (g_nsBackend.load() == 2)
+    // Noise suppression post-stage: runs after the engine on every
+    // path. DTLN-NS is the reference; Hush is an alternative; GTCRN
+    // (experimental NS) is mic-only and runs at 16 kHz. Only one is
+    // created.
+    if (g_nsBackend.load() == 3)
+        g_engine.gtcrn = GtcrnNew("models/gtcrn_simple.onnx");
+    else if (g_nsBackend.load() == 2)
         g_engine.hush = HushNew("models/hush_16k_onnx.tar.gz");
     else if (g_nsBackend.load() == 1)
         g_engine.ns = DtlnNsNew("models/dtln_ns_128");
@@ -1244,7 +1555,20 @@ static void EmitFading(int16_t* out, ma_uint32 frameCount) {
 // ============================================================
 void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
-    g_micRing.write((const int16_t*)pInput, frameCount);
+    const int16_t* in = (const int16_t*)pInput;
+    if (g_highbandEnabled.load()) {
+        // Capture is 48 kHz here: store the raw high band, then
+        // downsample 3:1 through the linear-phase FIR for the 16 kHz
+        // engine (flat to 7.5 kHz, aliases below -76 dB). The phase
+        // carries over between callbacks, so a frame count that is not
+        // a multiple of 3 cannot shift the output grid.
+        g_micRing48.write(in, frameCount);
+        static int16_t ds[2048];
+        const int dsLen = g_down3.process(in, (int)frameCount, ds, 2048);
+        if (dsLen > 0) g_micRing.write(ds, dsLen);
+    } else {
+        g_micRing.write(in, frameCount);
+    }
 }
 void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
@@ -1255,13 +1579,19 @@ static void FeedMonitor(const float* sb, int fs);
 
 void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCount) {
     int16_t* out = (int16_t*)pOutput;
+    const bool hb = g_highbandEnabled.load();
+    const int outRate = hb ? 48000 : g_sampleRate.load();
+    const int fsOut = frameSizeForRate(outRate);
+    if ((int)frameCount != fsOut) { EmitFading(out, frameCount); return; }
     int fs = frameSizeForRate(g_sampleRate.load());
-    if ((int)frameCount != fs) { EmitFading(out, frameCount); return; }
 
     const size_t DRIFT_TARGET = (size_t)fs * 2;
     const size_t DRIFT_THRESHOLD = (size_t)fs / 16;
     if (g_micRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
         g_micRing.skip(g_micRing.available() - DRIFT_TARGET);
+    if (g_highbandEnabled.load() &&
+        g_micRing48.available() > (DRIFT_TARGET + DRIFT_THRESHOLD) * 3)
+        g_micRing48.skip(g_micRing48.available() - DRIFT_TARGET * 3);
     if (g_refRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
         g_refRing.skip(g_refRing.available() - DRIFT_TARGET);
 
@@ -1277,17 +1607,17 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         // not glitch just because the mic hiccuped. Silence here
         // still falls back to the fade so the gap stays inaudible.
         float sbStarve[MAX_FRAME_SIZE];
-        MixSoundboard(sbStarve, fs, g_sampleRate.load());
-        FeedMonitor(sbStarve, fs);
+        MixSoundboard(sbStarve, fsOut, outRate);
+        FeedMonitor(sbStarve, fsOut);
         const float sbGainStarve = g_soundboardGain.load() * g_outputGain.load();
         bool anySb = false;
-        for (int i = 0; i < fs; i++) {
+        for (int i = 0; i < fsOut; i++) {
             out[i] = SoftLimit(sbStarve[i] * sbGainStarve);
             if (sbStarve[i] != 0.0f) anySb = true;
         }
         if (anySb) {
-            memcpy(g_lastOutFrame, out, fs * sizeof(int16_t));
-            g_lastOutLen = fs;
+            memcpy(g_lastOutFrame, out, fsOut * sizeof(int16_t));
+            g_lastOutLen = fsOut;
             g_lastOutValid = true;
         } else {
             EmitFading(out, frameCount);
@@ -1306,6 +1636,12 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         memset(refFrame, 0, fs * sizeof(int16_t));  // speakers idle: silent ref
     else
         g_refRing.read(refFrame, fs);
+    // In splice mode the mic reaches the engine through our FIR (32
+    // samples @16k of delay) while the loopback reference reaches it
+    // through miniaudio's resampler (~1 sample). Delay the reference
+    // to match, or the AEC sees a ~2 ms offset.
+    if (g_highbandEnabled.load())
+        RefDelayProcess(refFrame, fs);
 
     if (g_engine.type == ENGINE_AEC3 && g_engine.aec3)
         Aec3CancelEcho(g_engine.aec3, micFrame, refFrame, cleanedFrame, fs);
@@ -1325,32 +1661,44 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // below show post-stage output, i.e. what Discord hears. Only the
     // radio-picked backend was created in ReinitEngine, so at most one
     // of these runs; backend 0 (Off) runs none.
-    HushHandle* hush = (g_nsBackend.load() == 2) ? g_engine.hush : nullptr;
-    if (hush && g_sampleRate.load() == 16000) {
+    GtcrnHandle* gtcrn = (g_nsBackend.load() == 3) ? g_engine.gtcrn : nullptr;
+    if (gtcrn && g_sampleRate.load() == 16000) {
         for (int i = 0; i < fs; i++)
             fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        if (HushProcess(hush, fltBuf, fltBuf, fs) != 1) {
+        if (GtcrnProcess(gtcrn, fltBuf, fltBuf, fs) != 1) {
             for (int i = 0; i < fs; i++)
                 fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
         }
         for (int i = 0; i < fs; i++)
             cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
-    } else if (g_nsBackend.load() == 1 && g_engine.ns &&
-               g_sampleRate.load() == 16000) {
-        for (int i = 0; i < fs; i++)
-            fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
-        // Fail-open: any NS failure (exception, bad tensor, model
-        // mismatch) leaves the frame untouched instead of taking the
-        // app down mid-call.
-        if (DtlnNsProcess(g_engine.ns, fltBuf, fltBuf, fs) != 1) {
-            // NS failed this frame — leave it untouched and keep going.
-            // (The diagnostics line under the checkbox will show the
-            // last error string from DtnsLastError.)
+    } else {
+        HushHandle* hush = (g_nsBackend.load() == 2) ? g_engine.hush : nullptr;
+        if (hush && g_sampleRate.load() == 16000) {
             for (int i = 0; i < fs; i++)
                 fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+            if (HushProcess(hush, fltBuf, fltBuf, fs) != 1) {
+                for (int i = 0; i < fs; i++)
+                    fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+            }
+            for (int i = 0; i < fs; i++)
+                cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
+        } else if (g_nsBackend.load() == 1 && g_engine.ns &&
+                   g_sampleRate.load() == 16000) {
+            for (int i = 0; i < fs; i++)
+                fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+            // Fail-open: any NS failure (exception, bad tensor, model
+            // mismatch) leaves the frame untouched instead of taking the
+            // app down mid-call.
+            if (DtlnNsProcess(g_engine.ns, fltBuf, fltBuf, fs) != 1) {
+                // NS failed this frame — leave it untouched and keep going.
+                // (The diagnostics line under the checkbox will show the
+                // last error string from DtnsLastError.)
+                for (int i = 0; i < fs; i++)
+                    fltBuf[i] = (float)cleanedFrame[i] * (1.0f / 32768.0f);
+            }
+            for (int i = 0; i < fs; i++)
+                cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
         }
-        for (int i = 0; i < fs; i++)
-            cleanedFrame[i] = clamp_s16((int)lrintf(fltBuf[i] * 32768.0f));
     }
 
     // Voice-path high-pass (80 Hz): strips hum/rumble/DC the stages
@@ -1390,17 +1738,69 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // each other into distortion. (The Out meter above stays on the
     // cleaned mic only — it measures AEC reduction, not programme.)
     float sbBuf[MAX_FRAME_SIZE];
-    MixSoundboard(sbBuf, fs, g_sampleRate.load());
-    FeedMonitor(sbBuf, fs);
-    const float sbGain = g_soundboardGain.load() * g_outputGain.load();
+    // fs == 160 in high-band mode (Reinit pins the chain to 16 kHz
+    // while ticked); anything else falls through to the legacy path.
+    if (g_highbandEnabled.load() && fs == 160) {
+        // High-band splice: 16 kHz chain output (processed lows)
+        // upsampled to 48 kHz, plus the real high band (8-24 kHz) cut
+        // from the original 48 kHz mic. Real highs, not synthesized.
+        float nvOut[MAX_FRAME_SIZE];
+        // Linear-phase 3x FIR upsample of the processed low band
+        // (0-8 kHz): flat to 7.5 kHz, images below -55 dB.
+        g_up3.process(cleanedFrame, fs, nvOut);
+        // --- high band, delayed to land on the processed low band -----
+        int16_t mic48[MAX_FRAME_SIZE];
+        if (g_micRing48.available() >= (size_t)fsOut)
+            g_micRing48.read(mic48, fsOut);
+        else
+            memset(mic48, 0, fsOut * sizeof(int16_t));
+        g_hbDelay.push(mic48, fsOut);
+        int16_t aligned48[MAX_FRAME_SIZE];
+        g_hbDelay.readDelayed(aligned48, fsOut, g_hbDelaySamples.load());
 
-    float gain = g_micGain.load() * g_outputGain.load();
-    for (int i = 0; i < fs; i++)
-        out[i] = SoftLimit((float)cleanedFrame[i] * gain / 32768.0f
-                           + sbBuf[i] * sbGain);
+        // --- the high band, noise-suppressed ---------------------------
+        float high[MAX_FRAME_SIZE];
+        HbNsProcess(g_hbNs, aligned48, high, fsOut);
+
+        // --- VAD: close the high band while there is no voice ---------
+        float peak = 0.0f;
+        for (int i = 0; i < fs; i++) {
+            const float a = fabsf((float)cleanedFrame[i]);
+            if (a > peak) peak = a;
+        }
+        const float lvlDb = 20.0f * log10f(peak / 32768.0f + 1e-9f);
+        float vad = (lvlDb - (float)HB_VAD_DB) / (float)HB_VAD_RAMP_DB;
+        if (vad < 0.0f) vad = 0.0f;
+        if (vad > 1.0f) vad = 1.0f;
+        const float vPrev = g_hbVadGain;
+        for (int i = 0; i < fsOut; i++) {
+            const float w = (float)(i + 1) / 48.0f;
+            g_hbVadGain = vPrev + (vad - vPrev) * (w < 1.0f ? w : 1.0f);
+            high[i] *= g_hbVadGain;
+        }
+        g_hbVadGain = vad;
+        g_hbRatioDb.store(lvlDb);
+        MixSoundboard(sbBuf, fsOut, outRate);
+        FeedMonitor(sbBuf, fsOut);
+        const float sbGain = g_soundboardGain.load() * g_outputGain.load();
+        float gain = g_micGain.load() * g_outputGain.load();
+        const float hbMix = g_hbMix.load();
+        for (int i = 0; i < fsOut; i++)
+            out[i] = SoftLimit((nvOut[i] + high[i] * hbMix) * gain + sbBuf[i] * sbGain);
+    } else {
+        MixSoundboard(sbBuf, fs, g_sampleRate.load());
+        FeedMonitor(sbBuf, fs);
+        const float sbGain = g_soundboardGain.load() * g_outputGain.load();
+
+        float gain = g_micGain.load() * g_outputGain.load();
+        for (int i = 0; i < fs; i++)
+            out[i] = SoftLimit((float)cleanedFrame[i] * gain / 32768.0f
+                               + sbBuf[i] * sbGain);
+        for (int i = fs; i < fsOut; i++) out[i] = 0;
+    }
     // Remember what we emitted for fail-open fades (mic starve etc).
-    memcpy(g_lastOutFrame, out, fs * sizeof(int16_t));
-    g_lastOutLen = fs;
+    memcpy(g_lastOutFrame, out, fsOut * sizeof(int16_t));
+    g_lastOutLen = fsOut;
     g_lastOutValid = true;
 }
 
@@ -1469,13 +1869,15 @@ static void FeedMonitor(const float* sb, int fs) {
     g_monitorRing.write(mon, fs);
 }
 
-// Which playback device the monitor feeds. -1 follows the "Your
-// speakers" selection, so changing speakers on the Audio tab carries
-// the monitor along automatically.
+// Which playback device the monitor feeds. -1 follows the output
+// device selection ("Your speakers"), so changing speakers on the
+// Audio tab carries the monitor along automatically. When the monitor
+// is used with "Listen to myself", this ensures the monitor plays
+// through the same speakers the user hears.
 static int MonitorDeviceIndex() {
     if (g_monitorIndex >= 0 && g_monitorIndex < (int)g_playbackDevices.size())
         return g_monitorIndex;
-    return g_refIndex;
+    return g_outIndex;
 }
 
 void StopMonitor() {
@@ -1646,13 +2048,14 @@ void StartAEC() {
     if (g_refIndex >= (int)g_playbackDevices.size()) g_refIndex = 0;
     if (g_outIndex >= (int)g_playbackDevices.size()) g_outIndex = 0;
 
-    // Self-monitor routes the cleaned mic to the speakers (Speaker
-    // Reference) instead of Output; otherwise Output must be usable.
-    // Without VB-CABLE installed/enabled there is nowhere to send the
-    // cleaned mic, so refuse to start with a pointer at the fix.
+    // Self-monitor routes the cleaned mic to your speakers (Output)
+    // instead of routing it to voice apps (CABLE Input); otherwise
+    // Output must be usable. Without VB-CABLE installed/enabled there
+    // is nowhere to send the cleaned mic, so refuse to start with a
+    // pointer at the fix.
     int outIdx = g_outIndex;
     if (g_listenToSelf) {
-        outIdx = g_refIndex;
+        outIdx = g_outIndex;
     } else if (!CableInputPresent()) {
         snprintf(g_statusText, 128, "VB-CABLE not found - install/enable CABLE Input");
         return;
@@ -1673,9 +2076,15 @@ void StartAEC() {
         snprintf(g_statusText, 128, "Failed to load AEC3 engine");
         return;
     }
-    // Hush is fail-closed at Start (web parity: the radio refuses
-    // without files there; here Start is the apply point): a broken
-    // stage must never silently passthrough a backend the user picked.
+    // NS backends are fail-closed at Start: a broken/picked stage
+    // must never silently passthrough.
+    if (g_nsEnabled.load() && g_nsBackend.load() == 3 &&
+        (!g_engine.gtcrn || !GtcrnReady(g_engine.gtcrn))) {
+        const char* why = (g_engine.gtcrn && GtcrnLastError(g_engine.gtcrn)[0])
+            ? GtcrnLastError(g_engine.gtcrn) : "models/gtcrn_simple.onnx missing";
+        snprintf(g_statusText, 128, "GTCRN unavailable - %.90s", why);
+        return;
+    }
     if (g_nsEnabled.load() && g_nsBackend.load() == 2 &&
         (!g_engine.hush || !HushReady(g_engine.hush))) {
         const char* why = (g_engine.hush && HushLastError(g_engine.hush)[0])
@@ -1685,6 +2094,7 @@ void StartAEC() {
     }
     g_micRing.reset();
     g_refRing.reset();
+    g_micRing48.reset();
 
     int sr = g_sampleRate.load();
     int fs = frameSizeForRate(sr);
@@ -1692,8 +2102,8 @@ void StartAEC() {
     ma_device_config micCfg = ma_device_config_init(ma_device_type_capture);
     micCfg.capture.format = ma_format_s16;
     micCfg.capture.channels = 1;
-    micCfg.sampleRate = sr;
-    micCfg.periodSizeInFrames = fs;
+    micCfg.sampleRate = g_highbandEnabled.load() ? 48000 : sr;
+    micCfg.periodSizeInFrames = g_highbandEnabled.load() ? 480 : fs;
     micCfg.performanceProfile = ma_performance_profile_low_latency;
     micCfg.dataCallback = mic_callback;
     micCfg.capture.pDeviceID = &g_captureDevices[g_micIndex].id;
@@ -1710,8 +2120,8 @@ void StartAEC() {
     ma_device_config outCfg = ma_device_config_init(ma_device_type_playback);
     outCfg.playback.format = ma_format_s16;
     outCfg.playback.channels = 1;
-    outCfg.sampleRate = sr;
-    outCfg.periodSizeInFrames = fs;
+    outCfg.sampleRate = OutRate();
+    outCfg.periodSizeInFrames = frameSizeForRate(OutRate());
     outCfg.performanceProfile = ma_performance_profile_low_latency;
     outCfg.dataCallback = output_callback;
     outCfg.playback.pDeviceID = &g_playbackDevices[outIdx].id;
@@ -1754,19 +2164,36 @@ void StartAEC() {
         return;
     }
 
+    if (g_highbandEnabled.load()) {
+        g_hbDelay.reset();
+        HbNsInit(g_hbNs);
+        g_hbVadGain = 1.0f;
+        g_down3.reset();
+        g_up3.reset();
+        RefDelayReset();
+        // High-band delay: chain latency (AEC + NS) minus high-band NS
+        // STFT latency, plus FIR group delay, all in 48 kHz samples.
+        int hbDelay = (AecLatency16(g_engine.type) +
+                       NsLatency16(g_nsBackend.load())) * 3 - 256 +
+                      2 * rs::kHalf;
+        if (hbDelay < 0) hbDelay = 0;
+        g_hbDelaySamples.store(hbDelay);
+    }
     g_isRunning = true;
     g_sessionStart = Clock::now();
     StartMonitor();   // local soundboard monitoring (fail-open)
-    const char* engineName =
-        (g_engine.type == ENGINE_OFF)  ? "Off" :
-        (g_engine.type == ENGINE_AEC3) ? "AEC3" :
-        (g_engine.type == ENGINE_NKF)  ? "NKF-AEC" : "DTLN-AEC";
+    const char* engineName = PROFILES[g_profileIndex].name;
     const char* nsTag = "";
-    if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
+    if (g_engine.gtcrn && GtcrnReady(g_engine.gtcrn)) nsTag = " + GTCRN";
+    else if (g_engine.hush && HushReady(g_engine.hush)) nsTag = " + Hush";
     else if (g_engine.ns) nsTag = " + DTLN-NS";
-    snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", sr, engineName,
-             nsTag,
-             g_listenToSelf ? " [monitor]" : "");
+    const bool hbLive = g_highbandEnabled.load();
+    if (hbLive)
+        snprintf(g_statusText, 128, "Running (16000->48000 Hz, %s%s + HiBand)%s",
+                 engineName, nsTag, g_listenToSelf ? " [monitor]" : "");
+    else
+        snprintf(g_statusText, 128, "Running (%d Hz, %s%s)%s", OutRate(), engineName,
+                 nsTag, g_listenToSelf ? " [monitor]" : "");
 }
 
 void StopAEC() {
@@ -1932,6 +2359,12 @@ void DrawDevicesSection() {
 
     ImGui::Spacing();
     if (ImGui::Checkbox("Listen to myself", &g_listenToSelf)) {
+        // When Listen to myself is on, the output device should match
+        // the Speaker Reference (your speakers) so you hear yourself
+        // through the same speakers.
+        if (g_listenToSelf) {
+            g_outIndex = g_refIndex;
+        }
         SaveSettings();
     }
     if (ImGui::IsItemHovered())
@@ -1956,7 +2389,16 @@ void DrawEngineSection() {
     ImGui::SetNextItemWidth(-1);
 
     const char* rates[] = { "16000", "48000" };
-    if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
+    if (g_highbandEnabled.load()) {
+        ImGui::TextDisabled("16000 (fixed by High-band splice; 48k out)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "High-band splice always runs the 16 kHz chain: the AEC and\n"
+                "NS process 0-8 kHz, then the real 8-24 kHz mic band is\n"
+                "spliced back on at the 48 kHz output.\n\n"
+                "Untick the splice to return to the native chain rate (AEC3\n"
+                "can run at 48000 Hz there; NS still needs 16 kHz).");
+    } else if (g_engineIndex == ENGINE_NKF || g_engineIndex == ENGINE_DTLN) {
         ImGui::TextDisabled("16 kHz (automatic)");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("This profile always runs at 16 kHz - nothing to choose.");
@@ -1966,8 +2408,14 @@ void DrawEngineSection() {
             SaveSettings();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Higher = better quality, more CPU\nAEC3 best at 48000\n"
-                              "Sticks with your setup until the engine forces 16 kHz.");
+            ImGui::SetTooltip(
+                (g_engineIndex == ENGINE_OFF)
+                    ? "No echo canceller to rate.\n"
+                      "16000 lets the NS stage run; 48000 passes the mic\n"
+                      "through and skips NS (all backends are 16 kHz).\n"
+                      "Turning the splice off with NS off selects 48000."
+                    : "Higher = better quality, more CPU\nAEC3 best at 48000\n"
+                      "Sticks with your setup until the engine forces 16 kHz.");
     }
 
     ImGui::EndDisabled();
@@ -2054,20 +2502,19 @@ void DrawAudioTab() {
             "DTLN-AEC 128 - default; best echo + reverb handling.\n"
             "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
             "NKF-AEC (experimental) - weak CPUs, still full cleanup.\n"
-            "The picked NS backend below appends '-> NS' to the chain.");
-    // The label shows the engine itself, plus the chain segments while
-    // the post stage runs — no hidden state.
+            "The NS backend below runs after the engine.\n");
+    // Engine name only — the full chain (engine -> NS -> output) is
+    // shown once, in the chain line just above the devices section.
     bool wasRunning = g_isRunning;
     for (int r = 0; r < PROFILE_COUNT; r++) {
         int i = ENGINE_RADIO_ORDER[r];
         std::string label = PROFILES[i].name;
-        if (g_nsBackend.load() != 0)
-            label += (g_nsBackend.load() == 2) ? " -> Hush" : " -> NS";
         bool sel = (g_profileIndex == i);
-        // NKF-AEC stays experimental: hidden unless the user ticked the
-        // Appearance checkbox — WebRTC AEC3 is a regular choice now.
+        // Other AEC engines are hidden unless the user ticked the
+        // Appearance checkbox.
         if (!g_experimentalEngines.load() &&
-            (EngineType)PROFILES[i].engine == ENGINE_NKF) continue;
+            ((EngineType)PROFILES[i].engine == ENGINE_NKF ||
+             (EngineType)PROFILES[i].engine == ENGINE_AEC3)) continue;
         if (r > 0) ImGui::SameLine();
         if (ImGui::RadioButton(label.c_str(), sel) && !sel) {
             ApplyProfile(i);
@@ -2076,44 +2523,172 @@ void DrawAudioTab() {
         }
     }
 
+    // Use-case guidance from the AEC harness: the radios stay names-only.
+    ImGui::TextDisabled(
+        "Loudspeaker: DTLN-AEC  |  sealed earphone/headset: Off");
+
     // Post stage: NS backend radio for every engine (Off / DTLN-NS /
     // Hush). Live restart on switch (same path as switching profiles
     // mid-call). Global pref: a profile switch does not reset it.
     // Experimental engines/backends live in exp/main.cpp (aec_exp).
     {
         int nsb = g_nsBackend.load();
-        if (nsb < 0 || nsb > 2) nsb = 1;
+        if (nsb < 0 || nsb > 3) nsb = 3;
         int prevNsb = nsb;
         ImGui::TextUnformatted("Noise suppression");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Noise suppression backend (runs after the engine):\n"
                 "Off - raw echo-cancelled voice, lowest CPU.\n"
-                "DTLN-NS - general background hiss, cheapest stage.\n"
-                "Hush - keyboards, mice and background talkers, slightly\n"
-                "more CPU (needs weya_nc.dll + models/hush_16k_onnx.tar.gz).");
+                "DTLN-NS - cheapest stage; steady hiss only, weak on\n"
+                "keyboard clicks and background talkers.\n"
+                "Hush - best on background talkers; strongest on clicks,\n"
+                "heavier stage (needs weya_nc.dll +\n"
+                "models/hush_16k_onnx.tar.gz).\n"
+                "GTCRN - default; hiss + keyboard.\n"
+                "(needs models/gtcrn_simple.onnx).");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
-        ImGui::RadioButton("DTLN-NS (default)", &nsb, 1);
+        ImGui::RadioButton("DTLN-NS", &nsb, 1);
         ImGui::SameLine();
         ImGui::RadioButton("Hush", &nsb, 2);
+        ImGui::SameLine();
+        ImGui::RadioButton("GTCRN (default)", &nsb, 3);
         if (nsb != prevNsb) {
             g_nsBackend.store(nsb);
             g_nsEnabled.store(nsb != 0);
+            // 48 kHz output is the exp quality default. Every NS backend
+            // is 16 kHz, so with the splice off a picked backend would
+            // drop the output to 16 kHz. Turn the splice on so the output
+            // stays 48 kHz.
+            if (nsb != 0 && !g_highbandEnabled.load())
+                g_highbandEnabled.store(true);
+            SyncChainRate();
             SaveSettings();
             if (g_isRunning) { StopAEC(); StartAEC(); }
         }
-        // Use-case hint only when the default isn't picked — with
-        // DTLN-NS selected it restates the obvious (detail stays in
-        // the hover tooltip).
-        if (nsb != 1)
-            ImGui::TextDisabled("Off: lowest CPU - DTLN-NS: general hiss - Hush: clicks + talkers.");
+        const char* nsHint =
+            (nsb == 0) ? "Off - no noise suppression; lowest CPU." :
+            (nsb == 1) ? "DTLN-NS - cheapest stage; steady hiss only." :
+            (nsb == 2) ? "Hush - background talkers; heaviest of the three." :
+                         "GTCRN - default; hiss + keyboard.";
+        ImGui::TextDisabled("%s", nsHint);
+        // A 48 kHz native chain (Off/AEC3, splice off) skips every NS
+        // backend — say so before Start instead of letting the status
+        // line claim a stage that will not run.
+        if (nsb != 0 && !g_highbandEnabled.load() &&
+            g_sampleRate.load() != 16000) {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                "NS skipped at 48 kHz: all NS backends are 16 kHz.");
+            ImGui::TextDisabled(
+                "Enable 48 kHz output (high-band splice) to keep NS.");
+        }
         // Error text only (telemetry row stays deleted): a failing
         // stage is fail-open, so its message is all that's shown.
         const char* nsErr = "";
-        if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
+        if (nsb == 3 && g_engine.gtcrn) nsErr = GtcrnLastError(g_engine.gtcrn);
+        else if (nsb == 2 && g_engine.hush) nsErr = HushLastError(g_engine.hush);
         else if (g_engine.ns) nsErr = DtnsLastError(g_engine.ns);
         if (nsErr && nsErr[0]) ImGui::TextDisabled("%s", nsErr);
+    }
+
+    // High-band splice: capture mic at 48 kHz, process the low band
+    // (0-8 kHz) through the 16 kHz engine, then splice the real high
+    // band (8-24 kHz) back on at the 48 kHz output. Always on by
+    // default; unticking returns to the native chain rate (16 kHz for
+    // DTLN/NKF/GTCRN, 48 kHz native for Off/AEC3).
+    {
+        bool hb = g_highbandEnabled.load();
+        ImGui::Checkbox("48 kHz output (high-band splice)", &hb);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Outputs 48 kHz. The echo engine and NS still run at\n"
+                "16 kHz (all NS backends are 16 kHz), so only the low band\n"
+                "(0-8 kHz) is cleaned; the real 8-24 kHz mic band is\n"
+                "spliced back on top. This is output fidelity, not 48 kHz\n"
+                "echo cancellation. No synthesis, no metallic edge.\n\n"
+                "Turning it off returns to the native chain rate: 48 kHz\n"
+                "for Off/AEC3 with NS off, 16 kHz when NS must run.\n\n"
+                "The 16 kHz NS models cannot reach above 8 kHz, so a broadband\n"
+                "transient (keyboard click) would keep its sharp part. A\n"
+                "dedicated high-band NS fixes that: STFT spectral subtraction\n"
+                "with a decision-directed a priori SNR, over the 8-24 kHz bins\n"
+                "only. Measured on real speech with a realistic click:\n"
+                "click -11 dB, hiss -9 dB, voice -1 dB.\n\n"
+                "The high band is also gated off entirely while the 16 kHz\n"
+                "chain says 'no voice' — that removes hiss and clicks typed\n"
+                "between words.\n\n"
+                "48<->16 kHz uses a 193-tap linear-phase FIR pair: flat to\n"
+                "7.5 kHz, aliases below -76 dB, images below -55 dB. The old\n"
+                "3-tap/linear pair drooped -3.5 dB at 8 kHz and mirrored the\n"
+                "low band's top into the air band.");
+        if (hb != g_highbandEnabled.load()) {
+            g_highbandEnabled.store(hb);
+            SaveSettings();
+            SyncChainRate();
+            if (g_isRunning) { StopAEC(); StartAEC(); }
+        }
+        if (g_highbandEnabled.load()) {
+            float mixPct = g_hbMix.load() * 100.0f;
+            ImGui::SameLine();
+            ImGui::PushItemWidth(120);
+            if (ImGui::SliderFloat("##hbMix", &mixPct, 0.0f, 100.0f, "%.0f%%"))
+                g_hbMix.store(mixPct / 100.0f);
+            ImGui::PopItemWidth();
+            ImGui::SameLine();
+            ImGui::TextDisabled("High-band mix");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "The spliced high band is raw mic, so its level is\n"
+                    "taste, not a fixed law. Trade air against hiss/click\n"
+                    "residue. 50% preserves the original splice balance;\n"
+                    "70-100% gives more air after the FIR resampler fix.");
+        }
+        const int nsb = g_nsBackend.load();
+        hb = g_highbandEnabled.load();
+        const int chainRate =
+            (hb || g_selectedEngine.load() == ENGINE_DTLN ||
+             g_selectedEngine.load() == ENGINE_NKF)
+                ? 16000 : g_sampleRate.load();
+        const int outRate = hb ? 48000 : chainRate;
+        // Every NS backend is 16 kHz. A native 48 kHz AEC3 chain runs
+        // engine-only, so never claim a stage that is skipped.
+        const bool nsSkipped = (nsb != 0 && chainRate != 16000);
+
+        char nsSuffix[32] = "";
+        if (!nsSkipped) {
+            if (nsb == 1) snprintf(nsSuffix, sizeof nsSuffix, " -> DTLN-NS");
+            else if (nsb == 2) snprintf(nsSuffix, sizeof nsSuffix, " -> Hush");
+            else if (nsb == 3) snprintf(nsSuffix, sizeof nsSuffix, " -> GTCRN");
+        }
+        const char* engineName = PROFILES[g_profileIndex].name;
+
+        char chain[192];
+        if (hb)
+            snprintf(chain, sizeof chain,
+                     "Chain: Mic -> %s%s -> 48 kHz (HiBand splice)",
+                     engineName, nsSuffix);
+        else if (nsSkipped)
+            snprintf(chain, sizeof chain,
+                     "Chain: Mic -> %s -> %d kHz (NS skipped: 16 kHz only)",
+                     engineName, outRate / 1000);
+        else
+            snprintf(chain, sizeof chain,
+                     "Chain: Mic -> %s%s -> %d kHz",
+                     engineName, nsSuffix, outRate / 1000);
+        ImGui::TextDisabled("%s", chain);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "The full voice path, in order:\n"
+                "mic -> echo engine -> noise suppression (if enabled)\n"
+                "-> hygiene (80 Hz HPF -> expander -> presence shelf)\n"
+                "-> output.\n\n"
+                "NS backends are 16 kHz only: a native 48 kHz AEC3 chain\n"
+                "(splice off) skips that stage.\n\n"
+                "With High-band splice the output is 48 kHz: the 16 kHz\n"
+                "chain carries 0-8 kHz and the real mic highs (8-24 kHz)\n"
+                "are spliced back on top, gated by the VAD and cleaned by\n"
+                "the high-band NS.");
     }
 
     ImGui::Spacing();
@@ -2187,7 +2762,7 @@ void DrawAppearanceTab() {
     // and leaves the selection on DTLN. WebRTC AEC3 is a regular
     // choice now, always listed.
     bool exp = g_experimentalEngines.load();
-    if ( ImGui::Checkbox("Show experimental engines (NKF-AEC)", &exp)) {
+    if ( ImGui::Checkbox("Show other AEC engines", &exp)) {
         g_experimentalEngines.store(exp);
         if (!exp) {
             // Hiding them: fall back to DTLN so the selection can't be
@@ -2202,10 +2777,8 @@ void DrawAppearanceTab() {
     }
     if ( ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Off (default): the engine radio shows Off, DTLN-AEC 128\n"
-            "and WebRTC AEC3. On: also shows NKF-AEC — a real engine\n"
-            "but less tested than the default. Switch back to DTLN-AEC\n"
-            "128 to hide it again.");
+            "Off (default): the engine radio shows Off and DTLN-AEC 128.\n"
+            "On: also shows WebRTC AEC3 and NKF-AEC.");
 }
 
 void DrawSoundboardTab() {
@@ -2267,12 +2840,19 @@ void DrawSoundboardTab() {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Where the local copy is played.\n"
-                "\"Your speakers (follow)\" tracks the reference device\n"
-                "chosen on the Audio tab.");
+                "When Listen to myself is on, the monitor uses the output\n"
+                "device (your speakers). Otherwise the monitor follows the\n"
+                "reference device chosen on the Audio tab.");
         if (monChanged) {
             SaveSettings();
             if (g_isRunning) { StopMonitor(); StartMonitor(); }
         }
+        // With Listen to myself the monitor is the same as the output
+        // device, so the combo is hidden and the tooltip explains why.
+        if (g_listenToSelf)
+            ImGui::TextDisabled("Monitor follows your speakers.");
+        else
+            ImGui::TextDisabled("Monitor device (local soundboard copy).");
 
         ImGui::TextUnformatted("Monitor volume");
         ImGui::SameLine(labelCol);
@@ -2393,7 +2973,8 @@ void DrawAboutTab() {
     ImGui::BulletText("Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC-exp)");
     ImGui::BulletText("80 Hz high-pass on every path (hum/rumble/DC)");
     ImGui::BulletText("Gentle expander (digital-black floor, no onset chop)");
-    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush)");
+    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN)");
+    ImGui::BulletText("High-band splice: 48 kHz output, real 8-24 kHz mic highs");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");
     ImGui::BulletText("Selectable sample rate (16 / 48 kHz)");
@@ -2408,6 +2989,7 @@ void DrawAboutTab() {
     ImGui::BulletText("DTLN-AEC - Westhausen & Meyer (ICASSP 2021, MIT)");
     ImGui::BulletText("DTLN-NS - networkedaudio port of breizhn/DTLN denoise (MIT)");
     ImGui::BulletText("Hush - pulp-vision (Apache-2.0)");
+    ImGui::BulletText("GTCRN - Xiaobin Rong et al. (ICASSP 2024, MIT)");
     ImGui::BulletText("ONNX Runtime - Microsoft (MIT)");
     ImGui::BulletText("Dear ImGui - Omar Cornut (MIT)");
     ImGui::BulletText("miniaudio - David Reid (MIT-0)");
@@ -2611,6 +3193,9 @@ int main(int, char**) {
     // at file scope above main().)
     std::set_terminate(CrashOnTerminate);
     SetUnhandledExceptionFilter(CrashOnUnhandledException);
+    // High-band resampler prototype: pure computation, no allocation.
+    // Must run before any audio device starts (ReinitEngine uses it).
+    rs::Init();
 
     if (!glfwInit()) return 1;
     const char* glslVersion = "#version 130";

@@ -16,10 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   splice, automatic 48 kHz output, and LocalVQE stay desktop-only.
   Web changes are limited to security, compatibility, and release
   mechanics. The desktop app is the quality path.
-- **High-band mix defaults to 100% (exp).** Fresh configs, missing
-  slot 32, and Reset now start at full real-high-band level — the
-  confirmed natural chain (DTLN-AEC + 48 kHz splice at 100%). Stored
-  per-user values still win.
 - **Signing guidance corrected.** SignPath Foundation is the
   realistic free route for this MIT/public/released OSS project;
   Microsoft's Azure Artifact Signing is not available to
@@ -30,6 +26,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **GTCRN is the default NS backend** (desktop `aec_gui.exe`).
+  Labelled "GTCRN (default)" — "default; hiss + keyboard." All NS
+  backends remain 16 kHz; 48 kHz output is auto-derived unless NS
+  or a 16 kHz-only engine forces 16 kHz. Fail-closed at Start if
+  `models/gtcrn_simple.onnx` is missing. Config gen bumped to 11
+  with migration for old configs.
+- **High-band splice graduated to the official build.** Capture mic
+  at 48 kHz, run the 16 kHz engine on the low band (0–8 kHz), then
+  splice the real 8–24 kHz mic band back on at 48 kHz output — real
+  highs, not synthesized. Includes a dedicated high-band NS (STFT
+  spectral subtraction, decision-directed a priori SNR) so keyboard
+  clicks no longer keep their sharp part. The high band is gated by
+  VAD while the chain reports no voice, and delayed by chain latency
+  so both bands land on the same instant.
+- **Listen to myself syncs to "Your speakers".** Ticking the
+  checkbox sets the output device to match the Speaker Reference, so
+  you hear yourself through the same speakers instead of the AEC
+  reference device. The soundboard monitor also follows the output
+  device when Listen to myself is on.
+- **"Show other AEC engines" replaces "Show experimental engines".**
+  Hides WebRTC AEC3 / NKF-AEC (and LocalVQE-AEC in exp) by default.
+  Untick to reveal them. Tooltip updated accordingly.
 - **Engine Off option (desktop + web).** The echo engine is now a
   radio group — Off / DTLN-AEC / WebRTC AEC3 / NKF-AEC — with Off
   passing mic straight to the noise-suppression stage
@@ -39,31 +57,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Only NKF-AEC hides behind the flag now.
 - **Experimental fork split (desktop).** `exp/main.cpp` builds
   `aec_exp.exe` with its own title/mutex/config/resources,
-  carrying LocalVQE-AEC + GTCRN; the official `aec_gui.exe` is
-  DTLN/AEC3/NKF + DTLN-NS/Hush only. Release scripts never ship
-  exp content.
+  carrying LocalVQE-AEC + GTCRN + high-band splice; the official
+  `aec_gui.exe` is DTLN/AEC3/NKF + DTLN-NS/Hush/GTCRN + high-band
+  splice. Release scripts never ship exp content.
 - **Starvation telemetry (web).** Per-queue drop counters
   (`dropped: {in, ref, out, mon}`) in both state endpoints.
 
 ### Experimental (aec_exp.exe only — never in a release)
 
-- **High-band splice (48 kHz output, real highs).** The mic is
-  captured at 48 kHz, the 16 kHz engine processes the low band, and
-  the real 8–24 kHz band is spliced onto the output — no synthesis,
-  so no metallic edge. The high band is delayed by the chain's
-  algorithmic latency so it lands on the same instant as the
-  processed low band, without adding system latency.
-- **High-band noise suppression.** The 16 kHz NS models cannot reach
-  above 8 kHz, so a keyboard click kept its sharp part. A dedicated
-  high-band NS (STFT spectral subtraction, decision-directed a priori
-  SNR, 8–24 kHz bins only) removes it, and a VAD closes the high band
-  while the chain reports no voice. Measured on real speech with a
-  realistic click: click −14.2 dB, hiss −8.9 dB (−41.6 dB with the
-  VAD), voice −1 to −3 dB. Measurements and the rejected
-  alternatives: `exp/HB_NS_DESIGN.md`.
-- **NovaSR 48 kHz tail.** Neural super-resolution from the cleaned
-  16 kHz output. Its highs are derived from the cleaned signal, so a
-  click killed in the low band has no click in the highs.
+- **LocalVQE v1.4-AEC engine** (`ENGINE_LOCALVQE = 8`) — neural
+  echo canceller, 16 kHz only, needs `exp/models/LocalVQE*` bundle.
+  Chains into whichever NS backend is picked, e.g.
+  mic → LocalVQE → GTCRN. Hidden unless "Show other AEC engines" is
+  ticked.
+
+### Changed
+
+- **High-band mix defaults to 100%.** Fresh configs, missing
+  slot 32, and Reset now start at full real-high-band level — the
+  confirmed natural chain (DTLN-AEC + 48 kHz splice at 100%). Stored
+  per-user values still win.
 
 ### Fixed
 
@@ -74,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Monitor hard-cut to zero (desktop).** Starved monitor tails now
   fade from the last emitted frame (main-path `EmitFading`
   parity) instead of clicking on the speakers.
+- **Removed "leaky earphone" references from all UI text.** Use-case
+  guidance now reads "Loudspeaker: DTLN-AEC \| sealed
+  earphone/headset: Off" only.
+- **GTCRN tooltip no longer says "16 kHz only" or "weak on overlapping talkers".** Now reads "default; hiss + keyboard."
+- **NS backend radio labels use short names:** Off / DTLN-NS / Hush / GTCRN (default).
 
 ## [1.13.1] - 2026-10-14
 

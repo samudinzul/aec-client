@@ -41,6 +41,7 @@ add_executable(aec_gui
     src/dtln_wrapper.cpp
     src/dtln_ns_wrapper.cpp
     src/hush_wrapper.cpp
+    src/gtcrn_wrapper.cpp
     version.rc
     aec_gui.manifest
     # NKF engine compiled straight in — a prebuilt libnkf_aec.dll went
@@ -246,6 +247,9 @@ add_custom_command(TARGET aec_gui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_SOURCE_DIR}/models/dtln_ns_128_2.tflite
         $<TARGET_FILE_DIR:aec_gui>/models/dtln_ns_128_2.tflite
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/models/gtcrn_simple.onnx
+        $<TARGET_FILE_DIR:aec_gui>/models/gtcrn_simple.onnx
 
     COMMENT "Copying runtime DLLs and models"
 )
@@ -416,12 +420,12 @@ endforeach()
 # build/exp/models/ (fork loads "exp/models/LocalVQE*"). All
 # guarded: without the downloads the engines fail closed at Start
 # with a pointer at exp/get_models.sh.
-if(EXISTS "${CMAKE_SOURCE_DIR}/exp/models/gtcrn_simple.onnx")
+if(EXISTS "${CMAKE_SOURCE_DIR}/models/gtcrn_simple.onnx")
     add_custom_command(TARGET aec_exp POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/exp/models/gtcrn_simple.onnx"
+            "${CMAKE_SOURCE_DIR}/models/gtcrn_simple.onnx"
             "$<TARGET_FILE_DIR:aec_exp>/models/gtcrn_simple.onnx"
-        COMMENT "Copying GTCRN model (exp)")
+        COMMENT "Copying GTCRN model")
 endif()
 foreach(_lv exp/models/LocalVQEAECResidualMask.onnx
              exp/models/LocalVQEAECFrontend.json

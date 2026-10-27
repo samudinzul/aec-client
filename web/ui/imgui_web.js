@@ -297,9 +297,9 @@ class WebImGuiUI {
             '<label class="chkline"><input type="checkbox" id="ig-trayOn">Minimize to system tray (X button hides window)</label>' +
             '<div class="hint">When ON: X hides the window, tray icon stays active. When OFF: X closes the app completely. ' +
             '(Needs the native window; hidden in a browser tab.)</div>' +
-            '<label class="chkline"><input type="checkbox" id="ig-exp">Show experimental engines (NKF-AEC)</label>' +
+            '<label class="chkline"><input type="checkbox" id="ig-exp">Show other AEC engines</label>' +
             '<div class="hint">Off (default): the profile list shows Off, DTLN-AEC 128 and WebRTC AEC3. ' +
-            'On: also shows NKF-AEC — a real engine, less tested than the default.</div>';
+            'On: also shows NKF-AEC.</div>';
         p.appendChild(b);
         return p;
     }
