@@ -39,8 +39,7 @@ try:
 except ImportError:  # pragma: no cover
     pa_patch = None
 
-from .dsp import (FRAME_SIZE, SAMPLE_RATE, resample_from_16k,
-                  resample_to_16k, rms)
+from .dsp import (FRAME_SIZE, SAMPLE_RATE, i16_to_f32, rms)
 from . import dsp  # soft_limit (tanh knee) is referenced as dsp.soft_limit
 
 _Q_DEPTH = 8
@@ -408,6 +407,11 @@ class AudioRunner:
         self._ref_q = queue.Queue(maxsize=_Q_DEPTH)
         self._out_q = queue.Queue(maxsize=_Q_DEPTH)
         self._mon_q = queue.Queue(maxsize=_Q_DEPTH)
+        # Starvation telemetry: frames discarded per queue (see
+        # _offer). Served in state() so dropouts are observable
+        # instead of just audible. Benign races only (same pattern
+        # as the rms floats below).
+        self.dropped = {"in": 0, "ref": 0, "out": 0, "mon": 0}
         self._stop = threading.Event()
         self._threads = []
         self._pa = None
@@ -415,11 +419,14 @@ class AudioRunner:
         self.in_rms = 0.0
         self.out_rms = 0.0
         self.ref_rms = 0.0
-        # Output resampler state — touched ONLY by the
-        # PortAudio callback thread, so no lock is needed.
-        # Linear stream buffers (dsp._StreamBuf): appends copy into
-        # spare tail capacity and consumption advances the head, so
-        # the per-callback concatenate + slice-copy churn is gone.
+        # Stateful resamplers (one per stream — positions are stream
+        # state and must never be shared). Built in start(), when the
+        # real device rates are known; each callback/output thread
+        # touches only its own, so no lock is needed. Replaces the old
+        # stateless per-chunk mapping, whose phase reset every chunk
+        # put a periodic seam on every engine.
+        self._rs_mic = self._rs_ref = None
+        self._rs_out = self._rs_mon = None
         self._mic_rate = 48000
         self._ref_rate = 48000
         self._out_rate = 48000
@@ -438,14 +445,36 @@ class AudioRunner:
     #  they must never block or raise)
     # -------------------------------------------------------
 
+    def _offer(self, q, item, key):
+        """Enqueue one frame without ever blocking the audio thread.
+
+        On a full queue the OLDEST frame is discarded to make room —
+        desktop SPSC-ring parity (rings overwrite the oldest on
+        overrun). Dropping the newest instead would punch a hole in
+        the stream later; discarding stale audio keeps the pipe live
+        at the cost of one dropped frame, counted in dropped[key].
+        """
+        try:
+            q.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+        try:
+            q.get_nowait()  # discard oldest; consumer may have beaten us
+        except queue.Empty:
+            pass  # freed by the consumer meanwhile: no loss, no count
+        else:
+            self.dropped[key] += 1
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            pass
+
     def _on_mic(self, in_data, frame_count, time_info, status):
         try:
             pcm = np.frombuffer(in_data, dtype=np.int16).copy()
             if pcm.size:
-                try:
-                    self._in_q.put_nowait(pcm)
-                except queue.Full:
-                    pass  # ring overrun: drop, like the desktop app
+                self._offer(self._in_q, pcm, "in")
         except Exception:
             pass
         return (None, pa_patch.paContinue)
@@ -454,10 +483,7 @@ class AudioRunner:
         try:
             pcm = np.frombuffer(in_data, dtype=np.int16).copy()
             if pcm.size:
-                try:
-                    self._ref_q.put_nowait(pcm)
-                except queue.Full:
-                    pass
+                self._offer(self._ref_q, pcm, "ref")
         except Exception:
             pass
         return (None, pa_patch.paContinue)
@@ -483,16 +509,23 @@ class AudioRunner:
     def _on_out(self, in_data, frame_count, time_info, status):
         try:
             carry = self._out_carry
-            rate = self._out_rate
             while len(carry) < frame_count:
                 try:
                     frame = self._out_q.get_nowait()
                 except queue.Empty:
                     break
                 # No astype: the pump only queues float32 (chain output
-                # converted once in _pump), and resample_from_16k accepts
-                # any dtype anyway — astype on float32 copies every frame.
-                carry.append(resample_from_16k(frame, rate))
+                # converted once in _pump). Stateful exact-ratio
+                # resampler (built in start()): chunked streaming is
+                # seam-free, unlike the old per-chunk mapping.
+                carry.append(self._rs_out(frame))
+            # Drift trim (desktop mic/ref skip parity): the pump runs
+            # on the mic clock while this callback runs on the output
+            # clock; sustained skew would otherwise balloon the carry
+            # into seconds of latency. Cap ~43 ms @48 kHz — normal
+            # jitter never reaches it, true skew gets cut, not kept.
+            if len(carry) > 2048:
+                carry.pop(len(carry) - 2048)
             n = min(len(carry), frame_count)
             if n == frame_count:
                 out = carry.pop(n)
@@ -520,14 +553,15 @@ class AudioRunner:
         silence, never blocks."""
         try:
             carry = self._mon_carry
-            rate = self._mon_rate
             while len(carry) < frame_count:
                 try:
                     frame = self._mon_q.get_nowait()
                 except queue.Empty:
                     break
                 # No astype (same float32-only-queue argument as _on_out).
-                carry.append(resample_from_16k(frame, rate))
+                carry.append(self._rs_mon(frame))
+            if len(carry) > 2048:
+                carry.pop(len(carry) - 2048)
             n = min(len(carry), frame_count)
             if n == frame_count:
                 out = carry.pop(n)
@@ -581,18 +615,12 @@ class AudioRunner:
         # immediately instead of behind a drain of stale zeros.
         if (self.monitor_idx is not None and self.monitor_enabled
                 and sb is not None):
-            try:
-                self._mon_q.put_nowait(sb * self.monitor_gain)
-            except queue.Full:
-                pass
+            self._offer(self._mon_q, sb * self.monitor_gain, "mon")
 
         self.in_rms = rms(mic_i16.astype(np.float32) / 32768.0)
         self.ref_rms = rms(ref_i16.astype(np.float32) / 32768.0)
         self.out_rms = rms(out)
-        try:
-            self._out_q.put_nowait(out)
-        except queue.Full:
-            pass
+        self._offer(self._out_q, out, "out")
 
     def _work(self):
         # Linear stream buffers (16 kHz domain): the old
@@ -636,8 +664,8 @@ class AudioRunner:
                 len(raw_mic) * self._ref_rate
                 / self._mic_rate)))
             raw_ref = np.zeros(n_ref, dtype=np.int16)
-        mic_buf.append(resample_to_16k(raw_mic, self._mic_rate))
-        ref_buf.append(resample_to_16k(raw_ref, self._ref_rate))
+        mic_buf.append(self._rs_mic(dsp.i16_to_f32(raw_mic)))
+        ref_buf.append(self._rs_ref(dsp.i16_to_f32(raw_ref)))
         while len(mic_buf) >= FRAME_SIZE and len(ref_buf) >= FRAME_SIZE:
             mic_i16 = (mic_buf.pop(FRAME_SIZE)
                        * 32767.0).astype(np.int16)
@@ -654,6 +682,12 @@ class AudioRunner:
             self.ref_idx).get("defaultSampleRate", 48000) or 48000)
         self._out_rate = int(self._pa.get_device_info_by_index(
             self.out_idx).get("defaultSampleRate", 48000) or 48000)
+        # Exact-ratio resamplers, one per stream (positions are stream
+        # state and must never be shared or reused across restarts).
+        self._rs_mic = dsp.LinearResampler(self._mic_rate / dsp.SAMPLE_RATE)
+        self._rs_ref = dsp.LinearResampler(self._ref_rate / dsp.SAMPLE_RATE)
+        self._rs_out = dsp.LinearResampler(dsp.SAMPLE_RATE / self._out_rate)
+        self._rs_mon = dsp.LinearResampler(dsp.SAMPLE_RATE / self._mon_rate)
         self._out_carry = dsp._StreamBuf()
         mic_s = self._pa.open(format=pa_patch.paInt16, channels=1,
                               rate=self._mic_rate, input=True,
@@ -679,6 +713,8 @@ class AudioRunner:
                 self._mon_rate = int(self._pa.get_device_info_by_index(
                     self.monitor_idx).get("defaultSampleRate", 48000) or 48000)
                 self._mon_carry = dsp._StreamBuf()
+                self._rs_mon = dsp.LinearResampler(
+                    dsp.SAMPLE_RATE / self._mon_rate)
                 while not self._mon_q.empty():
                     try:
                         self._mon_q.get_nowait()

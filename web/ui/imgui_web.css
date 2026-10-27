@@ -557,6 +557,24 @@ input[type="checkbox"]:hover {
     accent-color: #2a9d5c;
 }
 
+/* Engine radio group: same horizontal row contract as the NS
+   backend radios (bare sibling labels would stack — the base
+   label rule is display:block). */
+#ig-profile {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+#ig-profile label {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
 .warn {
     color: #ff7b72;
     font-size: 13px;

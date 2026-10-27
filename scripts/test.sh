@@ -5,6 +5,7 @@
 #   scripts/test.sh                # every available suite
 #   scripts/test.sh --native-only  # desktop NKF engine only
 #   scripts/test.sh --web-only     # web engines only (all available)
+#   scripts/test.sh -v             # verbose: also dump each suite's log tail
 #
 # Suites:
 #   native — build/nkf_smoke.exe --synth 10: 10 s of loud-tonal ref
@@ -19,21 +20,27 @@
 #
 # Exit code: 0 = all ran suites passed, 1 = a failure.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 NATIVE=1
 WEB=1
+VERBOSE=0
+END=0
 for a in "$@"; do
+    if [ "$END" -ne 0 ]; then usage_error "unexpected argument: $a"; fi
     case "$a" in
+        --) END=1 ;;
         --native-only) WEB=0 ;;
         --web-only) NATIVE=0 ;;
+        -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,17p' "$0"; exit 0 ;;
-        *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
+            usage_from_header "$0"; exit 0 ;;
+        *) usage_error "unknown flag: $a" ;;
     esac
 done
 
-test -f CMakeLists.txt -a -d src || {
-    echo "run from the repo root" >&2; exit 1; }
+require_file CMakeLists.txt
+require_dir src
 
 PASS=0
 FAIL=0
@@ -45,6 +52,12 @@ report() {  # $1 = name, $2 = PASS|FAIL|SKIP, $3 = detail
         FAIL) FAIL=$((FAIL + 1)) ;;
         SKIP) SKIP=$((SKIP + 1)) ;;
     esac
+}
+show_log() {  # $1 = label, $2 = log path (verbose only)
+    [ "$VERBOSE" -ne 0 ] || return 0
+    [ -f "$2" ] || return 0
+    echo "   ---- $1 log (tail) ----"
+    tail -n 40 "$2" | sed 's/^/   /'
 }
 
 if [ "$NATIVE" -ne 0 ]; then
@@ -87,6 +100,7 @@ if [ "$NATIVE" -ne 0 ]; then
             report "native" FAIL "(exit $?, see /tmp/nkf_smoke_out.txt)"
         fi
         rm -f "$OUT_WAV"
+        show_log native /tmp/nkf_smoke_out.txt
     fi
 fi
 
@@ -109,6 +123,7 @@ if [ "$WEB" -ne 0 ]; then
             report "web" FAIL "(see /tmp/web_smoke_out.txt)"
         fi
     fi
+    show_log web /tmp/web_smoke_out.txt
     # NKF residual-suppressor regressions (skip cleanly without the
     # backend; fail on measured regressions when it is present).
     if "$PY" -m web.test_nkf_res > /tmp/web_res_out.txt 2>&1; then
@@ -120,6 +135,7 @@ if [ "$WEB" -ne 0 ]; then
             report "web-res" FAIL "(see /tmp/web_res_out.txt)"
         fi
     fi
+    show_log web-res /tmp/web_res_out.txt
     # NKF closed-loop regressions (same skip/fail contract).
     if "$PY" -m web.test_nkf_loop > /tmp/web_loop_out.txt 2>&1; then
         report "web-loop" PASS "($(grep -a -o 'ALL PASS' /tmp/web_loop_out.txt | head -1))"
@@ -130,6 +146,7 @@ if [ "$WEB" -ne 0 ]; then
             report "web-loop" FAIL "(see /tmp/web_loop_out.txt)"
         fi
     fi
+    show_log web-loop /tmp/web_loop_out.txt
     # NKF tracking-notch regressions (same skip/fail contract).
     if "$PY" -m web.test_nkf_notch > /tmp/web_notch_out.txt 2>&1; then
         report "web-notch" PASS "($(grep -a -o 'ALL PASS' /tmp/web_notch_out.txt | head -1))"
@@ -140,6 +157,7 @@ if [ "$WEB" -ne 0 ]; then
             report "web-notch" FAIL "(see /tmp/web_notch_out.txt)"
         fi
     fi
+    show_log web-notch /tmp/web_notch_out.txt
 fi
 
 echo ""

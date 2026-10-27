@@ -12,7 +12,7 @@
      Keep version="x.y.z.0" in sync with APP_VERSION
      (desktop release assert enforces it). -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="1.13.1.0" processorArchitecture="*" name="AEC.Client" type="win32"/>
+  <assemblyIdentity version="1.14.0.0" processorArchitecture="*" name="AEC.Client" type="win32"/>
   <description>AEC Client - acoustic echo cancellation</description>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>

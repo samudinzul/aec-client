@@ -5,6 +5,94 @@ All notable changes to AEC Client are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Web UI frozen at 16 kHz.** The pure-Python web build remains
+  the zero-flag fallback (its ZIP scans clean), but it no longer
+  tracks desktop features. It keeps the DTLN-AEC / WebRTC AEC3 /
+  NKF-AEC chain with DTLN-NS or Hush; GTCRN, the 48 kHz high-band
+  splice, automatic 48 kHz output, and LocalVQE stay desktop-only.
+  Web changes are limited to security, compatibility, and release
+  mechanics. The desktop app is the quality path.
+- **Signing guidance corrected.** SignPath Foundation is the
+  realistic free route for this MIT/public/released OSS project;
+  Microsoft's Azure Artifact Signing is not available to
+  individuals outside the US/Canada. A commercial certificate
+  remains the paid alternative.
+
+## [1.14.0] - 2026-10-16
+
+### Added
+
+- **GTCRN is the default NS backend** (desktop `aec_gui.exe`).
+  Labelled "GTCRN (default)" — "default; hiss + keyboard." All NS
+  backends remain 16 kHz; 48 kHz output is auto-derived unless NS
+  or a 16 kHz-only engine forces 16 kHz. Fail-closed at Start if
+  `models/gtcrn_simple.onnx` is missing. Config gen bumped to 11
+  with migration for old configs.
+- **High-band splice graduated to the official build.** Capture mic
+  at 48 kHz, run the 16 kHz engine on the low band (0–8 kHz), then
+  splice the real 8–24 kHz mic band back on at 48 kHz output — real
+  highs, not synthesized. Includes a dedicated high-band NS (STFT
+  spectral subtraction, decision-directed a priori SNR) so keyboard
+  clicks no longer keep their sharp part. The high band is gated by
+  VAD while the chain reports no voice, and delayed by chain latency
+  so both bands land on the same instant.
+- **Listen to myself syncs to "Your speakers".** Ticking the
+  checkbox sets the output device to match the Speaker Reference, so
+  you hear yourself through the same speakers instead of the AEC
+  reference device. The soundboard monitor also follows the output
+  device when Listen to myself is on.
+- **"Show other AEC engines" replaces "Show experimental engines".**
+  Hides WebRTC AEC3 / NKF-AEC (and LocalVQE-AEC in exp) by default.
+  Untick to reveal them. Tooltip updated accordingly.
+- **Engine Off option (desktop + web).** The echo engine is now a
+  radio group — Off / DTLN-AEC / WebRTC AEC3 / NKF-AEC — with Off
+  passing mic straight to the noise-suppression stage
+  (denoise-only mode). Appended last in the profile tables so saved
+  configs load unchanged.
+- **WebRTC AEC3 promoted out of experimental** (desktop + web).
+  Only NKF-AEC hides behind the flag now.
+- **Experimental fork split (desktop).** `exp/main.cpp` builds
+  `aec_exp.exe` with its own title/mutex/config/resources,
+  carrying LocalVQE-AEC + GTCRN + high-band splice; the official
+  `aec_gui.exe` is DTLN/AEC3/NKF + DTLN-NS/Hush/GTCRN + high-band
+  splice. Release scripts never ship exp content.
+- **Starvation telemetry (web).** Per-queue drop counters
+  (`dropped: {in, ref, out, mon}`) in both state endpoints.
+
+### Experimental (aec_exp.exe only — never in a release)
+
+- **LocalVQE v1.4-AEC engine** (`ENGINE_LOCALVQE = 8`) — neural
+  echo canceller, 16 kHz only, needs `exp/models/LocalVQE*` bundle.
+  Chains into whichever NS backend is picked, e.g.
+  mic → LocalVQE → GTCRN. Hidden unless "Show other AEC engines" is
+  ticked.
+
+### Changed
+
+- **High-band mix defaults to 100%.** Fresh configs, missing
+  slot 32, and Reset now start at full real-high-band level — the
+  confirmed natural chain (DTLN-AEC + 48 kHz splice at 100%). Stored
+  per-user values still win.
+
+### Fixed
+
+- **Output starvation gaps (web).** Full queues dropped the newest
+  frame (holes later); now the oldest is discarded to stay live,
+  matching the desktop SPSC rings. Output/monitor carries are
+  drift-trimmed (~43 ms cap) instead of ballooning on clock skew.
+- **Monitor hard-cut to zero (desktop).** Starved monitor tails now
+  fade from the last emitted frame (main-path `EmitFading`
+  parity) instead of clicking on the speakers.
+- **Removed "leaky earphone" references from all UI text.** Use-case
+  guidance now reads "Loudspeaker: DTLN-AEC \| sealed
+  earphone/headset: Off" only.
+- **GTCRN tooltip no longer says "16 kHz only" or "weak on overlapping talkers".** Now reads "default; hiss + keyboard."
+- **NS backend radio labels use short names:** Off / DTLN-NS / Hush / GTCRN (default).
+
 ## [1.13.1] - 2026-10-14
 
 ### Fixed

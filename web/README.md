@@ -1,9 +1,17 @@
-# aec-web — local web UI for AEC Client
+# aec-web — local web UI for AEC Client (frozen 16 kHz fallback)
 
 Real-time echo cancellation + noise suppression in a
 native app window (or your browser), powered
 by a plain Python script on your own machine. No `.exe`, no installer,
 nothing for antivirus heuristics to flag.
+
+> **Frozen at 16 kHz.** This build remains the zero-flag fallback,
+> but it no longer tracks desktop features. It has the proven
+> DTLN-AEC / WebRTC AEC3 / NKF-AEC chain with DTLN-NS or Hush.
+> It does **not** have GTCRN, the 48 kHz high-band splice,
+> automatic 48 kHz output, or LocalVQE. For the best sound
+> quality, use the desktop app (v1.14.0 or newer). Maintenance
+> here is limited to security, compatibility, and release fixes.
 
 ## What you need first
 
@@ -35,11 +43,12 @@ installs itself on first run.
 `aec_gui.exe` is unsigned and bundles ONNX Runtime + TFLite, so
 aggressive AI heuristics flag it (standing: SecureAge APEX only,
 1/71, clean behavior tab — disputed per release, see `SECURITY.md`).
-A code-signing certificate (~$200/yr) is the only fix for
-the exe — this project sidesteps it instead: **ship `.py`, not `.exe`.**
-Every ML package here is a mainstream reputable wheel; nothing we write
-is a PE binary. **Never freeze this with PyInstaller/Nuitka** — that
-reintroduces the exact problem.
+A code-signing certificate is the only fix for the exe. SignPath
+Foundation provides free signing for OSS projects; until a signed
+desktop build ships, this project sidesteps the flag instead:
+**ship `.py`, not `.exe`.** Every ML package here is a mainstream
+reputable wheel; nothing we write is a PE binary. **Never freeze this
+with PyInstaller/Nuitka** — that reintroduces the exact problem.
 
 ## Setup
 
@@ -49,9 +58,9 @@ the local environment, installs the full package set
 native window, and all 3 engines), then opens the GUI
 in a native app window (Edge WebView2 — built into
 Windows 10/11, so no browser is needed) once the models
-are loaded. The WebRTC AEC3 / NKF-AEC profiles appear
-once you tick "Show experimental engines" on the Appearance
-tab. Click it again any time to open another
+are loaded. The NKF-AEC profile appears
+once you tick "Show other AEC engines" on the Appearance
+tab (WebRTC AEC3 is a regular choice now). Click it again any time to open another
 window against the running server. Stop: close the
 window — the server stops with it — or press Ctrl+C in
 the console. The Appearance tab minimizes to the system
@@ -119,7 +128,9 @@ Open http://localhost:8000 — that page IS the GUI.
   128-shift / 257-bin, Hann-free rFFT like the C++ pocketfft path.
 - **WebRTC AEC3** (`pywebrtc-audio` EchoCanceller) — the same Chrome
   code as the desktop path (AEC + capture HP filter, no NS/AGC),
-  experimental-gated.
+  a regular choice (no experimental gate).
+- **Off (no AEC)** — mic passes straight to the NS stage
+  (denoise-only mode), always available, no backend needed.
 - **NKF-AEC** (`models/nkf.onnx` via `onnxruntime`) — NumPy port of
   the desktop Kalman core + wrapper stages (TDC alignment,
   shadow/crossfade exposure, divergence guard, loop brakes,
@@ -143,7 +154,10 @@ Open http://localhost:8000 — that page IS the GUI.
   (linear 0.0×…2.0×, clamped to 0.1×…4.0× server-side) applied to
   the mic before the engine, for quiet microphones.
 
-16 kHz only (same auto-lock as the desktop neural engines).
+16 kHz only (same auto-lock as the desktop neural engines). This
+is the complete web feature set: the frozen build deliberately
+stops here, so GTCRN and the 48 kHz high-band splice remain
+desktop-only.
 
 ## Files
 

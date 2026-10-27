@@ -2,9 +2,25 @@ AEC Web UI v%%VERSION%%
 =======================
 
 Real-time acoustic echo cancellation in your browser.
-The same engines and models as the desktop app, running
-as a plain Python local server - no .exe, so no antivirus
-warnings.
+The same 16 kHz engines and models as the desktop app's
+16 kHz path, running as a plain Python local server -
+no .exe, so no antivirus warnings.
+
+STATUS AND SCOPE
+----------------
+This is the frozen 16 kHz fallback build. It ships the
+proven DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC chain with
+DTLN-NS or Hush.
+
+It does NOT include the desktop app's newer GTCRN noise
+suppression, the 48 kHz high-band splice, automatic
+48 kHz output, or LocalVQE. For the best sound quality,
+use the desktop AEC Client v1.15.0 or newer.
+
+This bundle stays available because it is pure Python +
+data and scans clean with antivirus. It receives
+security, compatibility, and release fixes only - no
+new audio features.
 
 REQUIREMENTS
 ------------
@@ -31,8 +47,8 @@ QUICK START
    - First run: creates a local Python environment and
      installs packages (~1 minute), then starts the
      server and opens the GUI automatically. All 3
-     engines included (DTLN-AEC 128, WebRTC AEC3,
-     NKF-AEC - the last two unlock by ticking "Show
+     engines included (DTLN-AEC 128 and WebRTC AEC3 are
+     regular choices; NKF-AEC unlocks by ticking "Show
      experimental engines" in Appearance).
    - The console window IS the server log - close it or
      press Ctrl+C to stop.
@@ -47,7 +63,7 @@ QUICK START
 
    Quiet mic? Raise the "Microphone level" slider under
    More -> Levels (0-200%, live). "Noise suppression"
-   removes hiss - untick it (live) to halve model CPU.
+   removes hiss - select Off (live) to halve model CPU.
 
 5. Click Start. Talk with speakers on. Keep the mic away
    from the speakers - no canceller holds a loud
@@ -81,8 +97,8 @@ In order of impact:
 1. Pick the NKF-AEC profile (tick "Show experimental
    engines" in Appearance to reveal it) - smallest
    engine, designed for weak CPUs.
-2. Untick "Noise suppression" on the Audio tab -
-   halves the neural models loaded.
+2. Select Off in the "Noise suppression" radio on the
+   Audio tab - halves the neural models loaded.
 3. Skip the native window: instead of web\start.bat,
    run "python -m web.server" in a terminal and open
    http://localhost:8000/ in a browser you already
@@ -121,8 +137,8 @@ TROUBLESHOOTING
   sound.
 - Choppy audio: keep the speaker volume moderate - very
   loud speakers make any canceller leave echo behind.
-  If voices sound clipped, untick "Noise suppression"
-  and retest.
+  If voices sound clipped, select Off in "Noise
+  suppression" and retest.
 
 LICENSE
 -------

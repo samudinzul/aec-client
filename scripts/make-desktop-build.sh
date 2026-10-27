@@ -7,7 +7,8 @@
 #
 # Two different kinds of "clean", kept apart on purpose:
 #   - CLEAN OUTPUT (always, no flag): builds ONLY the app
-#     (aec_gui.exe) — no nkf_smoke, no stray logs left in build/.
+#     (aec_gui.exe) — no smoke tools, no stray logs left in build/.
+#     --exp swaps the app target to the experimental aec_exp.exe.
 #   - FRESH CONFIGURE (--fresh): wipe build/ first, then configure
 #     from scratch. Use after CMakeLists changes or when the cache
 #     looks stale.
@@ -16,12 +17,27 @@
 #   scripts/make-desktop-build.sh              # build app (MinSizeRel)
 #   scripts/make-desktop-build.sh --fresh      # wipe build/, then build app
 #   scripts/make-desktop-build.sh --debug      # debuggable build instead of size build
-#   scripts/make-desktop-build.sh --with-smoke # also build nkf_smoke.exe (needed by
-#                                              # scripts/test.sh --native-only)
+#   scripts/make-desktop-build.sh --exp        # build ONLY aec_exp.exe (experimental fork)
+#   scripts/make-desktop-build.sh --with-smoke # ALSO build the offline smoke tools
+#                                              # (nkf_smoke + dtln_smoke + aec3_smoke;
+#                                              # nkf_smoke feeds scripts/test.sh --native-only)
 #   scripts/make-desktop-build.sh --run        # build, then launch aec_gui.exe
+#                                              # (aec_exp.exe with --exp)
 #   scripts/make-desktop-build.sh -v           # verbose: full cmake/ninja output
 #
-# --run launches build/aec_gui.exe detached (terminal stays free).
+# The flags are independent and composable:
+#   --exp         selects the APP: aec_exp.exe instead of aec_gui.exe.
+#                 It never builds aec_gui, so the official shipped exe
+#                 is left untouched.
+#   --with-smoke  ADDS the smoke tools to whichever app is selected.
+#                 It is NOT needed for a normal app build, and it is
+#                 not an alternative to --exp.
+#
+#   scripts/make-desktop-build.sh --exp                 # exp app only
+#   scripts/make-desktop-build.sh --exp --with-smoke    # exp app + smoke tools
+#   scripts/make-desktop-build.sh --with-smoke          # official app + smoke tools
+#
+# --run launches the selected app detached (terminal stays free).
 # DLLs + models are staged next to the exe by CMake, and the app
 # anchors itself to the exe directory, so it runs from build/ as-is.
 # Harmless if already running: the app focuses the existing window.
@@ -41,40 +57,54 @@
 # bloat is visible immediately. Pair with scripts/make-release-desktop.sh
 # to ship.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 FRESH=0
 WITH_SMOKE=0
+WITH_EXP=0
 RUN=0
 VERBOSE=0
+END=0
 BUILD_TYPE="MinSizeRel"
 for a in "$@"; do
+    if [ "$END" -ne 0 ]; then usage_error "unexpected argument: $a"; fi
     case "$a" in
+        --) END=1 ;;
         --fresh) FRESH=1 ;;
         --debug) BUILD_TYPE="Debug" ;;
+        --exp) WITH_EXP=1 ;;
         --with-smoke) WITH_SMOKE=1 ;;
         --run) RUN=1 ;;
         -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,42p' "$0"; exit 0 ;;
-        *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
+            usage_from_header "$0"; exit 0 ;;
+        *) usage_error "unknown flag: $a" ;;
     esac
 done
 
-test -f CMakeLists.txt -a -d src || {
-    echo "run from the repo root" >&2; exit 1; }
-command -v cmake >/dev/null || { echo "cmake not found" >&2; exit 1; }
-command -v ninja >/dev/null || { echo "ninja not found" >&2; exit 1; }
+require_file CMakeLists.txt
+require_dir src
+need_cmd cmake
+need_cmd ninja
 
 if [ "$FRESH" -ne 0 ]; then
     # Windows locks a running program's file AND its folder: wiping
     # build/ while the app is open dies with "Device or resource busy"
     # (possibly after half-deleting the contents). Fail upfront.
-    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|nkf_smoke.exe"; then
-        echo "close aec_gui.exe (and nkf_smoke.exe) first — running programs lock build/" >&2
+    if tasklist.exe 2>/dev/null | grep -iq "aec_gui.exe\|aec_exp.exe\|nkf_smoke.exe\|dtln_smoke.exe\|aec3_smoke.exe\|gtcrn_smoke.exe\|localvqe_smoke.exe"; then
+        echo "close the app and any smoke exe first — running programs lock build/" >&2
         exit 1
     fi
     echo "-- removing build/ (fresh configure)"
-    rm -rf build
+    # A stale lock (shell sitting inside build/, indexer/antivirus, a
+    # zombie handle tasklist missed) can still EBUSY the rmdir even
+    # after the contents are gone. Fall back to emptying in place —
+    # an empty build/ reconfigures identically — instead of dying.
+    if ! rm -rf build 2>/dev/null; then
+        echo "-- build/ locked, emptying in place instead" >&2
+        find build -mindepth 1 -delete 2>/dev/null || true
+        rmdir build 2>/dev/null || true
+    fi
 fi
 mkdir -p build
 
@@ -126,43 +156,68 @@ run_step "configure (${BUILD_TYPE})" \
     "${CC_LAUNCHER[@]:-}"
 
 NPROC=$(nproc 2>/dev/null || echo 4)
+
+# Flag semantics (composable, not alternatives):
+#   --exp         -> which APP to build (aec_exp instead of aec_gui)
+#   --with-smoke  -> ADDS the smoke tools to that app build
+APP_TARGET="aec_gui"
+APP_EXE="aec_gui.exe"
+if [ "$WITH_EXP" -ne 0 ]; then
+    APP_TARGET="aec_exp"
+    APP_EXE="aec_exp.exe"
+fi
+TARGETS=("$APP_TARGET")
 if [ "$WITH_SMOKE" -ne 0 ]; then
-    run_step "build all (-j${NPROC})" \
-        cmake --build build -j "$NPROC"
-else
-    run_step "build aec_gui (-j${NPROC})" \
-        cmake --build build -j "$NPROC" --target aec_gui
-    # A clean build leaves no diagnostic tools or logs behind.
+    TARGETS+=(nkf_smoke dtln_smoke aec3_smoke)
+fi
+run_step "build ${TARGETS[*]} (-j${NPROC})" \
+    cmake --build build -j "$NPROC" --target "${TARGETS[@]}"
+
+# An app-only build leaves no diagnostic tools or logs behind.
+if [ "$WITH_SMOKE" -eq 0 ]; then
     rm -f build/nkf_smoke.exe build/nkf_smoke.pdb nkf-phase.log build/nkf-phase.log
 fi
 
 echo ""
 echo "-- size audit (bloat check)"
+ls -la "build/${APP_EXE}" 2>/dev/null || true
 if [ "$WITH_SMOKE" -ne 0 ]; then
-    ls -la build/aec_gui.exe build/nkf_smoke.exe 2>/dev/null || true
-else
-    ls -la build/aec_gui.exe 2>/dev/null || true
+    ls -la build/nkf_smoke.exe build/dtln_smoke.exe build/aec3_smoke.exe 2>/dev/null || true
 fi
 echo ""
 echo "DLLs next to the exe:"
 du -h build/*.dll 2>/dev/null || echo "(no DLLs staged)"
 echo ""
 echo "Models (bundled, unchanged by build flags):"
-du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflite 2>/dev/null || true
+if [ "$WITH_EXP" -ne 0 ]; then
+    du -h -c exp/models/gtcrn_simple.onnx exp/models/LocalVQEAECResidualMask.onnx 2>/dev/null || true
+else
+    du -h -c models/nkf.onnx models/dtln_aec_128_*.tflite models/dtln_ns_128_*.tflite 2>/dev/null || true
+fi
 echo ""
-if [ "$WITH_SMOKE" -ne 0 ]; then
-    echo "BUILD OK: build/aec_gui.exe + build/nkf_smoke.exe"
+if [ "$WITH_EXP" -ne 0 ] && [ "$WITH_SMOKE" -ne 0 ]; then
+    echo "BUILD OK: build/aec_exp.exe + smoke exes"
+    echo "Next: scripts/test.sh --native-only, or run build/aec_exp.exe"
+elif [ "$WITH_EXP" -ne 0 ]; then
+    echo "BUILD OK: build/aec_exp.exe"
+    echo "Next: run build/aec_exp.exe (or --exp --run)"
+elif [ "$WITH_SMOKE" -ne 0 ]; then
+    echo "BUILD OK: build/aec_gui.exe + smoke exes"
     echo "Next: scripts/test.sh --native-only, or ship with scripts/make-release-desktop.sh"
 else
     echo "BUILD OK: build/aec_gui.exe"
-    echo "Next: ship with scripts/make-release-desktop.sh (needs --with-smoke for scripts/test.sh --native-only)"
+    echo "Next: ship with scripts/make-release-desktop.sh (add --with-smoke for scripts/test.sh --native-only)"
 fi
 
 if [ "$RUN" -ne 0 ]; then
     echo ""
-    if [ ! -x build/aec_gui.exe ]; then
-        echo "cannot --run: build/aec_gui.exe missing" >&2; exit 1
+    RUN_EXE="build/aec_gui.exe"
+    if [ "$WITH_EXP" -ne 0 ]; then
+        RUN_EXE="build/aec_exp.exe"
     fi
-    ./build/aec_gui.exe & disown
-    echo "launched aec_gui.exe (pid $!)"
+    if [ ! -x "$RUN_EXE" ]; then
+        echo "cannot --run: ${RUN_EXE} missing" >&2; exit 1
+    fi
+    "./${RUN_EXE}" & disown
+    echo "launched ${RUN_EXE#build/} (pid $!)"
 fi

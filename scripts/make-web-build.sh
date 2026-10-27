@@ -9,6 +9,7 @@
 #   scripts/make-web-build.sh --run    # build, then launch the GUI
 #                                      # (native window via web.gui,
 #                                      # attaches if a server runs)
+#   scripts/make-web-build.sh -v       # verbose: stream pip/compile output
 #
 # Steps:
 #   1. Find a Python (py launcher preferred, PATH fallback;
@@ -25,21 +26,27 @@
 # .venv/bin elsewhere); everything here resolves through a
 # probed interpreter, so the script runs on MSYS2 and Linux.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
 FRESH=0
 RUN=0
+VERBOSE=0
+END=0
 for a in "$@"; do
+    if [ "$END" -ne 0 ]; then usage_error "unexpected argument: $a"; fi
     case "$a" in
+        --) END=1 ;;
         --fresh) FRESH=1 ;;
         --run) RUN=1 ;;
+        -v|--verbose) VERBOSE=1 ;;
         -h|--help)
-            sed -n '2,23p' "$0"; exit 0 ;;
-        *) echo "unknown flag: $a (see --help)" >&2; exit 1 ;;
+            usage_from_header "$0"; exit 0 ;;
+        *) usage_error "unknown flag: $a" ;;
     esac
 done
 
-test -f CMakeLists.txt -a -d web || {
-    echo "run from the repo root" >&2; exit 1; }
+require_file CMakeLists.txt
+require_dir web
 
 # ---- 1. interpreter (same preference as web/start.bat) ----
 PY_BIN=""
@@ -68,19 +75,26 @@ if [ "$FRESH" -ne 0 ]; then
     find web -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 fi
 find_vpy
+if [ -z "$VPY" ] && [ -d .venv ]; then
+    # Never create/overwrite a venv in place: an unusable .venv is
+    # almost always a foreign-platform copy (synced Windows venv on
+    # Linux, or vice versa), and python -m venv over it can leave a
+    # half-written mix. --fresh is the explicit repair.
+    die "existing .venv is unusable here (foreign platform?) — rerun with --fresh to rebuild it"
+fi
 if [ -z "$VPY" ]; then
     echo "-- creating .venv (first run only)"
     # shellcheck disable=SC2086
     $PY_BIN -m venv .venv
     find_vpy
 fi
-[ -n "$VPY" ] || {
-    echo "existing .venv is unusable here (foreign platform?) — rerun with --fresh to rebuild it" >&2
-    exit 1; }
+[ -n "$VPY" ] || die "could not create a working .venv"
 
 # ---- 3. packages (quiet; no-op when satisfied) ----
 echo "-- packages (web/requirements.txt)"
-if ! "$VPY" -m pip install -q --disable-pip-version-check -r web/requirements.txt; then
+PIP_QUIET=(-q)
+if [ "$VERBOSE" -ne 0 ]; then PIP_QUIET=(); fi
+if ! "$VPY" -m pip install "${PIP_QUIET[@]}" --disable-pip-version-check -r web/requirements.txt; then
     echo "pip install failed — connect to the internet and retry" >&2
     exit 1
 fi
@@ -95,7 +109,9 @@ mkdir -p web/sounds
 
 # ---- 5. byte-compile the backend ----
 echo "-- compile check"
-if ! "$VPY" -m compileall -q web; then
+COMPILE_QUIET=(-q)
+if [ "$VERBOSE" -ne 0 ]; then COMPILE_QUIET=(); fi
+if ! "$VPY" -m compileall "${COMPILE_QUIET[@]}" web; then
     echo "compile check FAILED" >&2; exit 1
 fi
 echo "   compile OK"

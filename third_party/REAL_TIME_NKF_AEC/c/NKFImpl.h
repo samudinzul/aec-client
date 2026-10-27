@@ -76,6 +76,12 @@ public:
     // there, continued adaptation is not.
     void SetFrozen(bool f) { m_frozen = f; }
 
+    // A/B hook for residual-suppressor artifacts (mirrors web
+    // NKF_DISABLE_RES): bypass the intrinsic Wiener post-filter so a
+    // robotic texture can be attributed to the Kalman core or the
+    // suppressor with one env var, no logic rebuild.
+    void SetResEnabled(bool e) { m_resEnabled = e; }
+
 private:
     // APPEND-ONLY RULE (this file got burned by violating it): new data
     // members go at the END of the class, never inserted — inserting
@@ -182,4 +188,8 @@ private:
     double m_resPe[FFT_OUT_SIZE] = { 0 };
     double m_resPm[FFT_OUT_SIZE] = { 0 };
     double m_resDb = 0.0;
+
+    // Intrinsic RES on/off (appended, never inserted — same rule;
+    // must stay LAST).
+    bool m_resEnabled = true;
 };

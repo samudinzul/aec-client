@@ -13,8 +13,10 @@ silent ref).
 
 L1 no-blowout — wire stays finite and off full-scale the whole
    run, and the engine never gives up (no fail-open bailout).
-L2 brakes-engage — the loop detector fires mid-loop AND the wire
-   trim is active (loopDb < -1 dB): suppression, not disengagement.
+L2 brakes-engage — the loop detector fires mid-loop AND the loop is
+   suppressed: either the wire trim is active (loopDb < -1 dB,
+   unproven cancellation) or the Kalman proves cancellation
+   (depthDb <= -1 dB, trim vetoed so voice is never ducked).
 L3 release — after the loop ends the detector clears and the trim
    lets go (|loopDb| < 0.5 dB): mic tests keep working.
 L4 single-window attack — unit check on _backstop_window: a
@@ -87,11 +89,19 @@ def l1_no_blowout(wire, snaps):
 
 
 def l2_brakes_engage(snaps):
-    mid = snaps["mid"]
-    ok = mid["loopActive"] == 1 and mid["loopDb"] < -1.0
-    print(f"L2 brakes-engage: loopActive={mid['loopActive']} "
-          f"loopDb={mid['loopDb']:.1f}dB exposed={mid['exposed']} "
-          f"({'PASS' if ok else 'FAIL: want loop=1, trim active'})")
+    # New contract (trim veto): a detected loop must be SUPPRESSED, by
+    # whichever brake applies — the wire trim when cancellation is
+    # unproven (loopDb < -1 dB), or the Kalman itself when it proves
+    # cancellation (depthDb <= -1 dB, trim vetoed so voice is never
+    # ducked). Asserted late-loop (steady state, not the convergence
+    # transient): either way the loop must not run free.
+    late = snaps["late"]
+    ok = (late["loopActive"] == 1
+          and (late["loopDb"] < -1.0 or late["depthDb"] <= -1.0))
+    print(f"L2 brakes-engage: loopActive={late['loopActive']} "
+          f"loopDb={late['loopDb']:.1f}dB depth={late['depthDb']:.1f}dB "
+          f"exposed={late['exposed']} "
+          f"({'PASS' if ok else 'FAIL: want loop=1, trimmed or cancelled'})")
     return bool(ok)
 
 

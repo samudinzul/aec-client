@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # make-release-desktop.sh — assemble a clean AEC Client release bundle + zip.
 #
-# Usage:  scripts/make-release-desktop.sh [version]  (default: APP_VERSION)
+# Usage:  scripts/make-release-desktop.sh [version] [-v]
+#         (default: APP_VERSION from src/main.cpp)
 #
 # Contract (matches v1.2.x precedent, enforced by asserts below):
 #   release/vX/
@@ -21,15 +22,35 @@
 #
 # release/ is gitignored; run from the repo root in MSYS2 bash.
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 
-if [ $# -gt 1 ]; then
-    echo "usage: $0 [version]   (default: APP_VERSION from src/main.cpp)" >&2
-    exit 1
+VERBOSE=0
+END=0
+POSITIONAL=()
+for a in "$@"; do
+    if [ "$END" -ne 0 ]; then POSITIONAL+=("$a"); continue; fi
+    case "$a" in
+        --) END=1 ;;
+        -v|--verbose) VERBOSE=1 ;;
+        -h|--help)
+            usage_from_header "$0"; exit 0 ;;
+        -*) usage_error "unknown flag: $a" ;;
+        *) POSITIONAL+=("$a") ;;
+    esac
+done
+if [ "${#POSITIONAL[@]}" -gt 1 ]; then
+    usage_error "too many arguments: ${POSITIONAL[*]}"
 fi
-VER="${1:-$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)}"
+require_dir src
+require_dir build
+require_file CMakeLists.txt
+if [ "${#POSITIONAL[@]}" -eq 1 ]; then
+    VER="${POSITIONAL[0]}"
+else
+    VER="$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)"
+fi
 echo "-- version: $VER"
-test -d src -a -d build -a -f CMakeLists.txt || {
-    echo "run from the repo root" >&2; exit 1; }
+if [ "$VERBOSE" -ne 0 ]; then set -x; fi
 
 # Version must match the app identity.
 APP_VER=$(grep -oP '#define APP_VERSION "\K[^"]+' src/main.cpp | head -1)
@@ -39,7 +60,8 @@ if [ "$APP_VER" != "$VER" ]; then
 fi
 
 test -x build/aec_gui.exe || { echo "build/aec_gui.exe missing; build first" >&2; exit 1; }
-command -v zip >/dev/null || { echo "zip not found (pacman -S zip)" >&2; exit 1; }
+need_cmd zip "pacman -S zip"
+need_cmd python3 "pacman -S python"
 
 RELDIR="release/v${VER}"
 mkdir -p "$RELDIR"
@@ -126,7 +148,7 @@ done
 #          or the az signtool flow. See README.md.
 # ============================================================
 if [ "${AEC_SIGN:-0}" = "1" ]; then
-    command -v signtool >/dev/null || { echo "AEC_SIGN=1 but signtool not found" >&2; exit 1; }
+    need_cmd signtool "AEC_SIGN=1 requires signtool on PATH"
     [ -n "${AEC_CERT_SHA1:-}" ] || { echo "AEC_SIGN=1 but AEC_CERT_SHA1 unset" >&2; exit 1; }
     signtool sign /v /sha1 "${AEC_CERT_SHA1}" \
         /t "${AEC_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
