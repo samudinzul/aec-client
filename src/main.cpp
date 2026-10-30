@@ -875,6 +875,7 @@ SpscRing<4096>    g_monitorRing;
 // thread in FeedMonitor — atomic so the callback never sees a torn
 // flag. The device itself is only created/destroyed on the UI thread.
 std::atomic<bool> g_monitorStarted{ false };
+int               g_monitorRate    = 16000;   // sample rate of the monitor device
 int               g_monitorIndex   = -1;      // -1 = follow "Your speakers"
 std::atomic<bool>  g_monitorEnabled{ true };
 std::atomic<float> g_monitorGain(1.0f);
@@ -1840,7 +1841,7 @@ void monitor_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCou
     // The monitor runs on its own clock, so the ring can creep up or
     // drain: trim the excess (same rule as the mic/ref drift guards).
     const size_t driftTarget =
-        (size_t)frameSizeForRate(g_sampleRate.load()) * 2;
+        (size_t)frameSizeForRate(g_monitorRate) * 2;
     if (g_monitorRing.available() > driftTarget)
         g_monitorRing.skip(g_monitorRing.available() - driftTarget);
 
@@ -1922,7 +1923,12 @@ void StartMonitor() {
     const int monIdx = MonitorDeviceIndex();
     if (monIdx < 0 || monIdx >= (int)g_playbackDevices.size()) return;
 
-    const int sr = g_sampleRate.load();
+    // In high-band splice mode the chain runs at 16 kHz but the
+    // output (and the soundboard mix fed to the monitor) is 48 kHz,
+    // so the monitor device must match the output rate, not the
+    // chain rate — otherwise the fed frames are the wrong length.
+    const int sr = g_highbandEnabled.load() ? 48000 : g_sampleRate.load();
+    g_monitorRate = sr;
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format    = ma_format_s16;
     cfg.playback.channels  = 1;
