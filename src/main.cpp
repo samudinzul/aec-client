@@ -1899,6 +1899,12 @@ static void FeedMonitor(const float* sb, int fs) {
 static int MonitorDeviceIndex() {
     if (g_monitorIndex >= 0 && g_monitorIndex < (int)g_playbackDevices.size())
         return g_monitorIndex;
+    // "Follow Your speakers": the monitor plays on the speaker
+    // reference device (g_refIndex), not the output/cable device —
+    // otherwise in normal mode it feeds CABLE Input and the user
+    // hears nothing locally.
+    if (g_refIndex >= 0 && g_refIndex < (int)g_playbackDevices.size())
+        return g_refIndex;
     return g_outIndex;
 }
 
