@@ -84,6 +84,7 @@ for m in models/nkf.onnx \
          models/dtln_aec_128_2.tflite \
          models/dtln_ns_128_1.tflite \
          models/dtln_ns_128_2.tflite \
+         models/gtcrn_simple.onnx \
          models/hush_16k_onnx.tar.gz; do
     test -f "$m" || { echo "missing model: $m" >&2; exit 1; }
     cp "$m" "$STAGE/models/"
@@ -94,13 +95,14 @@ sed "s/%%VERSION%%/${VER}/g" scripts/templates/README-desktop.txt > "$STAGE/READ
 
 # ---- contract asserts ----
 fail=0
-forbidden='imgui\.ini|aec_config\.txt|dfn|deepfilter|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/|enrollment|embedding|\.wav$|\.mp3$|\.flac$|gtcrn|silero|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp'
+forbidden='imgui\.ini|aec_config\.txt|dfn|deepfilter|\.pdb$|\.dll\.a$|\.o$|CMakeFiles|releases/|enrollment|embedding|\.wav$|\.mp3$|\.flac$|silero|libabsl_|libprotobuf|libre2|libonnx\.dll|libutf8|libgomp'
 bad=$(find "$STAGE" | grep -Ei "$forbidden" || true)
 if [ -n "$bad" ]; then echo "FORBIDDEN FILES STAGED:"; echo "$bad"; fail=1; fi
 test -f "$STAGE/aec_gui.exe" || { echo "missing exe" >&2; fail=1; }
 test -f "$STAGE/models/dtln_aec_128_1.tflite" || { echo "missing dtln 128 stage1" >&2; fail=1; }
 test -f "$STAGE/models/dtln_aec_128_2.tflite" || { echo "missing dtln 128 stage2" >&2; fail=1; }
 test -f "$STAGE/models/nkf.onnx" || { echo "missing nkf" >&2; fail=1; }
+test -f "$STAGE/models/gtcrn_simple.onnx" || { echo "missing gtcrn" >&2; fail=1; }
 test -f "$STAGE/models/hush_16k_onnx.tar.gz" || { echo "missing hush bundle" >&2; fail=1; }
 test -f "$STAGE/weya_nc.dll" || { echo "missing weya_nc.dll (build copies libs/weya_nc.dll)" >&2; fail=1; }
 # Old default must never ship again
