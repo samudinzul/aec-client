@@ -58,20 +58,21 @@ QUICK START
 4. Pick an engine at the top of the Audio tab — the label shows the
    engine and its chain (the engine is not configurable on its own):
    - DTLN-AEC 128        dual-LSTM echo canceller — the default:
-     best echo + noise handling, with DTLN-NS noise suppression
-     (16 kHz).
+     best echo + noise handling, with noise suppression
+     (16 kHz, 48 kHz with high-band splice).
    - WebRTC AEC3         the Chrome canceller — reliable, well-tested
-     baseline, strongest canceller + DTLN-NS (16 kHz, 48 kHz optional).
-   - NKF-AEC             tiny neural Kalman core — for weak CPUs,
-     with DTLN-NS noise suppression (16 kHz).
-   WebRTC AEC3 and NKF-AEC are experimental: hidden by default.
-   Tick "Show experimental engines" on the Appearance tab to reveal
+     baseline, strongest canceller (16 kHz, 48 kHz optional).
+   - NKF-AEC             tiny neural Kalman core — for weak CPUs (16 kHz).
+   WebRTC AEC3 and NKF-AEC are hidden by default.
+   Tick "Show other AEC engines" on the Appearance tab to reveal
    them; unticking falls back to DTLN-AEC 128.
 
-5. One post stage for every engine: "Noise suppression
-   (DTLN-NS)" — a second DTLN pair that removes background noise.
-   While ticked the profile label reads "engine -> NS".
-   The sample rate under More is also independent of the profile.
+5. Noise suppression for every engine: Off / DTLN-NS / Hush / GTCRN.
+   GTCRN is the default ("default; hiss + keyboard"). While ticked
+   the profile label reads "engine -> NS/Hush/GTCRN".
+   High-band splice (default on) gives 48 kHz output with real 8-24 kHz
+   highs. The sample rate under Processing is independent of the
+   profile.
 
 6. Click Start. The status line shows the active chain, e.g.
    "Running (16000 Hz, DTLN-AEC + NS)".
@@ -87,16 +88,14 @@ QUICK START
 TIPS
 ----
 - Weak or low-end PC? In order of impact: (1) pick the NKF-AEC
-  profile (tick "Show experimental engines" on the Appearance tab
+  profile (tick "Show other AEC engines" on the Appearance tab
   to reveal it), (2) untick "Noise suppression" on the Audio tab
   to halve the neural models loaded, (3) stay at the default 16000
   sample rate. RAM is rarely the bottleneck - the models are tiny
   (NKF is 45 KB) - and every engine is well under 2% CPU on a
   typical desktop.
-- Self-monitoring (Listen to myself, Discord mic test) on SPEAKERS
-  loops your voice back into the mic — every engine rides through it
-  (NKF carries loop brakes + a no-cancel watchdog that show up in the
-  UI while active). Prefer headphones for mic tests anyway.
+- Self-monitoring ("Listen to myself") routes output to your speakers.
+  Prefer headphones for mic tests to avoid feedback loops.
 - If echo comes back after a long call, click Stop then Start.
 - Very loud speakers can let some echo through (or make AEC3 mistake
   your voice for echo) — keep them moderate, or switch to
@@ -127,7 +126,7 @@ TROUBLESHOOTING
 ---------------
 - "No devices found": click Refresh in the Devices section.
 - App won't start: make sure all DLLs are in the same folder as the .exe.
-- Choppy audio: switch to the 16000 sample rate under More.
+- Choppy audio: keep the 16000 sample rate (Processing section).
 - DTLN quiet: it runs at 16 kHz only (auto-locked).
 
 LICENSE

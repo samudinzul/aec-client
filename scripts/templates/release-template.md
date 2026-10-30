@@ -3,6 +3,9 @@ AEC Client v%%VERSION%%
 Highlights since v%%PREV%%:
 %%HIGHLIGHTS%%
 
+Quality path: desktop `aec_gui.exe` (GTCRN default NS, 48 kHz high-band splice).
+Frozen fallback: web build (16 kHz only, no GTCRN / high-band splice).
+
 Install — desktop app:
 1. Install VB-CABLE (https://vb-audio.com/Cable/, free) and reboot.
 2. Download AEC-Client-v%%VERSION%%-win64.zip from Assets below and extract it anywhere. (Right-click the ZIP -> Properties -> Unblock first to skip first-run prompts.)

@@ -49,7 +49,7 @@ QUICK START
      server and opens the GUI automatically. All 3
      engines included (DTLN-AEC 128 and WebRTC AEC3 are
      regular choices; NKF-AEC unlocks by ticking "Show
-     experimental engines" in Appearance).
+     other AEC engines" in Appearance).
    - The console window IS the server log - close it or
      press Ctrl+C to stop.
    - Click start.bat again any time to reopen the GUI
@@ -94,7 +94,7 @@ a pad click never touches the disk.
 WEAK OR LOW-END PC?
 -------------------
 In order of impact:
-1. Pick the NKF-AEC profile (tick "Show experimental
+1. Pick the NKF-AEC profile (tick "Show other AEC
    engines" in Appearance to reveal it) - smallest
    engine, designed for weak CPUs.
 2. Select Off in the "Noise suppression" radio on the
