@@ -330,7 +330,7 @@ static const double HB_GAIN_ORDER = 1.2;   // Wiener gain exponent
 static const double HB_G_MIN      = 0.10;  // gain floor (-20 dB)
 static const double HB_NOISE_UP   = 0.995; // noise tracker: slow rise
 static const double HB_NOISE_DOWN = 0.70;  // noise tracker: fast fall
-static const double HB_VAD_DB     = -60.0; // full close below this (was -72: too low, stayed open)
+static const double HB_VAD_DB     = -50.0; // full close below this (raised: loudspeaker echo tail)
 static const double HB_VAD_RAMP_DB= 12.0;  // full open above this
 
 struct HbNsState {
@@ -1773,13 +1773,20 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         float vad = (lvlDb - (float)HB_VAD_DB) / (float)HB_VAD_RAMP_DB;
         if (vad < 0.0f) vad = 0.0f;
         if (vad > 1.0f) vad = 1.0f;
-        // Hangover: once speech ends (vad == 0), keep the high band
-        // closed for 3 extra frames so the tail doesn't leak highs.
-        // Also close immediately (no ramp) when vad drops to 0.
+        // Smooth fade-out at speech end: instead of hard-cutting the
+        // high band (which clicks and can still leak one stale frame),
+        // ramp g_hbVadGain down over ~3 frames (30 ms) so the tail
+        // fades instead of repeating. Then hold closed for 3 extra
+        // frames (hangover) so residual echo/noise can't re-open it.
         if (vad == 0.0f) {
-            g_hbHang = 3;
-            g_hbVadGain = 0.0f;
-            for (int i = 0; i < fsOut; i++) high[i] = 0.0f;
+            // Per-sample exponential decay over ~3 frames (1440 samples).
+            const float decayPerSample = 1.0f / (3.0f * (float)fsOut);
+            for (int i = 0; i < fsOut; i++) {
+                g_hbVadGain -= g_hbVadGain * decayPerSample;
+                if (g_hbVadGain < 0.001f) g_hbVadGain = 0.0f;
+                high[i] *= g_hbVadGain;
+            }
+            if (g_hbVadGain == 0.0f) g_hbHang = 3;
         } else if (g_hbHang > 0) {
             g_hbHang--;
             g_hbVadGain = 0.0f;
