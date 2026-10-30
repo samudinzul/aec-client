@@ -29,7 +29,7 @@
 # FROZEN at 16 kHz: this is the zero-flag fallback, not desktop
 # parity. It ships the DTLN/AEC3/NKF + DTLN-NS/Hush chain only;
 # GTCRN, the 48 kHz high-band splice, automatic 48 kHz output, and
-# LocalVQE stay desktop-only. Web changes are limited to security,
+# Web changes are limited to security,
 # compatibility, and release mechanics (see SECURITY.md).
 #
 # No .exe, no DLL, no .pyd, no .venv, no __pycache__. A third-party
@@ -96,6 +96,8 @@ mkdir -p "$STAGE/web/sounds"
 rm -rf "$STAGE/web/__pycache__"
 rm -f  "$STAGE/web/start.log"
 find "$STAGE/web" -name '*.pyc' -delete
+# Drop dev-only test files from the release bundle (keep in repo).
+rm -f "$STAGE"/web/test_*.py
 
 # The sounds/ folder ships EMPTY — users drop their own pads in.
 # The dev machine's demo mp3s are local test fixtures, not release

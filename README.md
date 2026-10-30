@@ -47,13 +47,37 @@ Microphone ─────────────────┐
 Speakers (loopback) ────────┘   (AEC3 / NKF / DTLN)
 ```
 
-No more headphones. No more echo. No dead-air noise.
+
 
 ---
 
+## Desktop vs Web build
+
+The project ships two builds. Pick by what your machine / antivirus allows.
+
+| Feature | Desktop `aec_gui.exe` | Web UI (`web/start.bat`) |
+|---|---|---|
+| Audio engine (AEC) | DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC / Off | DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC / Off |
+| Noise suppression | Off / DTLN-NS / **GTCRN (default)** / Hush | Off / DTLN-NS / Hush (no GTCRN) |
+| Output sample rate | 16 kHz or 48 kHz | 16 kHz only (frozen) |
+| High-band splice (real 8–24 kHz highs) | Yes (default on) | No |
+| "Show other AEC engines" toggle | Yes (hides WebRTC AEC3 + NKF-AEC) | Yes (hides WebRTC AEC3 + NKF-AEC) |
+| Listen to myself → auto-route output | Yes | Yes |
+| Device refresh on disconnect | Yes | Yes (friendly error) |
+| Live level meters (Mic/Ref/Out) | Yes | Yes |
+| Soundboard | Yes | Yes |
+| System tray / minimize to tray | Yes | Native window only |
+| Wallpaper customization | Yes | Limited (browser backdrop) |
+| Code signing | None (unsigned exe) | None (pure Python, 0 detections) |
+| Antivirus detections | May be flagged (unsigned + ML runtimes) | 0 detections |
+| Requires VB-CABLE | Yes | Yes |
+| Requires Python | No | Yes (3.10+) |
+
+**Rule of thumb:** use the **desktop build** for full quality (GTCRN + 48 kHz high-band splice). Use the **web build** only if the unsigned exe is blocked by your antivirus or you prefer not to run unsigned binaries — it is frozen at 16 kHz and lacks GTCRN / high-band splice.
+
 ## Features
 
-- **3 engine profiles** — one menu shows the engine and its chain (the engine is not configurable on its own):
+- **4 engine profiles** — one menu shows the engine and its chain (the engine is not configurable on its own):
   - **DTLN-AEC 128** *(default)* — dual-LSTM echo canceller (ICASSP 2021; 128 LSTM units for lower CPU). DTLN-NS removes background noise on top.
   - **WebRTC AEC3** — the same canceller Chrome and Google Meet use: strongest canceller.
   - **NKF-AEC** — tiny neural Kalman core (ICASSP 2023, 45 KB model), for weak CPUs.
@@ -111,7 +135,7 @@ Done. Talk normally with speakers on.
 
 ## Quick Start — Web UI
 
-> **Zero detections, frozen 16 kHz.** The web UI is a pure-Python local server — no `.exe`, no installer, nothing for antivirus heuristics to flag. It scans **0 detections** on VirusTotal. It does **not** have GTCRN, the 48 kHz high-band splice, automatic 48 kHz output, or LocalVQE. Use it if the desktop exe gets blocked by your antivirus, or if you prefer not to run unsigned binaries.
+> **Zero detections, frozen 16 kHz.** The web UI is a pure-Python local server — no `.exe`, no installer, nothing for antivirus heuristics to flag. It scans **0 detections** on VirusTotal. It does **not** have GTCRN, the 48 kHz high-band splice, or automatic 48 kHz output. Use it if the desktop exe gets blocked by your antivirus, or if you prefer not to run unsigned binaries.
 
 **One click:** double-click `web\start.bat` — it creates a local Python environment, installs packages (first run only, ~1 min), then opens the GUI in a native app window (Edge WebView2 — no browser needed). Click it again any time to open another window while the server keeps running; close the window (or Ctrl+C) to stop.
 
@@ -368,6 +392,17 @@ aec-client/
 ```
 
 ---
+
+## Known limitations
+
+- **Unsigned binary.** `aec_gui.exe` is not code-signed; SmartScreen / antivirus may flag it. See [SECURITY.md](SECURITY.md).
+- **VB-CABLE required** for the virtual-mic routing. No alternative cable is bundled.
+- **WebRTC AEC3 / NKF-AEC are "other AEC engines"** — hidden by default; tick **Show other AEC engines** on the Appearance tab to reveal them.
+- **Web build is frozen at 16 kHz** and lacks GTCRN, the 48 kHz high-band splice and automatic 48 kHz output. It is the fallback, not the quality path.
+- **Hush backend needs extra files** (`weya_nc.dll` + model bundle) to run; without them it stays disabled and DTLN-NS is used.
+- **GTCRN / high-band splice are desktop-only.** They are not ported to the web build and will not be.
+- **DTLN needs its model files** next to the exe (or the `.onnx` pair) or Start reports "Failed to load DTLN model"; other engines are unaffected.
+- **Very loud speakers** can make any canceller leave echo or cut mid-sentence; keep speaker volume moderate.
 
 ## License
 

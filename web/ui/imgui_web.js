@@ -73,8 +73,7 @@ class WebImGuiUI {
         header.style.cssText = 'max-width:640px;margin:0 auto 4px;';
         header.innerHTML =
             '<div><span class="text-accent" style="font-weight:bold;font-size:15px">AEC Client</span> ' +
-            '<span class="text-secondary" style="font-size:13px">' + APP_VERSION +
-            ' · DTLN-AEC 128 + DTLN-NS · 16 kHz</span></div>' +
+            '<span class="text-secondary" style="font-size:13px">' + APP_VERSION + ' · 16 kHz only</span></div>' +
             '<div style="display:flex;align-items:center;gap:8px">' +
             '<span id="ig-dot" class="status-dot inactive"></span>' +
             '<span id="ig-runstate" class="text-secondary" style="font-size:13px">Idle</span></div>';
@@ -122,15 +121,19 @@ class WebImGuiUI {
         p.appendChild(prof);
         const stages = this.mk('div');
         stages.innerHTML =
+            '<div class="hint" style="color:#8b93a1;font-style:italic;margin-bottom:4px">Loudspeaker: DTLN-AEC  |  sealed earphone/headset: Off</div>' +
             '<div class="chkline" role="radiogroup" aria-label="Noise suppression">' +
             '<span class="flabel">Noise suppression</span>' +
             '<label><input type="radio" name="ig-ns" id="ig-nsOff" value="off">Off</label>' +
-            '<label><input type="radio" name="ig-ns" id="ig-nsDtln" value="dtln" checked>DTLN-NS (default)</label>' +
+            '<label><input type="radio" name="ig-ns" id="ig-nsDtln" value="dtln" checked>DTLN-NS</label>' +
             '<label><input type="radio" name="ig-ns" id="ig-nsHush" value="hush">Hush</label>' +
             '</div>' +
             '<div class="hint">Off: lowest CPU · DTLN-NS: general hiss · Hush: clicks + talkers.</div>' +
             '<div id="ig-nsHushHint" class="hint" hidden>Hush needs onnxruntime (engines pack) or the weya_nc library (see web/README.md) — DTLN-NS runs until then.</div>' +
-            '<div id="ig-enginfo" class="hint"></div>';
+            '<div id="ig-enginfo" class="hint"></div>' +
+            '<div id="ig-statusSummary" class="hint" style="color:#aab2c0;margin-top:4px"></div>' +
+            '<div id="ig-signalFlow" class="hint" style="color:#9fd3a8;margin-top:4px"></div>' +
+            '<div id="ig-chainStatus" class="hint" style="color:#9fd3a8;font-weight:bold;margin-top:8px"></div>';
         p.appendChild(stages);
 
         // --- Devices (Refresh top-right, dot + 190px label rows) ---
@@ -145,31 +148,32 @@ class WebImGuiUI {
             '<div id="ig-cablewarn" class="warn" hidden>VB-CABLE not found - install VB-CABLE and enable CABLE Input, then hit Refresh.</div>' +
             '<div id="ig-devhint" class="hint" style="color:#ffd75e"></div>' +
             '<label class="chkline"><input type="checkbox" id="ig-listen">Listen to myself</label>' +
+            '<div style="margin:4px 0"><button id="ig-resetBtn" type="button" class="button button-secondary" style="width:auto;padding:4px 12px;font-size:13px">Reset to defaults</button></div>' +
             '<div class="hint">Hear yourself through your speakers instead of sending to voice apps — for testing. ' +
             'Applies after Stop -&gt; Start; the Output row above picks the destination in both modes.</div>';
         p.appendChild(rows);
 
-        // --- More (Processing + Levels, like the desktop CollapsingHeader) ---
-        const more = document.createElement('details');
-        more.className = 'ig-more';
-        more.innerHTML =
-            '<summary>More</summary>' +
-            '<div class="sep">Processing</div>' +
-            '<div class="frow"><span class="flabel">Sample Rate</span><span class="text-secondary" style="font-size:14px">16 kHz (automatic)</span></div>' +
-            '<div class="sep">Levels</div>' +
-            '<div class="frow"><span class="flabel">Microphone level</span>' +
+        // --- Processing + Levels (always visible, like desktop) ---
+        p.appendChild(this.sep('Processing'));
+        const proc = this.mk('div');
+        proc.innerHTML =
+            '<div class="frow"><span class="flabel">Sample Rate</span><span class="text-secondary" style="font-size:14px">16 kHz (automatic)</span></div>';
+        p.appendChild(proc);
+        p.appendChild(this.sep('Levels'));
+        const lvlRow = this.mk('div', 'frow');
+        lvlRow.innerHTML =
+            '<span class="flabel">Microphone level</span>' +
             '<div class="fgrow" style="display:flex;gap:8px;align-items:center">' +
             '<input type="range" id="ig-micGain" min="0" max="200" step="1" value="100" style="flex:1">' +
             '<span id="ig-gainVal" class="text-secondary" style="min-width:48px;text-align:right;font-size:13px">100%</span>' +
-            '</div></div>';
-        p.appendChild(more);
+            '</div>';
+        p.appendChild(lvlRow);
 
         // --- Footer (Audio tab only): Start / Reset + status; Live Levels while running ---
         p.appendChild(this.sep(''));
         const foot = this.mk('div', 'footer-btns');
         foot.innerHTML =
             '<button id="ig-startBtn" type="button" class="button">Start</button>' +
-            '<button id="ig-resetBtn" type="button" class="button button-secondary">Reset to defaults</button>' +
             '<span id="ig-status" class="footer-status">Stopped.</span>';
         p.appendChild(foot);
 
@@ -298,8 +302,8 @@ class WebImGuiUI {
             '<div class="hint">When ON: X hides the window, tray icon stays active. When OFF: X closes the app completely. ' +
             '(Needs the native window; hidden in a browser tab.)</div>' +
             '<label class="chkline"><input type="checkbox" id="ig-exp">Show other AEC engines</label>' +
-            '<div class="hint">Off (default): the profile list shows Off, DTLN-AEC 128 and WebRTC AEC3. ' +
-            'On: also shows NKF-AEC.</div>';
+            '<div class="hint">Off (default): the profile list shows Off and DTLN-AEC 128. ' +
+            'On: also shows WebRTC AEC3 and NKF-AEC.</div>';
         p.appendChild(b);
         return p;
     }
@@ -311,15 +315,15 @@ class WebImGuiUI {
         const a = this.mk('div');
         a.innerHTML =
             '<p class="text-accent" style="font-size:15px;font-weight:bold;margin:4px 0 0">AEC Client</p>' +
-            '<p class="text-secondary" style="font-size:13px">Version ' + APP_VERSION + '</p>' +
-            '<p style="font-size:14px;line-height:1.45">A lightweight, open-source acoustic echo cancellation ' +
-            '(AEC) client for Windows. Route your microphone through it and pick up a cleaned, echo-free ' +
-            'signal in any app (Discord, Zoom, Teams, etc.).</p>';
+            '<p class="text-secondary" style="font-size:13px">Version ' + APP_VERSION + ' · 16 kHz only</p>' +
+            '<p style="font-size:14px;line-height:1.45">Speech enhancement wrapper for Windows: acoustic echo ' +
+            'cancellation (AEC3, NKF-AEC, DTLN) + noise suppression (DTLN-NS, Hush) -&gt; virtual mic ' +
+            'for Discord, Zoom, Teams, and other voice apps.</p>';
         p.appendChild(a);
         p.appendChild(this.sep('Features'));
         const f = this.mk('div');
         f.innerHTML = '<ul style="font-size:13px;padding-left:20px;margin:4px 0">' +
-            '<li>Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC-exp) + noise suppression (Off / DTLN-NS / Hush, 16 kHz)</li>' +
+            '<li>Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC) + noise suppression (Off / DTLN-NS / Hush, 16 kHz)</li>' +
     '<li>80 Hz high-pass on every path (hum/rumble/DC)</li>' +
     '<li>Gentle expander (digital-black floor, no onset chop)</li>' +
             '<li>Real-time processing with low CPU usage</li>' +
@@ -357,6 +361,9 @@ class WebImGuiUI {
         this.el.profile = q('ig-profile');
         this.el.exp = q('ig-exp');
         this.el.enginfo = q('ig-enginfo');
+        this.el.chainStatus = q('ig-chainStatus');
+        this.el.statusSummary = q('ig-statusSummary');
+        this.el.signalFlow = q('ig-signalFlow');
         this.el.tray = q('ig-trayOn');
         this.el.start = q('ig-startBtn'); this.el.reset = q('ig-resetBtn');
         this.el.status = q('ig-status');
@@ -404,6 +411,7 @@ class WebImGuiUI {
             this.applyEngineAvailability();
         });
         this.el.listen.addEventListener('change', () => {
+            this.applyListenOutput();
             this.savePrefs();
             this.showListen();
             this.el.devhint.textContent = this.running ? 'Stop, then Start to apply the new output.' : '';
@@ -459,6 +467,44 @@ class WebImGuiUI {
         this.el.gainVal.textContent = this.el.gain.value + '%';
     }
 
+    applyListenOutput() {
+        const sel = this.el.out;
+        if (!sel || !sel.options.length) return;
+        const isListen = this.el.listen.checked;
+        if (isListen) {
+            // Output = the playback endpoint driving the same speakers
+            // as the chosen Speaker Reference (desktop parity).
+            const refName = (this.el.ref.selectedIndex >= 0 && this.el.ref.options[this.el.ref.selectedIndex])
+                ? this.el.ref.options[this.el.ref.selectedIndex].text : '';
+            const base = refName.replace(/\s*\[Loopback\]\s*$/i, '').trim();
+            let idx = -1;
+            for (let i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].text.trim() === base) { idx = i; break; }
+            }
+            if (idx < 0) {
+                // prefix-tolerant fallback (MME truncates to 31 chars)
+                for (let i = 0; i < sel.options.length; i++) {
+                    const t = sel.options[i].text.trim();
+                    if (t && base.startsWith(t.slice(0, 31))) { idx = i; break; }
+                }
+            }
+            if (idx >= 0) sel.selectedIndex = idx;
+        } else {
+            // Unticked: route to CABLE Input (desktop parity).
+            let idx = -1;
+            for (let i = 0; i < sel.options.length; i++) {
+                const t = sel.options[i].text;
+                if (/CABLE\s*Input/i.test(t)) { idx = i; break; }
+            }
+            if (idx < 0) {
+                for (let i = 0; i < sel.options.length; i++) {
+                    if (/CABLE/i.test(sel.options[i].text)) { idx = i; break; }
+                }
+            }
+            if (idx >= 0) sel.selectedIndex = idx;
+        }
+    }
+
     showListen() {
             // Desktop hides the Output row while Listen-to-myself is
             // on, on the theory that "showing it would suggest it
@@ -492,7 +538,9 @@ class WebImGuiUI {
         const order = [3, 0, 1, 2];
         let html = '';
         for (const i of order) {
-            if (names[i] === 'nkf' && !exp) continue;
+            // Desktop parity: WebRTC AEC3 and NKF-AEC are both
+            // hidden unless "Show other AEC engines" is ticked.
+            if ((names[i] === 'aec3' || names[i] === 'nkf') && !exp) continue;
             const missing = this._engines && this._engines[names[i]] === false;
             html += '<label><input type="radio" name="ig-profile" value="' + i + '"' +
                 (missing ? ' disabled=""' : '') + '>' +
@@ -664,8 +712,15 @@ class WebImGuiUI {
             const d = await this.api('GET', '/api/devices');
             if (!d || !Array.isArray(d.capture)) throw new Error('bad device payload');
             this.lastDevices = d;
-            if (d.errors && (d.errors.audio || d.errors.loopback))
-                this.el.err.textContent = ['devices:', d.errors.audio || '', d.errors.loopback || ''].join(' ').trim();
+            if (d.errors && (d.errors.audio || d.errors.loopback)) {
+                const raw = [d.errors.audio || '', d.errors.loopback || ''].join(' ');
+                const friendly = /9992|insufficient|unavailable/i.test(raw)
+                    ? 'a device is unavailable (replug it, then Refresh)'
+                    : raw.trim();
+                this.el.err.textContent = 'devices: ' + friendly;
+            } else {
+                this.el.err.textContent = '';
+            }
             const prevText = (s) => (s.selectedIndex >= 0 && s.options[s.selectedIndex] ? s.options[s.selectedIndex].text : '');
             const pm = prevText(this.el.mic), pr = prevText(this.el.ref), po = prevText(this.el.out);
             const fill = (sel, list, defIdx, prev) => {
@@ -703,6 +758,8 @@ class WebImGuiUI {
             this.applyMonitorDevPref();
             // Same race-safe restore for the main mic/ref/out picks.
             this.applyDevicePrefs();
+            // Auto-route Output per Listen-to-myself state (desktop parity).
+            this.applyListenOutput();
             // Device-only save: a vanished device snaps the server
             // too, without clobbering non-device prefs that
             // refreshToggles may not have hydrated yet.
@@ -1068,6 +1125,22 @@ class WebImGuiUI {
             this.applyEngineAvailability(st.engines);
             this.showNsHint(st);
             this.showEngineInfo(st);
+            if (this.el.chainStatus) {
+                this.el.chainStatus.textContent = st.running
+                    ? 'Signal flow: Mic → ' + (st.engine || 'DTLN-AEC') + ' → ' +
+                      (st.ns && st.ns.backend ? (st.nsBackend === 'hush' ? 'Hush' : 'DTLN-NS') : 'voice') +
+                      ' → Output'
+                    : '';
+            }
+            if (this.el.signalFlow) {
+                const nsName = (st.nsBackend === 'hush') ? 'Hush' : (st.nsBackend === 'dtln' ? 'DTLN-NS' : null);
+                this.el.signalFlow.textContent = 'Signal flow: Mic → ' + (st.engine || 'DTLN-AEC') +
+                    (nsName ? ' → ' + nsName : '') + ' → Output';
+            }
+            if (this.el.statusSummary) {
+                this.el.statusSummary.textContent = st.running ? '' :
+                    'Ready: ' + (st.engine || 'DTLN-AEC 128') + ' → ' + (st.nsBackend === 'hush' ? 'Hush' : (st.nsBackend === 'dtln' ? 'DTLN-NS' : 'Off')) + ' → 16 kHz';
+            }
             if (st.micGain !== undefined && document.activeElement !== this.el.gain) {
                 const pct = Math.min(200, Math.max(0, Math.round(+st.micGain * 100)));
                 if (pct !== +this.el.gain.value) { this.el.gain.value = pct; this.showGain(); }

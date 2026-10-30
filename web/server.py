@@ -225,16 +225,20 @@ def set_prefs(body: dict):
             prof = 0
         if prof != prefs["profile"]:
             prefs["profile"] = prof
-            # Hot-swap while running (streams are engine-agnostic;
-            # the new engine starts reset). Fail closed: keep the
-            # old engine when the backend is broken.
-            if chain.running:
-                name = PROFILES[prof][1]
-                prev = chain.engine
-                if not chain.set_engine(name):
-                    prefs["profile"] = next(
-                        (i for i, (_, n) in enumerate(PROFILES)
-                         if n == prev), 0)
+            # Always update the chain's selected engine (so the UI
+            # reflects the choice even when stopped). Hot-swap while
+            # running (streams are engine-agnostic; the new engine
+            # starts reset). Fail closed: keep the old engine when
+            # the backend is broken.
+            name = PROFILES[prof][1]
+            prev = chain.engine
+            if not chain.set_engine(name):
+                prefs["profile"] = next(
+                    (i for i, (_, n) in enumerate(PROFILES)
+                     if n == prev), 0)
+            elif chain.running:
+                # Only reset backend state when actually running.
+                pass
     return prefs
 
 

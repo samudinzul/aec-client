@@ -152,9 +152,9 @@ struct SpscRing {
 // ============================================================
 // Numeric values keep their historical meaning so saved aec_config.txt
 // indices keep loading: 0 used to be SpeexDSP (retired long ago) and
-// now means engine Off; 3 (old LocalVQE code) and 8 (exp-fork
+// now means engine Off; 3 (old LocalVQE code) and 8 (retired
 // LocalVQE) were retired and remap to DTLN (the default) on load.
-// Experimental engines live in exp/main.cpp, never here.
+// All engines are in this file (no experimental fork).
 enum EngineType { ENGINE_OFF = 0, ENGINE_AEC3 = 1, ENGINE_NKF = 2, ENGINE_DTLN = 4 };
 struct EngineState {
     EngineType  type  = ENGINE_DTLN;
@@ -330,7 +330,7 @@ static const double HB_GAIN_ORDER = 1.2;   // Wiener gain exponent
 static const double HB_G_MIN      = 0.10;  // gain floor (-20 dB)
 static const double HB_NOISE_UP   = 0.995; // noise tracker: slow rise
 static const double HB_NOISE_DOWN = 0.70;  // noise tracker: fast fall
-static const double HB_VAD_DB     = -72.0; // full close below this
+static const double HB_VAD_DB     = -60.0; // full close below this (was -72: too low, stayed open)
 static const double HB_VAD_RAMP_DB= 12.0;  // full open above this
 
 struct HbNsState {
@@ -519,8 +519,9 @@ static HbDelay g_hbDelay;
 // High-band VAD gain (the ramped gate the splice applies while the
 // 16 kHz chain says "no voice").
 static float g_hbVadGain = 1.0f;
+static int   g_hbHang = 0;
 
-// 3:1 resampler state (exp/resampler.h). The FIR pair is flat to 7.5
+// 3:1 resampler state (resampler.h). The FIR pair is flat to 7.5
 // kHz with -76 dB aliases and -55 dB images. State is reset on every
 // Start.
 static rs::Down3 g_down3;
@@ -1279,8 +1280,8 @@ void ResetToDefaults() {
     g_monitorEnabled.store(true);
     g_monitorGain.store(1.0f);
     g_monitorIndex = -1;
-    g_advancedOpen = false;  // reset lands simple: Advanced collapsed
-    g_advInitDone = false;  // re-apply the persisted default next frame
+    g_advancedOpen = true;   // Advanced (Processing + Levels) always visible now
+    g_advInitDone = true;
     g_sampleRate.store(16000);
     g_selectedEngine.store(ENGINE_DTLN);
     g_filterLengthMs.store(30);
@@ -1772,13 +1773,26 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         float vad = (lvlDb - (float)HB_VAD_DB) / (float)HB_VAD_RAMP_DB;
         if (vad < 0.0f) vad = 0.0f;
         if (vad > 1.0f) vad = 1.0f;
-        const float vPrev = g_hbVadGain;
-        for (int i = 0; i < fsOut; i++) {
-            const float w = (float)(i + 1) / 48.0f;
-            g_hbVadGain = vPrev + (vad - vPrev) * (w < 1.0f ? w : 1.0f);
-            high[i] *= g_hbVadGain;
+        // Hangover: once speech ends (vad == 0), keep the high band
+        // closed for 3 extra frames so the tail doesn't leak highs.
+        // Also close immediately (no ramp) when vad drops to 0.
+        if (vad == 0.0f) {
+            g_hbHang = 3;
+            g_hbVadGain = 0.0f;
+            for (int i = 0; i < fsOut; i++) high[i] = 0.0f;
+        } else if (g_hbHang > 0) {
+            g_hbHang--;
+            g_hbVadGain = 0.0f;
+            for (int i = 0; i < fsOut; i++) high[i] = 0.0f;
+        } else {
+            const float vPrev = g_hbVadGain;
+            for (int i = 0; i < fsOut; i++) {
+                const float w = (float)(i + 1) / 12.0f;
+                g_hbVadGain = vPrev + (vad - vPrev) * (w < 1.0f ? w : 1.0f);
+                high[i] *= g_hbVadGain;
+            }
+            g_hbVadGain = vad;
         }
-        g_hbVadGain = vad;
         g_hbRatioDb.store(lvlDb);
         MixSoundboard(sbBuf, fsOut, outRate);
         FeedMonitor(sbBuf, fsOut);
@@ -2168,6 +2182,7 @@ void StartAEC() {
         g_hbDelay.reset();
         HbNsInit(g_hbNs);
         g_hbVadGain = 1.0f;
+        g_hbHang = 0;
         g_down3.reset();
         g_up3.reset();
         RefDelayReset();
@@ -2361,9 +2376,13 @@ void DrawDevicesSection() {
     if (ImGui::Checkbox("Listen to myself", &g_listenToSelf)) {
         // When Listen to myself is on, the output device should match
         // the Speaker Reference (your speakers) so you hear yourself
-        // through the same speakers.
+        // through the same speakers. When off, route to CABLE Input
+        // so voice apps can use the cleaned mic.
         if (g_listenToSelf) {
             g_outIndex = g_refIndex;
+        } else {
+            int cable = FindCableInputIndex();
+            if (cable >= 0) g_outIndex = cable;
         }
         SaveSettings();
     }
@@ -2371,6 +2390,10 @@ void DrawDevicesSection() {
         ImGui::SetTooltip("Hear yourself through your speakers instead of sending\n"
                           "to voice apps - for testing. Untick to send your voice\n"
                           "to CABLE Input (Discord, Zoom, Teams) again.");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Reset to defaults", ImVec2(150, 24))) ResetToDefaults();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restore all settings to default");
 
     ImGui::EndDisabled();
 }
@@ -2496,13 +2519,12 @@ void DrawAudioTab() {
     ImGui::TextUnformatted("Engine");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Echo engine selection (applies immediately):\n"
-            "Off - no echo cancellation (mic passes straight to the\n"
-            "noise-suppression stage); lowest CPU.\n"
-            "DTLN-AEC 128 - default; best echo + reverb handling.\n"
-            "WebRTC AEC3 - Chrome-style echo cancellation, reliable baseline.\n"
-            "NKF-AEC (experimental) - weak CPUs, still full cleanup.\n"
-            "The NS backend below runs after the engine.\n");
+            "Echo cancellation engine (applies immediately):\n"
+            "Off - no AEC; mic goes straight to NS (lowest CPU).\n"
+            "DTLN-AEC 128 - default; best echo + reverb.\n"
+            "WebRTC AEC3 - Chrome-style, strongest canceller.\n"
+            "NKF-AEC - weak CPUs, lightest.\n"
+            "NS backend below runs after the engine.\n");
     // Engine name only — the full chain (engine -> NS -> output) is
     // shown once, in the chain line just above the devices section.
     bool wasRunning = g_isRunning;
@@ -2530,7 +2552,7 @@ void DrawAudioTab() {
     // Post stage: NS backend radio for every engine (Off / DTLN-NS /
     // Hush). Live restart on switch (same path as switching profiles
     // mid-call). Global pref: a profile switch does not reset it.
-    // Experimental engines/backends live in exp/main.cpp (aec_exp).
+    // (No experimental fork — all backends are in this file.)
     {
         int nsb = g_nsBackend.load();
         if (nsb < 0 || nsb > 3) nsb = 3;
@@ -2538,15 +2560,11 @@ void DrawAudioTab() {
         ImGui::TextUnformatted("Noise suppression");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "Noise suppression backend (runs after the engine):\n"
-                "Off - raw echo-cancelled voice, lowest CPU.\n"
-                "DTLN-NS - cheapest stage; steady hiss only, weak on\n"
-                "keyboard clicks and background talkers.\n"
-                "Hush - best on background talkers; strongest on clicks,\n"
-                "heavier stage (needs weya_nc.dll +\n"
-                "models/hush_16k_onnx.tar.gz).\n"
-                "GTCRN - default; hiss + keyboard.\n"
-                "(needs models/gtcrn_simple.onnx).");
+                "Noise suppression (runs after engine):\n"
+                "Off - lowest CPU, no cleanup.\n"
+                "DTLN-NS - cheapest; steady hiss only.\n"
+                "Hush - best on talkers + clicks (needs weya_nc.dll).\n"
+                "GTCRN - default; hiss + keyboard (needs gtcrn_simple.onnx).");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS", &nsb, 1);
@@ -2602,26 +2620,14 @@ void DrawAudioTab() {
         ImGui::Checkbox("48 kHz output (high-band splice)", &hb);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "Outputs 48 kHz. The echo engine and NS still run at\n"
-                "16 kHz (all NS backends are 16 kHz), so only the low band\n"
-                "(0-8 kHz) is cleaned; the real 8-24 kHz mic band is\n"
-                "spliced back on top. This is output fidelity, not 48 kHz\n"
-                "echo cancellation. No synthesis, no metallic edge.\n\n"
-                "Turning it off returns to the native chain rate: 48 kHz\n"
-                "for Off/AEC3 with NS off, 16 kHz when NS must run.\n\n"
-                "The 16 kHz NS models cannot reach above 8 kHz, so a broadband\n"
-                "transient (keyboard click) would keep its sharp part. A\n"
-                "dedicated high-band NS fixes that: STFT spectral subtraction\n"
-                "with a decision-directed a priori SNR, over the 8-24 kHz bins\n"
-                "only. Measured on real speech with a realistic click:\n"
-                "click -11 dB, hiss -9 dB, voice -1 dB.\n\n"
-                "The high band is also gated off entirely while the 16 kHz\n"
-                "chain says 'no voice' — that removes hiss and clicks typed\n"
-                "between words.\n\n"
-                "48<->16 kHz uses a 193-tap linear-phase FIR pair: flat to\n"
-                "7.5 kHz, aliases below -76 dB, images below -55 dB. The old\n"
-                "3-tap/linear pair drooped -3.5 dB at 8 kHz and mirrored the\n"
-                "low band's top into the air band.");
+                "Outputs 48 kHz with real mic highs (8-24 kHz) spliced back.\n"
+                "Engine + NS still run at 16 kHz (all NS is 16 kHz).\n"
+                "No synthesis, no metallic edge, no added latency.\n\n"
+                "Turning it off returns to native rate (16 kHz for DTLN/NKF,\n"
+                "48 kHz for Off/AEC3 with NS off).\n\n"
+                "Includes high-band NS (removes keyboard clicks above 8 kHz)\n"
+                "and VAD gating (closes highs when no voice).\n\n"
+                "48<->16 kHz: 193-tap FIR, flat to 7.5 kHz, aliases < -76 dB.");
         if (hb != g_highbandEnabled.load()) {
             g_highbandEnabled.store(hb);
             SaveSettings();
@@ -2692,25 +2698,55 @@ void DrawAudioTab() {
     }
 
     ImGui::Spacing();
+
+    // Quick status: plain-language summary of what's running.
+    {
+        const int nsb = g_nsBackend.load();
+        const bool hb = g_highbandEnabled.load();
+        const char* engine = PROFILES[g_profileIndex].name;
+        const char* nsName = (nsb == 0) ? "no noise suppression" :
+                            (nsb == 1) ? "DTLN-NS" :
+                            (nsb == 2) ? "Hush" : "GTCRN";
+        const int outRate = hb ? 48000 : (g_sampleRate.load());
+        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f),
+            "Status: %s -> %s -> %d kHz%s",
+            engine, (nsb == 0) ? "voice" : nsName, outRate / 1000,
+            hb ? " (high-band splice)" : "");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Your current audio chain.\\n"
+                              "Change settings above, then click Start.");
+    }
+
+    ImGui::Spacing();
+
+    // Visual audio chain: shows the signal flow at a glance.
+    ImGui::TextDisabled("Signal flow:");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Mic");
+    ImGui::SameLine();
+    ImGui::TextDisabled("->");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s", PROFILES[g_profileIndex].name);
+    if (g_nsBackend.load() != 0) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("->");
+        ImGui::SameLine();
+        const char* nsName = (g_nsBackend.load() == 1) ? "DTLN-NS" :
+                            (g_nsBackend.load() == 2) ? "Hush" : "GTCRN";
+        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s", nsName);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("->");
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Output");
+
+    ImGui::Spacing();
     DrawDevicesSection();
     ImGui::Spacing();
-    // More: sample rate + levels. No close-X — the header always
-    // stays visible and toggles. First frame applies the persisted
-    // default (closed for newcomers, as left for regulars).
-    if (!g_advInitDone) {
-        ImGui::SetNextItemOpen(g_advancedOpen);
-        g_advInitDone = true;
-    }
-    bool advOpen = ImGui::CollapsingHeader("More");
-    if (advOpen != g_advancedOpen) {
-        g_advancedOpen = advOpen;
-        SaveSettings();
-    }
-    if (advOpen) {
-        DrawEngineSection();
-        ImGui::Spacing();
-        DrawGainsSection();
-    }
+    // Processing + Levels: always visible (no collapsible header).
+    DrawEngineSection();
+    ImGui::Spacing();
+    DrawGainsSection();
 }
 
 void DrawAppearanceTab() {
@@ -2964,13 +3000,13 @@ void DrawAboutTab() {
     ImGui::Spacing();
 
     ImGui::TextWrapped(
-        "A lightweight, open-source acoustic echo cancellation (AEC) client "
-        "for Windows. Route your microphone through it and pick up a cleaned, "
-        "echo-free signal in any app (Discord, Zoom, Teams, etc.).");
+        "Speech enhancement wrapper for Windows: acoustic echo cancellation "
+        "(AEC3, NKF-AEC, DTLN) + noise suppression (DTLN-NS, Hush) -> "
+        "virtual mic for Discord, Zoom, Teams, and other voice apps.");
 
     ImGui::Spacing();
     ImGui::SeparatorText("Features");
-    ImGui::BulletText("Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC-exp)");
+    ImGui::BulletText("Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC)");
     ImGui::BulletText("80 Hz high-pass on every path (hum/rumble/DC)");
     ImGui::BulletText("Gentle expander (digital-black floor, no onset chop)");
     ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN)");
@@ -3012,7 +3048,8 @@ void DrawUI() {
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
                  ImGuiWindowFlags_NoBringToFrontOnFocus |
-                 ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings);
+                 ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 18));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10, 10));
@@ -3029,6 +3066,15 @@ void DrawUI() {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Idle");
 
     ImGui::Spacing();
+
+    // Tab content in a scrollable child so the footer (Start + meters)
+    // stays pinned at the bottom even when the tab is tall.
+    float footerH = g_isRunning ? 280.0f : 90.0f;
+    float availH  = ImGui::GetContentRegionAvail().y;
+    float tabH    = availH - footerH - 10.0f;
+    if (tabH < 120.0f) tabH = 120.0f;
+
+    ImGui::BeginChild("TabContent", ImVec2(0, tabH), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     static int activeTab = 0;  // frame-local: which tab is open (footer buttons follow it)
     if (ImGui::BeginTabBar("MainTabs")) {
@@ -3059,6 +3105,8 @@ void DrawUI() {
         ImGui::EndTabBar();
     }
 
+    ImGui::EndChild();
+
     // Footer buttons (Start / Reset) live on the Audio and Soundboard
     // tabs. Live Levels below stay visible on every tab while running.
     if (activeTab == 0 || activeTab == 1) {
@@ -3085,11 +3133,10 @@ void DrawUI() {
             ImGui::PopStyleColor(3);
         }
 
-        ImGui::SameLine();
-        if (ImGui::Button("Reset to defaults", ImVec2(160, 36))) ResetToDefaults();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restore all settings to default");
-
-        ImGui::SameLine();
+        // Status text on its own line so long chain names (e.g.
+        // "Running (16000->48000 Hz, DTLN-AEC 128 + GTCRN + HiBand)")
+        // are not clipped by the Start button on the same row.
+        ImGui::Spacing();
         ImGui::TextDisabled("%s", g_statusText);
     }
 
@@ -3100,29 +3147,10 @@ void DrawUI() {
         float micRms = g_last_mic_rms.load();
         float refRms = g_last_ref_rms.load();
         float outRms = g_last_out_rms.load();
-        float db     = g_last_reduction_db.load();
 
         DrawLevelMeter("Mic", micRms, 3000.0f);
         DrawLevelMeter("Ref", refRms, 3000.0f);
         DrawLevelMeter("Out", outRms, 3000.0f);
-
-        // Self-diagnosis aid: a permanently silent reference means the
-        // wrong speakers are selected — but silence is also normal when
-        // nothing plays, so this informs, never warns.
-        ImGui::Spacing();
-        if (refRms > 5.0f)
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                               "Reference: receiving speaker audio");
-        else
-            ImGui::TextDisabled("Reference: silent (normal if nothing is playing - \n"
-                                "if speakers ARE playing, re-check Your speakers above)");
-
-        ImGui::Spacing();
-        if (db < 0.0f)
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
-                               "Echo reduction: %.1f dB", db);
-        else
-            ImGui::TextDisabled("Echo reduction: -- dB (silent)");
 
     }
     } // end footer block
@@ -3202,8 +3230,10 @@ int main(int, char**) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-    GLFWwindow* window = glfwCreateWindow(700, 720, APP_NAME " v" APP_VERSION, nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(720, 1020, APP_NAME " v" APP_VERSION, nullptr, nullptr);
     if (!window) { glfwTerminate(); return 1; }
+    // Minimum size: keep all UI visible (tabs, device combos, meters).
+    glfwSetWindowSizeLimits(window, 680, 900, GLFW_DONT_CARE, GLFW_DONT_CARE);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 

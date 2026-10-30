@@ -7,13 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Experimental fork (`exp/`) and LocalVQE.** Both fully removed:
+  GTCRN + high-band splice graduated into the official build; LocalVQE
+  was the only remaining unique feature and is dropped. `exp/` (~4.1 MB)
+  and `third_party/localvqe/` (~1 MB) plus `src/localvqe_wrapper.*`
+  are gone; CMakeLists no longer builds exp targets.
+- **Web build dead code (~1,500 lines).** Removed `dfn48.py`,
+  `gtcrn.py`, GTCRN code from `chain.py`, and unused DSP helpers.
+  Web stays frozen at 16 kHz.
+- **Test files excluded from release bundle** (kept in repo for dev).
+
 ### Changed
 
+- **Desktop UI improvements.** Signal-flow diagram, plain-language
+  status summary line, shortened tooltips, use-case guidance before
+  the NS section ("Loudspeaker: DTLN-AEC | sealed earphone/headset: Off"),
+  "VB-CABLE" → "Output" in the chain line, window default 720×1020
+  (min 680×900), footer (Start + live meters) pinned at the bottom
+  with tab content in a scrollable child, Processing + Levels sections
+  always visible (no collapsible "More" header), status text on its
+  own line.
+- **Web UI improvements.** Chain status line, use-case guidance,
+  engine name removed from header, status summary shows selected
+  engine, window 720×1020 (min 680×900), "Show other AEC engines"
+  toggle, NS radio labels shortened, Reset-to-defaults moved beside
+  "Listen to myself".
+- **Web build latency.** GC disabled in the pump thread; queue
+  depth kept at 8 (crackle-safe).
+- **High-band VAD tuned.** Threshold -72 → -60 dBFS, immediate
+  close on speech end, 3-frame hangover, faster ramp (12 samples) to
+  eliminate "transmission sounds" at the end of speech.
 - **Web UI frozen at 16 kHz.** The pure-Python web build remains
   the zero-flag fallback (its ZIP scans clean), but it no longer
   tracks desktop features. It keeps the DTLN-AEC / WebRTC AEC3 /
   NKF-AEC chain with DTLN-NS or Hush; GTCRN, the 48 kHz high-band
-  splice, automatic 48 kHz output, and LocalVQE stay desktop-only.
+  splice, and automatic 48 kHz output stay desktop-only.
   Web changes are limited to security, compatibility, and release
   mechanics. The desktop app is the quality path.
 - **Signing guidance corrected.** SignPath Foundation is the
@@ -46,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference device. The soundboard monitor also follows the output
   device when Listen to myself is on.
 - **"Show other AEC engines" replaces "Show experimental engines".**
-  Hides WebRTC AEC3 / NKF-AEC (and LocalVQE-AEC in exp) by default.
+  Hides WebRTC AEC3 / NKF-AEC by default.
   Untick to reveal them. Tooltip updated accordingly.
 - **Engine Off option (desktop + web).** The echo engine is now a
   radio group — Off / DTLN-AEC / WebRTC AEC3 / NKF-AEC — with Off
@@ -55,21 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configs load unchanged.
 - **WebRTC AEC3 promoted out of experimental** (desktop + web).
   Only NKF-AEC hides behind the flag now.
-- **Experimental fork split (desktop).** `exp/main.cpp` builds
-  `aec_exp.exe` with its own title/mutex/config/resources,
-  carrying LocalVQE-AEC + GTCRN + high-band splice; the official
-  `aec_gui.exe` is DTLN/AEC3/NKF + DTLN-NS/Hush/GTCRN + high-band
-  splice. Release scripts never ship exp content.
 - **Starvation telemetry (web).** Per-queue drop counters
   (`dropped: {in, ref, out, mon}`) in both state endpoints.
-
-### Experimental (aec_exp.exe only — never in a release)
-
-- **LocalVQE v1.4-AEC engine** (`ENGINE_LOCALVQE = 8`) — neural
-  echo canceller, 16 kHz only, needs `exp/models/LocalVQE*` bundle.
-  Chains into whichever NS backend is picked, e.g.
-  mic → LocalVQE → GTCRN. Hidden unless "Show other AEC engines" is
-  ticked.
 
 ### Changed
 

@@ -60,7 +60,7 @@
 </head>
 <body>
 <div class="header">
-  <h1>aec-web <small>v1.14.0 · DTLN / AEC3 / NKF · 16 kHz</small></h1>
+  <h1>AEC Client <small>v1.14.0 · 16 kHz only</small></h1>
 </div>
 <div class="tabs">
   <button class="tab active" data-tab="audio">Audio</button>
@@ -90,6 +90,7 @@
   <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
   from the list (Windows lists only enabled devices).</div>
   <div id="devhint" class="hint" style="color:#ffd75e"></div>
+  <div class="hint" style="color:#8b93a1;font-style:italic;margin-bottom:4px;">Loudspeaker: DTLN-AEC 128 · sealed earphone/headset: Off</div>
   <div>Noise suppression:
     <label class="chk"><input type="radio" name="nsBackend" id="nsOff" value="off">Off</label>
     <label class="chk"><input type="radio" name="nsBackend" id="nsDtln" value="dtln" checked>DTLN-NS (default)</label>
@@ -99,6 +100,8 @@
   <div id="nsHushHint" class="hint" hidden>Hush needs onnxruntime (engines pack) or the weya_nc library (see web/README.md).</div>
   <div class="hint">Applies live: switch backends mid-call to compare, Off hears the raw echo-cancelled voice.</div>
   <div id="enginfo" class="hint"></div>
+  <div id="statusSummary" class="hint" style="color:#aab2c0;margin-top:4px;"></div>
+  <div id="chainStatus" class="hint" style="color:#9fd3a8;font-weight:bold;margin-top:8px;"></div>
   <label class="chk"><input type="checkbox" id="listenOn">
     Listen to myself — hear your cleaned voice through your speakers</label>
   <div class="hint">For testing: routes the output to your speakers
@@ -137,15 +140,15 @@
   <div class="devhead"><span>About</span></div>
   <div class="about">
     <p class="appname">aec-web</p>
-    <p class="version">Version v1.14.0</p>
-    <p class="desc">A lightweight, open-source acoustic echo cancellation
-    (AEC) client for Windows. Route your microphone through it and pick up a
-    cleaned, echo-free signal in any app (Discord, Zoom, Teams, etc.). This
-    copy runs as a pure-Python local server in a native window — no .exe, no
-    installer, nothing for antivirus to flag.</p>
+    <p class="version">Version v1.14.0 · 16 kHz only</p>
+    <p class="desc">Speech enhancement wrapper for Windows: acoustic echo cancellation
+    (AEC3, NKF-AEC, DTLN) + noise suppression (DTLN-NS, Hush) -&gt; virtual mic
+    for Discord, Zoom, Teams, and other voice apps. This copy runs as a
+    pure-Python local server in a native window — no .exe, no installer,
+    nothing for antivirus to flag.</p>
     <div class="devhead"><span>Features</span></div>
     <ul>
-      <li>Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC-exp) + DTLN-NS noise reduction (16 kHz)</li>
+      <li>Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC) + noise suppression (Off / DTLN-NS / Hush, 16 kHz)</li>
       <li>80 Hz high-pass on every path (hum/rumble/DC)</li>
       <li>Gentle expander (digital-black floor, no onset chop)</li>
       <li>Real-time processing with low CPU usage</li>
@@ -449,6 +452,15 @@ function connect() {
       $('micGain').value = gain2pct(+st.micGain);
       showGain();
     }
+    const cs = $('chainStatus');
+    if (cs) cs.textContent = st.running
+      ? `Signal flow: Mic → ${st.engine || 'DTLN-AEC'} → ` +
+        (st.ns.backend ? (st.nsBackend === 'hush' ? 'Hush' : 'DTLN-NS') : 'voice') +
+        ' → Output'
+      : '';
+    const ss = $('statusSummary');
+    if (ss) ss.textContent = st.running ? '' :
+      `Ready: ${st.engine || 'DTLN-AEC 128'} → ${st.nsBackend === 'hush' ? 'Hush' : (st.nsBackend === 'dtln' ? 'DTLN-NS' : 'Off')} → 16 kHz`;
     if (!st.running) return;
     meter('mIn', st.inRms || 0);
     meter('mOut', st.outRms || 0);

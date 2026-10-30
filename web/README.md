@@ -9,7 +9,7 @@ nothing for antivirus heuristics to flag.
 > but it no longer tracks desktop features. It has the proven
 > DTLN-AEC / WebRTC AEC3 / NKF-AEC chain with DTLN-NS or Hush.
 > It does **not** have GTCRN, the 48 kHz high-band splice,
-> automatic 48 kHz output, or LocalVQE. For the best sound
+> automatic 48 kHz output. For the best sound
 > quality, use the desktop app (v1.14.0 or newer). Maintenance
 > here is limited to security, compatibility, and release fixes.
 

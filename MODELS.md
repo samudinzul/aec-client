@@ -29,6 +29,15 @@ evaluated pre-release) were cut before that line shipped, and the
 model file itself is deleted. The retired WPE / notch post stages
 were model-free in-tree DSP — no files to download.
 
+## Optional models
+
+| File | Size | Engine | Download from |
+|------|------|--------|---------------|
+| `hush_16k_onnx.tar.gz` | ~8 MB | Hush NS backend bundle | Bundled with this repo (upstream: [pulp-vision/Hush](https://github.com/pulp-vision/Hush)) |
+| `weya_nc.dll` (in `libs/`) | ~14 MB | Hush NS runtime (desktop, LoadLibrary) | Bundled with the [official AEC-Client releases](https://github.com/samudinzul/aec-client/releases) |
+
+Without these, Hush stays disabled and DTLN-NS is used.
+
 ## Runtime library (in `libs/`)
 
 | File | Size | Purpose | Download from |
@@ -65,6 +74,7 @@ curl -L -o models/dtln_ns_128_2.tflite \
 91281a38e80fe9fd330e28eda7e16fe4e483ee5199a3e687a099939013c25de0  dtln_ns_128_1.tflite
 7ae37ec802862d8a65b5cdabfbcbbe22caaf7cd39e79adf574d15837d1520830  dtln_ns_128_2.tflite
 1d46987c5d3b4b7a555b054947fa4ae19e38999d3500cbb2cb10d8b9005f81d0  nkf.onnx
+b4718df6228e7bdf1a8a435cf98f838636eb2fd331acabf86ba87c5192ebcb87  gtcrn_simple.onnx
 ```
 
 Check with: `sha256sum models/*`

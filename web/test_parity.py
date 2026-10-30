@@ -164,32 +164,19 @@ CONSTANTS = [
     # Voice-path high-pass (src/main.cpp HpfInit/HpfProcess vs
     # web/chain.py HPF_FC/HPF_Q + Direct Form I): same fc/Q.
     ("HPF_FC", [("src/main.cpp", r"HPF_FC\s*=\s*([0-9.]+)") ,
-                ("web/chain.py", r"^HPF_FC\s*=\s*([0-9.]+)"),
-                ("exp/main.cpp", r"HPF_FC\s*=\s*([0-9.]+)")]),
+                ("web/chain.py", r"^HPF_FC\s*=\s*([0-9.]+)")]),
     ("HPF_Q", [("src/main.cpp", r"HPF_Q\s*=\s*([0-9.]+)"),
-               ("web/chain.py", r"^HPF_Q\s*=\s*([0-9.]+)"),
-               ("exp/main.cpp", r"HPF_Q\s*=\s*([0-9.]+)")]),
+               ("web/chain.py", r"^HPF_Q\s*=\s*([0-9.]+)")]),
     ("EXPAND_OPEN_RMS", [("src/main.cpp", r"EXPAND_OPEN_RMS\s*=\s*([0-9.]+)"),
-                          ("web/chain.py", r"^EXPAND_OPEN_RMS\s*=\s*([0-9.]+)"),
-                          ("exp/main.cpp", r"EXPAND_OPEN_RMS\s*=\s*([0-9.]+)")]),
+                          ("web/chain.py", r"^EXPAND_OPEN_RMS\s*=\s*([0-9.]+)")]),
     ("EXPAND_CLOSE_RMS", [("src/main.cpp", r"EXPAND_CLOSE_RMS\s*=\s*([0-9.]+)"),
-                          ("web/chain.py", r"^EXPAND_CLOSE_RMS\s*=\s*([0-9.]+)"),
-                          ("exp/main.cpp", r"EXPAND_CLOSE_RMS\s*=\s*([0-9.]+)")]),
+                          ("web/chain.py", r"^EXPAND_CLOSE_RMS\s*=\s*([0-9.]+)")]),
     ("EXPAND_HANG_MS", [("src/main.cpp", r"EXPAND_HANG_MS\s*=\s*([0-9]+)"),
-                        ("web/chain.py", r"^EXPAND_HANG_MS\s*=\s*([0-9]+)"),
-                        ("exp/main.cpp", r"EXPAND_HANG_MS\s*=\s*([0-9]+)")]),
-    ("HB_MIX_DB", [("tools/nkf_smoke.cpp", r"HB_MIX_DB\s*=\s*(-?[0-9.]+)"),
-                   (DTLN_PY, r"^HB_MIX_DB\s*=\s*(-?[0-9.]+)")]),
-    ("HB_HP_FC", [("tools/nkf_smoke.cpp", r"HB_HP_FC\s*=\s*([0-9.]+)"),
-                  (DTLN_PY, r"^HB_HP_FC\s*=\s*([0-9.]+)")]),
-    ("HB_GATE_RMS", [("tools/nkf_smoke.cpp", r"HB_GATE_RMS\s*=\s*([0-9.]+)"),
-                      (DTLN_PY, r"^HB_GATE_RMS\s*=\s*([0-9.]+)")]),
+                        ("web/chain.py", r"^EXPAND_HANG_MS\s*=\s*([0-9]+)")]),
     ("PRES_FC", [("src/main.cpp", r"PRES_FC\s*=\s*([0-9.]+)"),
-                 ("web/chain.py", r"^PRES_FC\s*=\s*([0-9.]+)"),
-                 ("exp/main.cpp", r"PRES_FC\s*=\s*([0-9.]+)")]),
+                 ("web/chain.py", r"^PRES_FC\s*=\s*([0-9.]+)")]),
     ("PRES_GAIN_DB", [("src/main.cpp", r"PRES_GAIN_DB\s*=\s*([0-9.]+)"),
-                      ("web/chain.py", r"^PRES_GAIN_DB\s*=\s*([0-9.]+)"),
-                      ("exp/main.cpp", r"PRES_GAIN_DB\s*=\s*([0-9.]+)")]),
+                      ("web/chain.py", r"^PRES_GAIN_DB\s*=\s*([0-9.]+)")]),
     # DTLN geometry (block/shift/bins/sample-rate contract shared by
     # src/dtln_wrapper.cpp and web/dsp.py; the DTLN pair has no tuned
     # DSP constants beyond these).
@@ -225,8 +212,7 @@ def check_constants():
     # Side tags for the report line (pair entries keep the legacy
     # cpp/py shape; triple entries add the exp side).
     _TAG = {"src/main.cpp": "cpp", "web/chain.py": "py",
-            "web/dsp.py": "py", "tools/nkf_smoke.cpp": "cpp",
-            "exp/main.cpp": "exp"}
+            "web/dsp.py": "py", "tools/nkf_smoke.cpp": "cpp"}
     fails = 0
     for label, sides in CONSTANTS:
         vals = []

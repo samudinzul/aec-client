@@ -291,7 +291,10 @@ def list_devices():
                         "hostApi": info.get("hostApi"),
                     })
             except Exception as e:
-                out["errors"]["loopback"] = f"loopback query failed: {e}"
+                msg = str(e)
+                if "9992" in msg or "insufficient" in msg.lower():
+                    msg = "a device is unavailable (replug it, then Refresh)"
+                out["errors"]["loopback"] = f"loopback query failed: {msg}"
 
             raw = []
             for i in range(pa.get_device_count()):
@@ -371,7 +374,10 @@ def list_devices():
         finally:
             pa.terminate()
     except Exception as e:  # pragma: no cover
-        out["errors"]["audio"] = f"device query failed: {e}"
+        msg = str(e)
+        if "9992" in msg or "insufficient" in msg.lower() or "unavailable" in msg.lower():
+            msg = "a device is unavailable (replug it, then Refresh)"
+        out["errors"]["audio"] = f"device query failed: {msg}"
     return out
 
 
@@ -626,6 +632,8 @@ class AudioRunner:
         # Linear stream buffers (16 kHz domain): the old
         # concatenate-per-chunk + slice-copy-per-frame churn is gone;
         # appends copy into spare capacity, frames pop a head view.
+        import gc
+        gc.disable()  # eliminate GC pauses in the audio hot path
         mic_buf = dsp._StreamBuf()
         ref_buf = dsp._StreamBuf()
         qos_revert = _pump_qos()
@@ -633,6 +641,7 @@ class AudioRunner:
             while not self._stop.is_set():
                 self._work_step(mic_buf, ref_buf)
         finally:
+            gc.enable()
             if qos_revert is not None:
                 qos_revert()
 

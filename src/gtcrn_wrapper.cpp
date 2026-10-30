@@ -132,7 +132,7 @@ GtcrnHandle* GtcrnNew(const char* modelPath) {
     for (int i = 0; i < kN; i++)
         h->win[i] = (float)sin(kPi * i / kN);  // sqrt-Hann (periodic)
     if (!modelPath || !*modelPath) {
-        h->error = "gtcrn: no model path (run exp/get_models.sh)";
+        h->error = "gtcrn: no model path (run get_models.sh)";
         return h;
     }
     try {

@@ -129,7 +129,7 @@ port, not the desktop DLL; verify character on the desktop build.
 | Weakest CPU | DTLN-NS / Off | About half GTCRN's RTF, but DTLN-NS barely touches hiss, clicks or talkers |
 
 For the confirmed natural-sounding chain (DTLN-AEC + 48 kHz splice at
-100%), **GTCRN is the default NS backend in `aec_exp` when the noise is
+100%), **GTCRN is the default NS backend when the noise is
 hiss or keyboard; switch to Hush when background talkers dominate.**
 DTLN-NS is the low-CPU fallback, not the quality choice. Do not switch
 the AEC or the splice to chase an NS difference: all NS backends are

@@ -67,11 +67,6 @@ AEC Client bundles the following open-source libraries:
     Copyright (C) 2017 Adam Stark
     License: MIT
 
-11. LocalVQE v1.4-AEC adaptive frontend (experimental branch only)
-    localai-org/LocalVQE + soniqo/speech-core
-    (third_party/localvqe/, verbatim upstream C ABI)
-    License: Apache-2.0
-
 Full license texts are available at the source URLs listed in the
 project repository:
 https://github.com/samudinzul/aec-client

@@ -404,8 +404,8 @@ def main():
     try:
         import webview
         _window = webview.create_window(
-            TITLE, URL, width=720, height=780,
-            min_size=(640, 480), resizable=True)
+            TITLE, URL, width=720, height=1020,
+            min_size=(680, 900), resizable=True)
         _window.events.closing += _on_closing
         if _prefs().get("trayEnabled"):
             # App-like: once the page loads, the

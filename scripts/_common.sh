@@ -10,8 +10,7 @@
 #   -v, --verbose   stream full tool output / trace every command
 #   --fresh         wipe generated state before running (build tools)
 #   --run           build, then launch the app (build tools)
-#   --exp           build only aec_exp.exe (desktop build)
-#   --with-smoke    also build the smoke tools (desktop build)
+##   --with-smoke    also build the smoke tools (desktop build)
 #   --native-only   run only the native suite (test.sh)
 #   --web-only      run only the web suites (test.sh)
 #   --              end of flags; later args are positional

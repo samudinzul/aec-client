@@ -21,7 +21,7 @@ typedef struct GtcrnHandle GtcrnHandle;
 // fail-open, like a missing DTLN-NS pair).
 //
 // v0: session loads + IO table is captured; Process is passthrough until
-// the V1 inference path is validated against exp/probe.py output.
+// the V1 inference path is validated against probe.py output.
 GtcrnHandle* GtcrnNew(const char* modelPath);
 
 // 1 when the stage can run.

@@ -14,7 +14,7 @@ DTLN-NS or Hush.
 
 It does NOT include the desktop app's newer GTCRN noise
 suppression, the 48 kHz high-band splice, automatic
-48 kHz output, or LocalVQE. For the best sound quality,
+48 kHz output. For the best sound quality,
 use the desktop AEC Client v1.15.0 or newer.
 
 This bundle stays available because it is pure Python +
