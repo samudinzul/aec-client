@@ -126,7 +126,7 @@ The models are tiny (NKF is 45 KB; the DTLN pairs are a few MB), so RAM is rarel
 6. **Click Start**. Keep speakers at a moderate volume. Very loud speakers make any canceller leave echo behind (and can push AEC3 into cutting mid-sentence) — if the room must be loud, stay on DTLN-AEC 128.
 7. **In Discord** → Voice & Video settings:
    - **Input Device**: `CABLE Output (VB-Audio Virtual Cable)`
-   - **Input Profile**: **Voice Isolation** — one tap that turns on Discord's noise cleanup. Echo and hiss are already removed by this app (the NS stage handles noise on every path).
+   - **Input Profile**: **Studio** — one tap that turns on Discord's noise cleanup. Echo and hiss are already removed by this app (the NS stage handles noise on every path).
    - Prefer manual control? Pick the **Custom** profile instead: Echo Cancellation **OFF** (this app does it — two cancellers stacked fight each other), Noise Suppression **Krisp** (**Standard** on weak PCs), Automatic Gain Control **OFF**.
 
 Done. Talk normally with speakers on.

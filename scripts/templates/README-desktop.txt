@@ -79,7 +79,7 @@ QUICK START
 
 7. In Discord (or Zoom/Teams), open Voice & Video settings:
    - Input Device:       CABLE Output (VB-Audio Virtual Cable)
-   - Input Profile:       Voice Isolation (Discord's own noise
+   - Input Profile:       Studio (Discord's own noise
       cleanup ON; echo and hiss are already removed by this app).
       Manual alternative: Custom profile with Echo Cancellation OFF
       (this app does it), Noise Suppression Krisp (NKF-AEC on weak
