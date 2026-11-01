@@ -1774,6 +1774,17 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         float vad = (lvlDb - (float)HB_VAD_DB) / (float)HB_VAD_RAMP_DB;
         if (vad < 0.0f) vad = 0.0f;
         if (vad > 1.0f) vad = 1.0f;
+        // Echo-aware attenuation: the high band is raw mic (AEC does
+        // not run on 8-24 kHz), so speaker echo in that range leaks
+        // through whenever the band is open. Scale the high-band gain
+        // down when the reference (speakers) is loud — echo scales
+        // with speaker level. Floor at 0.2 so highs never fully
+        // vanish (keeps some brightness).
+        float echoScale = 1.0f;
+        if (rms_ref > 50.0f) {
+            echoScale = 1.0f / (1.0f + (rms_ref - 50.0f) / 200.0f);
+            if (echoScale < 0.2f) echoScale = 0.2f;
+        }
         // Smooth fade-out at speech end: instead of hard-cutting the
         // high band (which clicks and can still leak one stale frame),
         // ramp g_hbVadGain down over ~3 frames (30 ms) so the tail
@@ -1785,7 +1796,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
             for (int i = 0; i < fsOut; i++) {
                 g_hbVadGain -= g_hbVadGain * decayPerSample;
                 if (g_hbVadGain < 0.001f) g_hbVadGain = 0.0f;
-                high[i] *= g_hbVadGain;
+                high[i] *= g_hbVadGain * echoScale;
             }
             if (g_hbVadGain == 0.0f) g_hbHang = 3;
         } else if (g_hbHang > 0) {
@@ -1797,7 +1808,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
             for (int i = 0; i < fsOut; i++) {
                 const float w = (float)(i + 1) / 12.0f;
                 g_hbVadGain = vPrev + (vad - vPrev) * (w < 1.0f ? w : 1.0f);
-                high[i] *= g_hbVadGain;
+                high[i] *= g_hbVadGain * echoScale;
             }
             g_hbVadGain = vad;
         }
