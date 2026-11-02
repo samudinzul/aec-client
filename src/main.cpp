@@ -419,7 +419,6 @@ static void HbNsHop(HbNsState& h) {
     h.inCount -= HB_HOP;
 
     // highpass -> the high band
-    // Mic high band (with HP to remove rumble; same HP coeffs).
     double x[HB_FFT_N];
     for (int i = 0; i < HB_FFT_N; i++) {
         const double xi = h.inBuf[i];
@@ -429,35 +428,17 @@ static void HbNsHop(HbNsState& h) {
         h.hpY2 = h.hpY1; h.hpY1 = y;
         x[i] = y * h.win[i];
     }
+
     pocketfft::r2c(h.shape, h.strideIn, h.strideOut, h.axes, pocketfft::FORWARD,
                    x, h.spec.data(), 1.0);
-
-    // Ref (speaker) high band: use a SEPARATE HP state so the mic HP
-    // history isn't corrupted. Apply the same HP coeffs via a local
-    // state stored in... (we reuse hpX/Y but reset per hop is wrong).
-    // Simpler: skip HP on ref (high bins only matter; rumble is below
-    // HB_FIRST_BIN and is masked by G=1 there anyway).
-    double xr[HB_FFT_N];
-    for (int i = 0; i < HB_FFT_N; i++) {
-        xr[i] = h.inBufRef[i] * h.win[i];
-    }
-    pocketfft::r2c(h.shape, h.strideIn, h.strideOut, h.axes, pocketfft::FORWARD,
-                   xr, h.specRef.data(), 1.0);
 
     for (int b = 0; b < HB_BINS; b++) {
         const double mag = std::abs(h.spec[b]);
         const double psd = mag * mag / HB_FFT_N;
-        const double refMag = std::abs(h.specRef[b]);
-        const double refPsd = refMag * refMag / HB_FFT_N;
-        // Echo-aware noise estimate: treat the ref high band as an
-        // echo estimate. Scale by HB_ECHO_GAIN and take the max with
-        // the tracked noise floor so genuine noise still tracks.
-        const double echoNoise = HB_ECHO_GAIN * refPsd;
-        // noise PSD tracker: fast down, slow up (on mic psd)
+        // noise PSD tracker: fast down, slow up
         const double up   = HB_NOISE_UP   * h.noise[b] + (1.0 - HB_NOISE_UP)   * psd;
         const double down = HB_NOISE_DOWN * h.noise[b] + (1.0 - HB_NOISE_DOWN) * psd;
         h.noise[b] = (psd < h.noise[b]) ? down : up;
-        if (echoNoise > h.noise[b]) h.noise[b] = echoNoise;
         // decision-directed a priori SNR: the previous frame's CLEAN
         // magnitude, so a transient cannot raise it
         const double gamma = psd / (h.noise[b] + 1e-12);
@@ -495,15 +476,11 @@ static void HbNsHop(HbNsState& h) {
 
 // Process n samples of 48 kHz audio; the cleaned HIGH BAND comes out
 // (float, same scale as the input). Fail-soft: zeros while priming.
-static void HbNsProcess(HbNsState& h, const int16_t* in, const int16_t* ref, float* out, int n) {
+static void HbNsProcess(HbNsState& h, const int16_t* in, float* out, int n) {
     const int CAP = (int)(sizeof(h.inFifo) / sizeof(h.inFifo[0]));
     const int OCAP = (int)(sizeof(h.outFifo) / sizeof(h.outFifo[0]));
     for (int i = 0; i < n; i++) {
-        if (h.inCount < CAP) {
-            h.inFifo[h.inCount] = (double)in[i] * (1.0 / 32768.0);
-            h.inFifoRef[h.inCount] = (ref ? (double)ref[i] * (1.0 / 32768.0) : 0.0);
-            h.inCount++;
-        }
+        if (h.inCount < CAP) h.inFifo[h.inCount++] = (double)in[i] * (1.0 / 32768.0);
         while (h.inCount >= HB_HOP) {
             HbNsHop(h);
         }
@@ -1624,15 +1601,7 @@ void mic_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
 }
 void loopback_callback(ma_device*, void*, const void* pInput, ma_uint32 frameCount) {
     if (!pInput) return;
-    const int16_t* in = (const int16_t*)pInput;
-    if (g_highbandEnabled.load()) {
-        g_refRing48.write(in, frameCount);
-        static int16_t ds[2048];
-        const int dsLen = g_down3_ref.process(in, (int)frameCount, ds, 2048);
-        if (dsLen > 0) g_refRing.write(ds, dsLen);
-    } else {
-        g_refRing.write(in, frameCount);
-    }
+    g_refRing.write((const int16_t*)pInput, frameCount);
 }
 // Defined with the monitor device, further down.
 static void FeedMonitor(const float* sb, int fs);
@@ -1652,9 +1621,6 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     if (g_highbandEnabled.load() &&
         g_micRing48.available() > (DRIFT_TARGET + DRIFT_THRESHOLD) * 3)
         g_micRing48.skip(g_micRing48.available() - DRIFT_TARGET * 3);
-    if (g_highbandEnabled.load() &&
-        g_refRing48.available() > (DRIFT_TARGET + DRIFT_THRESHOLD) * 3)
-        g_refRing48.skip(g_refRing48.available() - DRIFT_TARGET * 3);
     if (g_refRing.available() > DRIFT_TARGET + DRIFT_THRESHOLD)
         g_refRing.skip(g_refRing.available() - DRIFT_TARGET);
 
@@ -1821,19 +1787,9 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         int16_t aligned48[MAX_FRAME_SIZE];
         g_hbDelay.readDelayed(aligned48, fsOut, g_hbDelaySamples.load());
 
-        // --- ref high band (speaker echo estimate), delayed to match ---
-        int16_t ref48[MAX_FRAME_SIZE];
-        if (g_refRing48.available() >= (size_t)fsOut)
-            g_refRing48.read(ref48, fsOut);
-        else
-            memset(ref48, 0, fsOut * sizeof(int16_t));
-        g_hbDelayRef.push(ref48, fsOut);
-        int16_t alignedRef48[MAX_FRAME_SIZE];
-        g_hbDelayRef.readDelayed(alignedRef48, fsOut, g_hbDelaySamples.load());
-
-        // --- the high band, noise-suppressed (echo-aware) --------------
+        // --- the high band, noise-suppressed ---------------------------
         float high[MAX_FRAME_SIZE];
-        HbNsProcess(g_hbNs, aligned48, alignedRef48, high, fsOut);
+        HbNsProcess(g_hbNs, aligned48, high, fsOut);
 
         // --- VAD: close the high band while there is no voice ---------
         float peak = 0.0f;
@@ -2220,7 +2176,6 @@ void StartAEC() {
     g_micRing.reset();
     g_refRing.reset();
     g_micRing48.reset();
-    g_refRing48.reset();
 
     int sr = g_sampleRate.load();
     int fs = frameSizeForRate(sr);
@@ -2292,13 +2247,11 @@ void StartAEC() {
 
     if (g_highbandEnabled.load()) {
         g_hbDelay.reset();
-        g_hbDelayRef.reset();
         HbNsInit(g_hbNs);
         g_hbVadGain = 1.0f;
         g_hbHang = 0;
         g_hbClosed = false;
         g_down3.reset();
-        g_down3_ref.reset();
         g_up3.reset();
         RefDelayReset();
         // High-band delay: chain latency (AEC + NS) minus high-band NS
