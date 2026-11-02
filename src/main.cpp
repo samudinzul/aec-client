@@ -244,6 +244,7 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC
 // Default ON: 48 kHz output is the quality path; the chain stays at
 // the chain rate — only the splice upsamples to 48 kHz.
 std::atomic<bool>  g_highbandEnabled{ true };
+std::atomic<bool>  g_residSuppress{ true };   // residual echo suppressor (post-AEC)
 // High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
 // is a taste knob, not a fixed law. After the FIR resampler fix the
 // low band is flat to 7.5 kHz, so 0.7-1.0 gives more air.
@@ -1066,7 +1067,8 @@ void SaveSettings() {
       << g_monitorIndex << "\n"                        // monitor device (-1 = follow)
       << g_nsBackend.load() << "\n"                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN)
       << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (default ON)
-      << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"; // slot 32: high-band mix (%)
+      << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"   // slot 32: high-band mix (%)
+      << (g_residSuppress.load() ? 1 : 0) << "\n";      // slot 33: residual echo suppression
 }
 
 void LoadSettings() {
@@ -1183,6 +1185,9 @@ void LoadSettings() {
             if (hbMixRaw > 100) hbMixRaw = 100;
             g_hbMix.store(hbMixRaw / 100.0f);
         }
+        // Slot 33: residual echo suppression (default on when missing).
+        int rsRaw = 1;
+        if (f >> rsRaw) g_residSuppress.store(rsRaw != 0);
         // "High Quality" was cut: generation-1 indices slide down
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
@@ -1300,6 +1305,7 @@ void ResetToDefaults() {
     // Fresh default is 48 kHz output (splice ON) at full high band.
     g_highbandEnabled.store(true);
     g_hbMix.store(1.0f);
+    g_residSuppress.store(true);
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -1742,6 +1748,29 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // Presence shelf just after the expander (same reason: meters read
     // the shipped signal, brightness included).
     PresProcess(g_pres, cleanedFrame, fs);
+
+    // Residual echo suppressor (post-AEC): attenuates the cleaned
+    // output when the reference (speakers) is loud and the output is
+    // small relative to it — i.e. when the frame is echo-dominated.
+    // Floor 0.3 so the user's voice is never fully muted (avoids
+    // metallic over-suppression). Conservative: only acts when
+    // ref >> out.
+    if (g_residSuppress.load()) {
+        float refRms = 0, outRms = 0;
+        for (int i = 0; i < fs; i++) {
+            refRms += (float)refFrame[i] * refFrame[i];
+            outRms += (float)cleanedFrame[i] * cleanedFrame[i];
+        }
+        refRms = sqrtf(refRms / fs);
+        outRms = sqrtf(outRms / fs);
+        if (refRms > 100.0f && outRms < refRms * 0.5f) {
+            float atten = outRms / (refRms + 1.0f);
+            if (atten < 0.3f) atten = 0.3f;
+            if (atten > 1.0f) atten = 1.0f;
+            for (int i = 0; i < fs; i++)
+                cleanedFrame[i] = clamp_s16((int)((float)cleanedFrame[i] * atten));
+        }
+    }
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
     for (int i = 0; i < fs; i++) {
@@ -2510,6 +2539,18 @@ void DrawEngineSection() {
     }
 
     ImGui::EndDisabled();
+
+    bool rs = g_residSuppress.load();
+    if (ImGui::Checkbox("Residual echo suppression", &rs)) {
+        g_residSuppress.store(rs);
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Post-AEC attenuator: reduces the cleaned output when the\n"
+            "speakers are loud and the output is echo-dominated.\n"
+            "Floor 0.3 (never fully mutes). Helps the minimal residual\n"
+            "echo left by DTLN. Turn off if your voice sounds over-cut.");
 
     // NKF run-state telemetry: how the delay-compensation lock and the
     // self-monitor loop policy are doing while running.
