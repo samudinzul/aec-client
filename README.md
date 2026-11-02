@@ -19,6 +19,8 @@
 ## Table of Contents
 
 - [What It Does](#what-it-does)
+- [Desktop vs Web build](#desktop-vs-web-build)
+- [Design limitations](#design-limitations)
 - [Features](#features)
 - [Quick Start — Desktop](#quick-start-desktop)
 - [Quick Start — Web UI](#quick-start-web-ui)
@@ -30,6 +32,7 @@
 - [About the Neural Engines](#about-the-neural-engines)
 - [Building from Source](#building-from-source)
 - [Project Structure](#project-structure)
+- [Known limitations](#known-limitations)
 - [License](#license)
 - [Credits](#credits)
 - [Contributing](#contributing)
