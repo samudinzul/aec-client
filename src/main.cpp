@@ -1774,17 +1774,17 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         float vad = (lvlDb - (float)HB_VAD_DB) / (float)HB_VAD_RAMP_DB;
         if (vad < 0.0f) vad = 0.0f;
         if (vad > 1.0f) vad = 1.0f;
-        // Echo-aware attenuation: the high band is raw mic (AEC does
-        // not run on 8-24 kHz), so speaker echo in that range leaks
-        // through whenever the band is open. Scale the high-band gain
-        // down when the reference (speakers) is loud — echo scales
-        // with speaker level. Floor at 0.2 so highs never fully
-        // vanish (keeps some brightness).
-        float echoScale = 1.0f;
-        if (rms_ref > 50.0f) {
-            echoScale = 1.0f / (1.0f + (rms_ref - 50.0f) / 200.0f);
-            if (echoScale < 0.2f) echoScale = 0.2f;
-        }
+        // Echo-aware gating: the high band is raw mic (AEC does not
+        // run on 8-24 kHz), so speaker echo in that range leaks
+        // through whenever the band is open. Only splice highs when
+        // the speakers are quiet (no echo risk). When the reference
+        // is loud, close the high band entirely so the output stays
+        // on the (echo-cancelled) 16 kHz chain — no echo in highs.
+        // This is the most effective fix for echo tails: don't splice
+        // highs into an echoey signal.
+        const bool refQuiet = (rms_ref < 150.0f);
+        float echoScale = refQuiet ? 1.0f : 0.0f;
+        if (!refQuiet) vad = 0.0f;   // force close + fade-out path
         // Smooth fade-out at speech end: instead of hard-cutting the
         // high band (which clicks and can still leak one stale frame),
         // ramp g_hbVadGain down over ~3 frames (30 ms) so the tail
