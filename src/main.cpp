@@ -1763,9 +1763,9 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         }
         refRms = sqrtf(refRms / fs);
         outRms = sqrtf(outRms / fs);
-        if (refRms > 100.0f && outRms < refRms * 0.5f) {
+        if (refRms > 50.0f && outRms < refRms * 0.7f) {
             float atten = outRms / (refRms + 1.0f);
-            if (atten < 0.3f) atten = 0.3f;
+            if (atten < 0.2f) atten = 0.2f;
             if (atten > 1.0f) atten = 1.0f;
             for (int i = 0; i < fs; i++)
                 cleanedFrame[i] = clamp_s16((int)((float)cleanedFrame[i] * atten));
@@ -2549,7 +2549,7 @@ void DrawEngineSection() {
         ImGui::SetTooltip(
             "Post-AEC attenuator: reduces the cleaned output when the\n"
             "speakers are loud and the output is echo-dominated.\n"
-            "Floor 0.3 (never fully mutes). Helps the minimal residual\n"
+            "Floor 0.2 (never fully mutes). Helps the minimal residual\n"
             "echo left by DTLN. Turn off if your voice sounds over-cut.");
 
     // NKF run-state telemetry: how the delay-compensation lock and the
