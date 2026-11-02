@@ -534,6 +534,7 @@ static HbDelay g_hbDelay;
 // 16 kHz chain says "no voice").
 static float g_hbVadGain = 1.0f;
 static int   g_hbHang = 0;
+static bool  g_hbClosed = false;   // hysteresis state for echo gating
 
 // 3:1 resampler state (resampler.h). The FIR pair is flat to 7.5
 // kHz with -76 dB aliases and -55 dB images. State is reset on every
@@ -1796,10 +1797,17 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         // on the (echo-cancelled) 16 kHz chain — no echo in highs.
         // This is the most effective fix for echo tails: don't splice
         // highs into an echoey signal.
-        // Stricter gating: close highs for any noticeable speaker level
-        // (threshold lowered 150 -> 80 RMS) so even quiet background
-        // audio / remote speech doesn't leak echo into the high band.
-        const bool refQuiet = (rms_ref < 80.0f);
+        // Hysteresis gating: once the high band closes (speakers loud),
+        // keep it closed until the reference drops well below the open
+        // threshold, so brief quiet gaps in remote speech don't re-open
+        // the band and leak a tail of echo. Open threshold 40 RMS,
+        // close threshold 80 RMS.
+        if (g_hbClosed) {
+            if (rms_ref < 40.0f) g_hbClosed = false;
+        } else {
+            if (rms_ref >= 80.0f) g_hbClosed = true;
+        }
+        const bool refQuiet = !hbClosed;
         float echoScale = refQuiet ? 1.0f : 0.0f;
         if (!refQuiet) vad = 0.0f;   // force close + fade-out path
         // Smooth fade-out at speech end: instead of hard-cutting the
@@ -2230,6 +2238,7 @@ void StartAEC() {
         HbNsInit(g_hbNs);
         g_hbVadGain = 1.0f;
         g_hbHang = 0;
+        g_hbClosed = false;
         g_down3.reset();
         g_up3.reset();
         RefDelayReset();
