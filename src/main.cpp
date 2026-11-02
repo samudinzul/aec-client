@@ -1807,7 +1807,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         } else {
             if (rms_ref >= 80.0f) g_hbClosed = true;
         }
-        const bool refQuiet = !hbClosed;
+        const bool refQuiet = !g_hbClosed;
         float echoScale = refQuiet ? 1.0f : 0.0f;
         if (!refQuiet) vad = 0.0f;   // force close + fade-out path
         // Smooth fade-out at speech end: instead of hard-cutting the
