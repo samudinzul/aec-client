@@ -75,6 +75,22 @@ The project ships two builds. Pick by what your machine / antivirus allows.
 
 **Rule of thumb:** use the **desktop build** for full quality (GTCRN + 48 kHz high-band splice). Use the **web build** only if the unsigned exe is blocked by your antivirus or you prefer not to run unsigned binaries — it is frozen at 16 kHz and lacks GTCRN / high-band splice.
 
+## Design limitations
+
+These are accepted trade-offs, not bugs. Documented here so expectations are set correctly.
+
+- **No code signing.** The desktop exe is unsigned; only a paid cert or SignPath Foundation would fix it. The web build exists as the zero-flag alternative.
+- **Windows-only.** Built on miniaudio + VB-CABLE + WebRTC AEC3 libs; no macOS/Linux port.
+- **No GPU acceleration.** Inference is CPU-only; cost scales with the chain (NS on ≈ similar across engines).
+- **No mastering chain.** No EQ/compressor/auto-gain by design — naturalness over "produced radio voice." Discord's own processing (Studio/Voice Isolation) handles the rest.
+- **High-band splice leaks some echo.** The 8–24 kHz band is raw mic (AEC doesn't run on it). Mitigated by VAD gating + hysteresis + echo-aware scaling, but residual echo remains during continuous remote speech. Full removal would need echo-aware high-band NS.
+- **DTLN-AEC residual-echo floor.** Minimal echo remains even on the 16 kHz path; DTLN is slightly less aggressive than WebRTC AEC3. Mitigation: switch to WebRTC AEC3 or reduce speaker volume.
+- **Single-instance uses window title prefix.** Focus-steal works across versions but degrades if the title changes; the mutex still prevents duplicate instances.
+- **Model files required.** DTLN needs its `.tflite` pair + TFLite runtime; Hush needs `weya_nc.dll` + bundle. More moving parts than a self-contained binary.
+- **Hush backend is fragile.** Fail-closed; a stock install behaves as if Hush doesn't exist until files are present.
+- **Steep for casual users.** Multiple engines, NS backends, sample rates, device routing, Discord settings — more knobs than a single-preset tool.
+- **Web build is frozen.** No new audio features; only security/compatibility fixes.
+
 ## Features
 
 - **4 engine profiles** — one menu shows the engine and its chain (the engine is not configurable on its own):
@@ -403,22 +419,6 @@ aec-client/
 - **GTCRN / high-band splice are desktop-only.** They are not ported to the web build and will not be.
 - **DTLN needs its model files** next to the exe (or the `.onnx` pair) or Start reports "Failed to load DTLN model"; other engines are unaffected.
 - **Very loud speakers** can make any canceller leave echo or cut mid-sentence; keep speaker volume moderate.
-
-## Design limitations
-
-These are accepted trade-offs, not bugs. They are documented here so expectations are set correctly.
-
-- **No code signing.** The desktop exe is unsigned; only a paid cert or SignPath Foundation would fix it. The web build exists as the zero-flag alternative.
-- **Windows-only.** Built on miniaudio + VB-CABLE + WebRTC AEC3 libs; no macOS/Linux port.
-- **No GPU acceleration.** Inference is CPU-only; cost scales with the chain (NS on ≈ similar across engines).
-- **No mastering chain.** No EQ/compressor/auto-gain by design — naturalness over "produced radio voice." Discord's own processing (Studio/Voice Isolation) handles the rest.
-- **High-band splice leaks some echo.** The 8–24 kHz band is raw mic (AEC doesn't run on it). Mitigated by VAD gating + hysteresis + echo-aware scaling, but residual echo remains during continuous remote speech. Full removal would need echo-aware high-band NS.
-- **DTLN-AEC residual-echo floor.** Minimal echo remains even on the 16 kHz path; DTLN is slightly less aggressive than WebRTC AEC3. Mitigation: switch to WebRTC AEC3 or reduce speaker volume.
-- **Single-instance uses window title prefix.** Focus-steal works across versions but degrades if the title changes; the mutex still prevents duplicate instances.
-- **Model files required.** DTLN needs its `.tflite` pair + TFLite runtime; Hush needs `weya_nc.dll` + bundle. More moving parts than a self-contained binary.
-- **Hush backend is fragile.** Fail-closed; a stock install behaves as if Hush doesn't exist until files are present.
-- **Steep for casual users.** Multiple engines, NS backends, sample rates, device routing, Discord settings — more knobs than a single-preset tool.
-- **Web build is frozen.** No new audio features; only security/compatibility fixes.
 
 ## License
 
