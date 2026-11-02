@@ -245,7 +245,8 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC
 // the chain rate — only the splice upsamples to 48 kHz.
 std::atomic<bool>  g_highbandEnabled{ true };
 std::atomic<bool>  g_residSuppress{ true };   // residual echo suppressor (post-AEC)
-constexpr int       RESID_DELAY = 160;         // ref delay for echo alignment (10 ms @16 kHz)
+std::atomic<int>   g_residDelay{ 160 };       // ref delay in samples @16 kHz (10 ms default)
+constexpr int       RESID_DELAY_MAX = 800;    // 50 ms @16 kHz (max slider)
 // High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
 // is a taste knob, not a fixed law. After the FIR resampler fix the
 // low band is flat to 7.5 kHz, so 0.7-1.0 gives more air.
@@ -1069,7 +1070,8 @@ void SaveSettings() {
       << g_nsBackend.load() << "\n"                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN)
       << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (default ON)
       << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"   // slot 32: high-band mix (%)
-      << (g_residSuppress.load() ? 1 : 0) << "\n";      // slot 33: residual echo suppression
+      << (g_residSuppress.load() ? 1 : 0) << "\n"       // slot 33: residual echo suppression
+      << g_residDelay.load() << "\n";                   // slot 34: residual echo delay (samples)
 }
 
 void LoadSettings() {
@@ -1189,6 +1191,13 @@ void LoadSettings() {
         // Slot 33: residual echo suppression (default on when missing).
         int rsRaw = 1;
         if (f >> rsRaw) g_residSuppress.store(rsRaw != 0);
+        // Slot 34: residual echo delay (default 160 samples = 10 ms).
+        int rdRaw = 160;
+        if (f >> rdRaw) {
+            if (rdRaw < 0) rdRaw = 0;
+            if (rdRaw > RESID_DELAY_MAX) rdRaw = RESID_DELAY_MAX;
+            g_residDelay.store(rdRaw);
+        }
         // "High Quality" was cut: generation-1 indices slide down
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
@@ -1307,6 +1316,7 @@ void ResetToDefaults() {
     g_highbandEnabled.store(true);
     g_hbMix.store(1.0f);
     g_residSuppress.store(true);
+    g_residDelay.store(160);
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
@@ -1775,23 +1785,32 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         // the acoustic path + AEC processing delay. Delay the ref by
         // RESID_DELAY samples (default 160 = 10 ms @16 kHz) so the
         // ref spectrum lines up with the residual echo spectrum.
-        static int16_t residDelayBuf[RESID_DELAY];
+        static int16_t residDelayBuf[RESID_DELAY_MAX];
         static int residDelayPos = 0;
         static bool residDelayInit = false;
-        if (!residDelayInit) {
+        static int residDelayLast = -1;
+        int delay = g_residDelay.load();
+        if (delay < 0) delay = 0;
+        if (delay > RESID_DELAY_MAX) delay = RESID_DELAY_MAX;
+        if (!residDelayInit || delay != residDelayLast) {
             memset(residDelayBuf, 0, sizeof(residDelayBuf));
             residDelayPos = 0;
             residDelayInit = true;
+            residDelayLast = delay;
         }
         // Zero-pad to RN (rectangular, no window to avoid amplitude
         // distortion; gain is gentle so leakage is acceptable).
         double x[RN], xr[RN];
         for (int i = 0; i < RN; i++) { x[i] = 0.0; xr[i] = 0.0; }
         for (int i = 0; i < fs && i < RN; i++) {
-            // delay the ref
-            int16_t d = residDelayBuf[residDelayPos];
+            // delay the ref by `delay` samples
+            int16_t d = 0;
+            if (delay > 0) {
+                int idx = (residDelayPos - delay + RESID_DELAY_MAX) % RESID_DELAY_MAX;
+                d = residDelayBuf[idx];
+            }
             residDelayBuf[residDelayPos] = refFrame[i];
-            residDelayPos = (residDelayPos + 1) % RESID_DELAY;
+            residDelayPos = (residDelayPos + 1) % RESID_DELAY_MAX;
             x[i] = (double)cleanedFrame[i] * (1.0 / 32768.0);
             xr[i] = (double)d * (1.0 / 32768.0);
         }
@@ -2605,6 +2624,20 @@ void DrawEngineSection() {
             "loopback reference to attenuate echo-correlated bins.\n"
             "Floor 0.2 (never fully mutes). Helps the minimal residual\n"
             "echo left by DTLN. Turn off if your voice sounds over-cut.");
+
+    int rd = g_residDelay.load();
+    ImGui::TextUnformatted("Echo delay (ms)");
+    ImGui::SameLine(190.0f);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::SliderInt("##residDelay", &rd, 0, 50, "%d ms")) {
+        g_residDelay.store(rd * 16);  // ms -> samples @16 kHz
+        SaveSettings();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "Delay alignment for the residual suppressor.\n"
+            "Match your room/speaker echo delay (5-30 ms typical).\n"
+            "Tune while monitoring: best cancellation = right delay.");
 
     // NKF run-state telemetry: how the delay-compensation lock and the
     // self-monitor loop policy are doing while running.
