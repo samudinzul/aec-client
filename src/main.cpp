@@ -245,6 +245,7 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC
 // the chain rate — only the splice upsamples to 48 kHz.
 std::atomic<bool>  g_highbandEnabled{ true };
 std::atomic<bool>  g_residSuppress{ true };   // residual echo suppressor (post-AEC)
+constexpr int       RESID_DELAY = 160;         // ref delay for echo alignment (10 ms @16 kHz)
 // High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
 // is a taste knob, not a fixed law. After the FIR resampler fix the
 // low band is flat to 7.5 kHz, so 0.7-1.0 gives more air.
@@ -1770,13 +1771,29 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
             rStrideOut = { (ptrdiff_t)sizeof(std::complex<double>) };
             residInit = true;
         }
+        // Delay alignment: the echo in cleanedFrame lags the ref by
+        // the acoustic path + AEC processing delay. Delay the ref by
+        // RESID_DELAY samples (default 160 = 10 ms @16 kHz) so the
+        // ref spectrum lines up with the residual echo spectrum.
+        static int16_t residDelayBuf[RESID_DELAY];
+        static int residDelayPos = 0;
+        static bool residDelayInit = false;
+        if (!residDelayInit) {
+            memset(residDelayBuf, 0, sizeof(residDelayBuf));
+            residDelayPos = 0;
+            residDelayInit = true;
+        }
         // Zero-pad to RN (rectangular, no window to avoid amplitude
         // distortion; gain is gentle so leakage is acceptable).
         double x[RN], xr[RN];
         for (int i = 0; i < RN; i++) { x[i] = 0.0; xr[i] = 0.0; }
         for (int i = 0; i < fs && i < RN; i++) {
+            // delay the ref
+            int16_t d = residDelayBuf[residDelayPos];
+            residDelayBuf[residDelayPos] = refFrame[i];
+            residDelayPos = (residDelayPos + 1) % RESID_DELAY;
             x[i] = (double)cleanedFrame[i] * (1.0 / 32768.0);
-            xr[i] = (double)refFrame[i] * (1.0 / 32768.0);
+            xr[i] = (double)d * (1.0 / 32768.0);
         }
         pocketfft::r2c(rShape, rStrideIn, rStrideOut, rAxes, pocketfft::FORWARD,
                        x, rSpec.data(), 1.0);
