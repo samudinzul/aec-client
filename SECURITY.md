@@ -105,6 +105,10 @@ that is why the web build exists.
   tagged source, fully rescanned, and recorded — new hashes + links in
   the release notes and a CHANGELOG addendum. Anything touching the
   desktop `.exe` always takes a new version instead.
+- Re-uploading an asset to an existing release (e.g. `gh release upload
+  ... --clobber`) is only permitted for the script/data-only refresh
+  above. It must never be used to swap a desktop `.exe` or its DLLs
+  without a new version and tag.
 - Before publishing, upload both zips to VirusTotal manually and
   record the verdict with the release notes. A single detection on
   a previously-clean build blocks the release until explained.
