@@ -76,13 +76,23 @@ static bool AcquireSingleInstance() {
         // Another instance is running — try to bring it to front.
         // Title is built from APP_VERSION (a hardcoded "v1.0.0" here
         // silently broke focus-steal on every later version).
-        wchar_t title[64];
-        swprintf(title, 64, L"%hs v%hs", APP_NAME, APP_VERSION);
-        HWND existing = FindWindowW(NULL, title);
-        if (existing) {
-            ShowWindow(existing, SW_SHOW);
-            ShowWindow(existing, SW_RESTORE);
-            SetForegroundWindow(existing);
+        struct EnumCtx { HWND found; };
+        EnumCtx ctx{ nullptr };
+        auto cb = [](HWND hwnd, LPARAM lp) -> BOOL {
+            EnumCtx* c = (EnumCtx*)lp;
+            wchar_t buf[128];
+            if (GetWindowTextW(hwnd, buf, 128) > 0 &&
+                wcsncmp(buf, L"AEC Client", 10) == 0) {
+                c->found = hwnd;
+                return FALSE;
+            }
+            return TRUE;
+        };
+        EnumWindows(cb, (LPARAM)&ctx);
+        if (ctx.found) {
+            ShowWindow(ctx.found, SW_SHOW);
+            ShowWindow(ctx.found, SW_RESTORE);
+            SetForegroundWindow(ctx.found);
         }
         CloseHandle(g_singleInstanceMutex);
         g_singleInstanceMutex = NULL;
@@ -442,10 +452,13 @@ static void HbNsHop(HbNsState& h) {
         h.ola[i] += (y[i] / HB_FFT_N) * h.win[i];
     }
     // the first HB_HOP samples of the accumulator are finished
-    for (int i = 0; i < HB_HOP; i++) {
-        const int slot = (h.outHead + h.outCount) % (int)(sizeof(h.outFifo) / sizeof(h.outFifo[0]));
-        h.outFifo[slot] = h.ola[i];
-        h.outCount++;
+    const int OCAP = (int)(sizeof(h.outFifo) / sizeof(h.outFifo[0]));
+    if (h.outCount + HB_HOP <= OCAP) {
+        for (int i = 0; i < HB_HOP; i++) {
+            const int slot = (h.outHead + h.outCount) % OCAP;
+            h.outFifo[slot] = h.ola[i];
+            h.outCount++;
+        }
     }
     for (int i = 0; i < HB_FFT_N - HB_HOP; i++) h.ola[i] = h.ola[i + HB_HOP];
     for (int i = HB_FFT_N - HB_HOP; i < HB_FFT_N; i++) h.ola[i] = 0.0;
@@ -504,6 +517,7 @@ struct HbDelay {
         for (int i = 0; i < n; i++) buf[(w + i) & (CAP - 1)] = in[i];
         w = (w + n) & (CAP - 1);
         fill += n;
+        if (fill > CAP) fill = CAP;
     }
     // The n samples written `delay` samples ago. Zeros until primed.
     void readDelayed(int16_t* out, int n, int delay) {
