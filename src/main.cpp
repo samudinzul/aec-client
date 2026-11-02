@@ -1760,90 +1760,27 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     // the shipped signal, brightness included).
     PresProcess(g_pres, cleanedFrame, fs);
 
-    // Spectral residual echo suppressor (post-AEC): uses the loopback
-    // reference as an echo estimate and attenuates echo-correlated
-    // bins in the cleaned spectrum. More effective than the
-    // time-domain RMS version. Floor 0.2 to avoid over-suppression.
+    // Residual echo suppressor (post-AEC, time-domain): attenuates
+    // the cleaned output when the reference (speakers) is loud and
+    // the output is echo-dominated. Smooth (no FFT frame-boundary
+    // artifacts). Floor 0.2 so voice is never fully muted.
     if (g_residSuppress.load()) {
-        static bool residInit = false;
-        static double residNoise[129];
-        static double residGain[129];
-        static std::vector<std::complex<double>> rSpec, rSpecRef;
-        static std::vector<size_t> rShape, rAxes;
-        static std::vector<ptrdiff_t> rStrideIn, rStrideOut;
-        const int RN = 256;
-        if (!residInit) {
-            for (int i = 0; i < 129; i++) { residNoise[i] = 1e-8; residGain[i] = 1.0; }
-            rSpec.resize(RN); rSpecRef.resize(RN);
-            rShape = { (size_t)RN };
-            rAxes = { 0 };
-            rStrideIn = { (ptrdiff_t)sizeof(double) };
-            rStrideOut = { (ptrdiff_t)sizeof(std::complex<double>) };
-            residInit = true;
+        float refRms = 0, outRms = 0;
+        for (int i = 0; i < fs; i++) {
+            refRms += (float)refFrame[i] * refFrame[i];
+            outRms += (float)cleanedFrame[i] * cleanedFrame[i];
         }
-        // Delay alignment: the echo in cleanedFrame lags the ref by
-        // the acoustic path + AEC processing delay. Delay the ref by
-        // RESID_DELAY samples (default 160 = 10 ms @16 kHz) so the
-        // ref spectrum lines up with the residual echo spectrum.
-        static int16_t residDelayBuf[RESID_DELAY_MAX];
-        static int residDelayPos = 0;
-        static bool residDelayInit = false;
-        static int residDelayLast = -1;
-        int delay = g_residDelay.load();
-        if (delay < 0) delay = 0;
-        if (delay > RESID_DELAY_MAX) delay = RESID_DELAY_MAX;
-        if (!residDelayInit || delay != residDelayLast) {
-            memset(residDelayBuf, 0, sizeof(residDelayBuf));
-            residDelayPos = 0;
-            residDelayInit = true;
-            residDelayLast = delay;
-        }
-        // Zero-pad to RN (rectangular, no window to avoid amplitude
-        // distortion; gain is gentle so leakage is acceptable).
-        double x[RN], xr[RN];
-        for (int i = 0; i < RN; i++) { x[i] = 0.0; xr[i] = 0.0; }
-        for (int i = 0; i < fs && i < RN; i++) {
-            // delay the ref by `delay` samples
-            int16_t d = 0;
-            if (delay > 0) {
-                int idx = (residDelayPos - delay + RESID_DELAY_MAX) % RESID_DELAY_MAX;
-                d = residDelayBuf[idx];
-            }
-            residDelayBuf[residDelayPos] = refFrame[i];
-            residDelayPos = (residDelayPos + 1) % RESID_DELAY_MAX;
-            x[i] = (double)cleanedFrame[i] * (1.0 / 32768.0);
-            xr[i] = (double)d * (1.0 / 32768.0);
-        }
-        pocketfft::r2c(rShape, rStrideIn, rStrideOut, rAxes, pocketfft::FORWARD,
-                       x, rSpec.data(), 1.0);
-        pocketfft::r2c(rShape, rStrideIn, rStrideOut, rAxes, pocketfft::FORWARD,
-                       xr, rSpecRef.data(), 1.0);
-        for (int b = 1; b < RN/2; b++) {
-            const double micPsd = std::norm(rSpec[b]);
-            const double refPsd = std::norm(rSpecRef[b]);
-            // echo estimate: ref scaled
-            const double echoPsd = 2.0 * refPsd;
-            // noise tracker on mic (slow)
-            residNoise[b] = 0.98 * residNoise[b] + 0.02 * micPsd;
-            double noise = residNoise[b];
-            if (echoPsd > noise) noise = echoPsd;
-            // Wiener gain
-            double gain = micPsd / (micPsd + noise + 1e-12);
-            if (gain < 0.2) gain = 0.2;   // floor
-            if (gain > 1.0) gain = 1.0;
-            // temporal smoothing
-            gain = 0.7 * residGain[b] + 0.3 * gain;
-            residGain[b] = gain;
-            rSpec[b] *= gain;
-        }
-        // DC and Nyquist: pass through
-        double y[RN];
-        pocketfft::c2r(rShape, rStrideOut, rStrideIn, rAxes, pocketfft::BACKWARD,
-                       rSpec.data(), y, 1.0);
-        for (int i = 0; i < fs && i < RN; i++) {
-            cleanedFrame[i] = clamp_s16((int)lrintf((float)(y[i] / RN) * 32768.0f));
+        refRms = sqrtf(refRms / fs);
+        outRms = sqrtf(outRms / fs);
+        if (refRms > 50.0f && outRms < refRms * 0.7f) {
+            float atten = outRms / (refRms + 1.0f);
+            if (atten < 0.2f) atten = 0.2f;
+            if (atten > 1.0f) atten = 1.0f;
+            for (int i = 0; i < fs; i++)
+                cleanedFrame[i] = clamp_s16((int)((float)cleanedFrame[i] * atten));
         }
     }
+
 
     float rms_mic = 0, rms_ref = 0, rms_out = 0;
     for (int i = 0; i < fs; i++) {
@@ -2620,26 +2557,13 @@ void DrawEngineSection() {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "Spectral residual echo suppressor (post-AEC): uses the\n"
-            "loopback reference to attenuate echo-correlated bins.\n"
+            "Residual echo suppressor (post-AEC, time-domain): uses the\n"
+            "loopback reference to attenuate echo-dominated frames.\n"
             "Floor 0.2 (never fully mutes). Helps the minimal residual\n"
             "echo left by DTLN. Turn off if your voice sounds over-cut.");
 
-    int rd = g_residDelay.load() / 16;  // samples -> ms
-    if (rd < 0) rd = 0;
-    if (rd > 50) rd = 50;
-    ImGui::TextUnformatted("Echo delay (ms)");
-    ImGui::SameLine(190.0f);
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::SliderInt("##residDelay", &rd, 0, 50, "%d ms")) {
-        g_residDelay.store(rd * 16);  // ms -> samples @16 kHz
-        SaveSettings();
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "Delay alignment for the residual suppressor.\n"
-            "Match your room/speaker echo delay (5-30 ms typical).\n"
-            "Tune while monitoring: best cancellation = right delay.");
+    // (Echo delay slider removed: time-domain suppressor uses
+    // instantaneous RMS, no delay alignment needed.)
 
     // NKF run-state telemetry: how the delay-compensation lock and the
     // self-monitor loop policy are doing while running.
