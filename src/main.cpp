@@ -1829,7 +1829,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
             if (echoPsd > noise) noise = echoPsd;
             // Wiener gain
             double gain = micPsd / (micPsd + noise + 1e-12);
-            if (gain < 0.1) gain = 0.1;   // floor (lowered for more suppression)
+            if (gain < 0.2) gain = 0.2;   // floor
             if (gain > 1.0) gain = 1.0;
             // temporal smoothing
             gain = 0.7 * residGain[b] + 0.3 * gain;
@@ -2622,7 +2622,7 @@ void DrawEngineSection() {
         ImGui::SetTooltip(
             "Spectral residual echo suppressor (post-AEC): uses the\n"
             "loopback reference to attenuate echo-correlated bins.\n"
-            "Floor 0.1 (never fully mutes). Helps the minimal residual\n"
+            "Floor 0.2 (never fully mutes). Helps the minimal residual\n"
             "echo left by DTLN. Turn off if your voice sounds over-cut.");
 
     int rd = g_residDelay.load() / 16;  // samples -> ms
