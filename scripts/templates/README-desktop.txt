@@ -68,7 +68,7 @@ QUICK START
    them; unticking falls back to DTLN-AEC 128.
 
 5. Noise suppression for every engine: Off / DTLN-NS / Hush / GTCRN.
-   GTCRN is the default ("default; hiss + keyboard"). While ticked
+   Hush is the default (best on talkers + clicks). While ticked
    the profile label reads "engine -> NS/Hush/GTCRN".
    High-band splice (default on) gives 48 kHz output with real 8-24 kHz
    highs. The sample rate under Processing is independent of the

@@ -232,11 +232,11 @@ std::atomic<bool>  g_enablePreprocess(false);
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
-// NS backend: 0=off, 1=DTLN-NS, 2=Hush, 3=GTCRN (default).
+// NS backend: 0=off, 1=DTLN-NS, 2=Hush (default), 3=GTCRN.
 // Meaningful only while g_nsEnabled; the radio sets both
 // consistently. Global pref like the tick: a profile switch never
 // resets it.
-std::atomic<int>   g_nsBackend{ 3 };
+std::atomic<int>   g_nsBackend{ 2 };   // Hush default (best NS for keyboard)
 std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC in the list
 // High-band splice: capture mic at 48 kHz, process the low band (0-8k)
 // through the 16 kHz engine, then splice the untouched real high band
@@ -1265,7 +1265,7 @@ void LoadSettings() {
         if (nsBackendRaw >= 0 && nsBackendRaw <= 3)
             g_nsBackend.store(nsBackendRaw);
         else
-            g_nsBackend.store(g_nsEnabled.load() ? 3 : 0);
+            g_nsBackend.store(g_nsEnabled.load() ? 2 : 0);
         // Experimental engines (WebRTC AEC3 / NKF-AEC) are hidden by
         // default — only shown when the user ticks the Appearance
         // checkbox. Older files default OFF (DTLN only).
@@ -1311,7 +1311,7 @@ void ResetToDefaults() {
     // Post-stage pref: set the engine first, then sync (NS runs
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
-    g_nsBackend.store(3);  // GTCRN default backend
+    g_nsBackend.store(2);  // Hush default backend
     // Fresh default is 48 kHz output (splice ON) at full high band.
     g_highbandEnabled.store(true);
     g_hbMix.store(1.0f);
@@ -2761,15 +2761,15 @@ void DrawAudioTab() {
                 "Noise suppression (runs after engine):\n"
                 "Off - lowest CPU, no cleanup.\n"
                 "DTLN-NS - cheapest; steady hiss only.\n"
-                "Hush - best on talkers + clicks (needs weya_nc.dll).\n"
-                "GTCRN - default; hiss + keyboard (needs gtcrn_simple.onnx).");
+                "Hush - best on talkers + clicks (needs weya_nc.dll). (default)\n"
+                "GTCRN - hiss + keyboard (needs gtcrn_simple.onnx).");
         ImGui::RadioButton("Off", &nsb, 0);
         ImGui::SameLine();
         ImGui::RadioButton("DTLN-NS", &nsb, 1);
         ImGui::SameLine();
-        ImGui::RadioButton("Hush", &nsb, 2);
+        ImGui::RadioButton("Hush (default)", &nsb, 2);
         ImGui::SameLine();
-        ImGui::RadioButton("GTCRN (default)", &nsb, 3);
+        ImGui::RadioButton("GTCRN", &nsb, 3);
         if (nsb != prevNsb) {
             g_nsBackend.store(nsb);
             g_nsEnabled.store(nsb != 0);
@@ -2786,8 +2786,8 @@ void DrawAudioTab() {
         const char* nsHint =
             (nsb == 0) ? "Off - no noise suppression; lowest CPU." :
             (nsb == 1) ? "DTLN-NS - cheapest stage; steady hiss only." :
-            (nsb == 2) ? "Hush - background talkers; heaviest of the three." :
-                         "GTCRN - default; hiss + keyboard.";
+            (nsb == 2) ? "Hush - default; best on talkers + clicks." :
+                         "GTCRN - hiss + keyboard.";
         ImGui::TextDisabled("%s", nsHint);
         // A 48 kHz native chain (Off/AEC3, splice off) skips every NS
         // backend — say so before Start instead of letting the status
@@ -3207,7 +3207,7 @@ void DrawAboutTab() {
     ImGui::BulletText("Four engine choices (Off / DTLN / WebRTC AEC3 / NKF-AEC)");
     ImGui::BulletText("80 Hz high-pass on every path (hum/rumble/DC)");
     ImGui::BulletText("Gentle expander (digital-black floor, no onset chop)");
-    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush / GTCRN)");
+    ImGui::BulletText("Noise suppression on every engine (Off / DTLN-NS / Hush (default) / GTCRN)");
     ImGui::BulletText("High-band splice: 48 kHz output, real 8-24 kHz mic highs");
     ImGui::BulletText("Real-time processing with low CPU usage");
     ImGui::BulletText("Works with speakers, earphones, and headsets");

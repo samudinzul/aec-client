@@ -61,7 +61,7 @@ The project ships two builds. Pick by what your machine / antivirus allows.
 | Feature | Desktop `aec_gui.exe` | Web UI (`web/start.bat`) |
 |---|---|---|
 | Audio engine (AEC) | DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC / Off | DTLN-AEC 128 / WebRTC AEC3 / NKF-AEC / Off |
-| Noise suppression | Off / DTLN-NS / **GTCRN (default)** / Hush | Off / DTLN-NS / Hush (no GTCRN) |
+| Noise suppression | Off / DTLN-NS / **Hush (default)** / GTCRN | Off / DTLN-NS / Hush (no GTCRN) |
 | Output sample rate | 16 kHz or 48 kHz | 16 kHz only (frozen) |
 | High-band splice (real 8–24 kHz highs) | Yes (default on) | No |
 | "Show other AEC engines" toggle | Yes (hides WebRTC AEC3 + NKF-AEC) | Yes (hides WebRTC AEC3 + NKF-AEC) |
@@ -102,7 +102,7 @@ These are accepted trade-offs, not bugs. Documented here so expectations are set
   - **NKF-AEC** — tiny neural Kalman core (ICASSP 2023, 45 KB model), for weak CPUs.
   - AEC3 and NKF-AEC are **other AEC engines** — hidden from the menu by default; tick **Show other AEC engines** on the Appearance tab to reveal them.
 - **What you see is what runs** — the profile label always reads `engine`, `engine → NS`, `engine → Hush`, or `engine → GTCRN`, and the status line reports the running chain, e.g. `Running (16000 Hz, DTLN-AEC + NS)`.
-- **Noise suppression** — Off / DTLN-NS / Hush / GTCRN radio after the engine on every path. **GTCRN** *(default)* is labelled "default; hiss + keyboard" — transparent on hiss and keyboard noise at low CPU. **DTLN-NS** is a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. **Hush** (pulp-vision/Hush) kills keyboards, mice and background talkers better at slightly more CPU. Fail-open — a broken stage passes audio through, never mutes.
+- **Noise suppression** — Off / DTLN-NS / Hush / GTCRN radio after the engine on every path. **Hush** *(default)* kills keyboards, mice and background talkers better at slightly more CPU. **DTLN-NS** is a second DTLN pair (same DSP as the echo canceller, minus the loud-playback feed) that removes background noise from the mic. **GTCRN** is labelled "hiss + keyboard" — transparent on hiss and keyboard noise at low CPU. Fail-open — a broken stage passes audio through, never mutes. (Hush needs `weya_nc.dll` + model bundle; without them it stays disabled and DTLN-NS is used.)
 - **High-band splice** — capture mic at 48 kHz, run the 16 kHz engine on the low band (0–8 kHz), then splice the real 8–24 kHz mic band back on at 48 kHz output. Real highs, not synthesized. Includes a dedicated high-band NS so keyboard clicks no longer keep their sharp part. Default on.
 - **Voice never cut** — a soft limiter replaces hard clipping, and every fail path fades instead of muting.
 - **Lightweight** — tiny models (NKF is 45 KB, the DTLN pairs a few MB) with native inference; actual CPU depends on your machine — check Task Manager during a call. NKF-AEC has the lightest engine core, but with Noise suppression on, all chains cost about the same (every chain runs one NS stage).
@@ -226,7 +226,7 @@ The release ZIP bundles all required DLLs:
 | `models/nkf.onnx` | ~45 KB | NKF model |
 | `models/dtln_aec_128_{1,2}.tflite` | ~7 MB | DTLN-AEC 128 pair (default profile) |
 | `models/dtln_ns_128_{1,2}.tflite` | ~4 MB | DTLN noise reduction pair |
-| `models/gtcrn_simple.onnx` | ~0.5 MB | GTCRN NS backend (default) |
+| `models/gtcrn_simple.onnx` | ~0.5 MB | GTCRN NS backend (optional) |
 | `models/hush_16k_onnx.tar.gz` | ~8 MB | Hush NS bundle (optional backend) |
 
 **External dependency (user-installed):** [VB-CABLE](https://vb-audio.com/Cable/)
@@ -261,7 +261,7 @@ Desktop: C++17 + Dear ImGui + miniaudio, built with MinGW-w64 GCC / CMake / Ninj
 
 - **NKF-AEC** (Jiang et al., ICASSP 2023) — tiny neural Kalman core (45 KB model, 16 kHz) for weak CPUs, with built-in residual suppression. Self-releasing loop protection underneath; never mutes.
 - **DTLN-AEC 128** (Westhausen & Meyer, ICASSP 2021) — dual-LSTM echo + noise canceller (1.8M params, 16 kHz). Needs `tensorflowlite_c.dll` next to the exe *or* the `.onnx` pair in `models/`; otherwise Start reports `Failed to load DTLN model` (other engines unaffected).
-- **Noise suppression** — Off / DTLN-NS / Hush / GTCRN radio for every engine: **GTCRN** *(default)* is labelled "default; hiss + keyboard" — transparent on hiss and keyboard noise at low CPU. **DTLN-NS** is a second DTLN pair that removes background noise after the engine; **Hush** kills keyboards, mice and background talkers better at slightly more CPU. Fail-open — a broken stage passes audio through, never mutes.
+- **Noise suppression** — Off / DTLN-NS / Hush / GTCRN radio for every engine: **Hush** *(default)* kills keyboards, mice and background talkers better at slightly more CPU; **DTLN-NS** is a second DTLN pair that removes background noise after the engine; **GTCRN** is labelled "hiss + keyboard" — transparent on hiss and keyboard noise at low CPU. Fail-open — a broken stage passes audio through, never mutes. (Hush needs `weya_nc.dll` + model bundle; without them it stays disabled and DTLN-NS is used.)
 
 ---
 
@@ -346,7 +346,7 @@ aec-client/
 │   ├── dtln_wrapper.cpp/.h         DTLN-AEC C wrapper (TFLite/ONNX)
 │   ├── dtln_ns_wrapper.cpp/.h       DTLN noise reduction (TFLite/ONNX)
 │   ├── hush_wrapper.cpp/.h          Hush NS backend (prebuilt weya_nc, LoadLibrary)
-│   └── gtcrn_wrapper.cpp/.h         GTCRN NS backend (default)
+│   └── gtcrn_wrapper.cpp/.h         GTCRN NS backend (optional)
 │
 ├── include/
 │   ├── miniaudio.h                 Audio I/O
@@ -366,7 +366,7 @@ aec-client/
 │   ├── nkf.onnx                    NKF model (45 KB)
 │   ├── dtln_aec_128_{1,2}.tflite   DTLN-AEC 128 pair (default profile)
 │   ├── dtln_ns_128_{1,2}.tflite    DTLN noise reduction pair
-│   ├── gtcrn_simple.onnx           GTCRN NS backend (default, ~0.5 MB)
+│   ├── gtcrn_simple.onnx           GTCRN NS backend (optional, ~0.5 MB)
 │   └── hush_16k_onnx.tar.gz        Hush NS bundle (optional backend)
 │
 ├── web/                        Pure-Python 16 kHz fallback (frozen; no .exe)
