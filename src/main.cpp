@@ -3272,7 +3272,7 @@ void DrawUI() {
     float tabH    = availH - footerH - 10.0f;
     if (tabH < 120.0f) tabH = 120.0f;
 
-    ImGui::BeginChild("TabContent", ImVec2(0, tabH), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::BeginChild("TabContent", ImVec2(0, tabH), false, ImGuiWindowFlags_None);
 
     static int activeTab = 0;  // frame-local: which tab is open (footer buttons follow it)
     if (ImGui::BeginTabBar("MainTabs")) {
