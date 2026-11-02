@@ -2625,7 +2625,9 @@ void DrawEngineSection() {
             "Floor 0.2 (never fully mutes). Helps the minimal residual\n"
             "echo left by DTLN. Turn off if your voice sounds over-cut.");
 
-    int rd = g_residDelay.load();
+    int rd = g_residDelay.load() / 16;  // samples -> ms
+    if (rd < 0) rd = 0;
+    if (rd > 50) rd = 50;
     ImGui::TextUnformatted("Echo delay (ms)");
     ImGui::SameLine(190.0f);
     ImGui::SetNextItemWidth(-1);
