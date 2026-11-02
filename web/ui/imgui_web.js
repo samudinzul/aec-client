@@ -501,7 +501,11 @@ class WebImGuiUI {
                     if (/CABLE/i.test(sel.options[i].text)) { idx = i; break; }
                 }
             }
-            if (idx >= 0) sel.selectedIndex = idx;
+            if (idx >= 0) {
+                sel.selectedIndex = idx;
+            } else if (this.el.devhint) {
+                this.el.devhint.textContent = 'No CABLE Input found — install VB-CABLE, then Refresh.';
+            }
         }
     }
 

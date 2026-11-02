@@ -1796,7 +1796,10 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
         // on the (echo-cancelled) 16 kHz chain — no echo in highs.
         // This is the most effective fix for echo tails: don't splice
         // highs into an echoey signal.
-        const bool refQuiet = (rms_ref < 150.0f);
+        // Stricter gating: close highs for any noticeable speaker level
+        // (threshold lowered 150 -> 80 RMS) so even quiet background
+        // audio / remote speech doesn't leak echo into the high band.
+        const bool refQuiet = (rms_ref < 80.0f);
         float echoScale = refQuiet ? 1.0f : 0.0f;
         if (!refQuiet) vad = 0.0f;   // force close + fade-out path
         // Smooth fade-out at speech end: instead of hard-cutting the
@@ -1812,7 +1815,7 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
                 if (g_hbVadGain < 0.001f) g_hbVadGain = 0.0f;
                 high[i] *= g_hbVadGain * echoScale;
             }
-            if (g_hbVadGain == 0.0f) g_hbHang = 3;
+            if (g_hbVadGain == 0.0f) g_hbHang = 2;
         } else if (g_hbHang > 0) {
             g_hbHang--;
             g_hbVadGain = 0.0f;

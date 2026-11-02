@@ -17,7 +17,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .audio import AudioRunner, list_devices, speaker_output_for_ref
+from .audio import AudioRunner, list_devices, speaker_output_for_ref, _is_virtual_cable
 from .chain import EXPERIMENTAL_ENGINES, PROFILES, Chain
 from .soundboard import SoundBoard, decoders_available
 
@@ -56,7 +56,15 @@ def monitor_output_index():
         devs = list_devices()
     ref_name = next((e["name"] for e in devs["loopback"]
                      if e["index"] == prefs.get("ref")), "")
-    return speaker_output_for_ref(ref_name, devs["playback"])
+    derived = speaker_output_for_ref(ref_name, devs["playback"])
+    if derived is not None:
+        return derived
+    # Fallback: first non-cable playback device (better than no
+    # monitor at all).
+    for e in devs["playback"]:
+        if e.get("maxOutputChannels", 0) > 0 and not _is_virtual_cable(e.get("name", "")):
+            return e["index"]
+    return None
 
 
 @app.get("/")
