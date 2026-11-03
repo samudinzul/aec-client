@@ -221,7 +221,7 @@ bool               g_lastOutValid = false;
 int16_t            g_lastMonFrame[MAX_FRAME_SIZE];
 int                g_lastMonLen = 0;
 bool               g_lastMonValid = false;
-SpscRing<4096> g_micRing, g_refRing, g_refRing48;
+SpscRing<4096> g_micRing, g_refRing;
 bool g_isRunning = false;
 Clock::time_point g_sessionStart;
 
@@ -245,8 +245,6 @@ std::atomic<bool>  g_experimentalEngines{ false }; // show WebRTC AEC3 / NKF-AEC
 // the chain rate — only the splice upsamples to 48 kHz.
 std::atomic<bool>  g_highbandEnabled{ true };
 std::atomic<bool>  g_residSuppress{ true };   // residual echo suppressor (post-AEC)
-std::atomic<int>   g_residDelay{ 160 };       // ref delay in samples @16 kHz (10 ms default)
-constexpr int       RESID_DELAY_MAX = 800;    // 50 ms @16 kHz (max slider)
 // High-band mix (0..1): the real 8-24 kHz band is raw mic, so its level
 // is a taste knob, not a fixed law. After the FIR resampler fix the
 // low band is flat to 7.5 kHz, so 0.7-1.0 gives more air.
@@ -344,7 +342,6 @@ static const double HB_G_MIN      = 0.10;  // gain floor (-20 dB)
 static const double HB_NOISE_UP   = 0.995; // noise tracker: slow rise
 static const double HB_NOISE_DOWN = 0.70;  // noise tracker: fast fall
 static const double HB_VAD_DB     = -50.0; // full close below this (raised: loudspeaker echo tail)
-static const double HB_ECHO_GAIN  = 1.0;   // echo-aware: ref high-band PSD -> noise estimate scale
 static const double HB_VAD_RAMP_DB= 12.0;  // full open above this
 
 struct HbNsState {
@@ -542,7 +539,6 @@ struct HbDelay {
     }
 };
 static HbDelay g_hbDelay;
-static HbDelay g_hbDelayRef;   // delay line for the 48 kHz ref (echo estimate)
 
 // High-band VAD gain (the ramped gate the splice applies while the
 // 16 kHz chain says "no voice").
@@ -554,7 +550,6 @@ static bool  g_hbClosed = false;   // hysteresis state for echo gating
 // kHz with -76 dB aliases and -55 dB images. State is reset on every
 // Start.
 static rs::Down3 g_down3;
-static rs::Down3 g_down3_ref;
 static rs::Up3   g_up3;
 
 // The decimator delays the mic by 32 samples @16k relative to the
@@ -1070,8 +1065,7 @@ void SaveSettings() {
       << g_nsBackend.load() << "\n"                   // slot 30: NS backend (0=off,1=DTLN-NS,2=Hush,3=GTCRN)
       << (g_highbandEnabled.load() ? 1 : 0) << "\n"    // slot 31: high-band splice (default ON)
       << (int)lrintf(g_hbMix.load() * 100.0f) << "\n"   // slot 32: high-band mix (%)
-      << (g_residSuppress.load() ? 1 : 0) << "\n"       // slot 33: residual echo suppression
-      << g_residDelay.load() << "\n";                   // slot 34: residual echo delay (samples)
+      << (g_residSuppress.load() ? 1 : 0) << "\n";      // slot 33: residual echo suppression
 }
 
 void LoadSettings() {
@@ -1191,13 +1185,10 @@ void LoadSettings() {
         // Slot 33: residual echo suppression (default on when missing).
         int rsRaw = 1;
         if (f >> rsRaw) g_residSuppress.store(rsRaw != 0);
-        // Slot 34: residual echo delay (default 160 samples = 10 ms).
-        int rdRaw = 160;
-        if (f >> rdRaw) {
-            if (rdRaw < 0) rdRaw = 0;
-            if (rdRaw > RESID_DELAY_MAX) rdRaw = RESID_DELAY_MAX;
-            g_residDelay.store(rdRaw);
-        }
+        // Slot 34 (retired): residual echo delay. Read positionally
+        // to keep old configs aligned; value ignored.
+        int rdSkip = 0;
+        if (f >> rdSkip) { (void)rdSkip; }
         // "High Quality" was cut: generation-1 indices slide down
         // (2→Discord, 3→2, 4→3, 5→4). Running engine/rate are
         // separate fields, unaffected. Anything else lands on Discord.
@@ -1316,7 +1307,6 @@ void ResetToDefaults() {
     g_highbandEnabled.store(true);
     g_hbMix.store(1.0f);
     g_residSuppress.store(true);
-    g_residDelay.store(160);
     g_minimizeToTray = true;
     g_listenToSelf = false;
     g_micGain.store(1.0f);
