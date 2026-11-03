@@ -1298,7 +1298,7 @@ void ResetToDefaults() {
     BuildDisplayIndices();  // keep selections inside the filtered lists
     g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 0;  // profile 0 (DTLN @16 kHz)
     g_profileIndex = 0;
-    g_preprocessEnabled = false;
+    // (retired: preprocess) (void)0;
     // Post-stage pref: set the engine first, then sync (NS runs
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
@@ -1320,7 +1320,7 @@ void ResetToDefaults() {
     g_sampleRate.store(16000);
     g_selectedEngine.store(ENGINE_DTLN);
     // (retired: filter length)
-    g_enablePreprocess.store(false);
+    // (retired: preprocess) (void)0;
     g_wallpaperIndex = 0;
     LoadWallpaperByIndex(0);
     UpdateTrayIcon();
@@ -1344,10 +1344,10 @@ void ApplyProfile(int idx) {
 
     g_engineIndex      = p.engine;
     g_filterIndex      = p.filterIdx;
-    g_preprocessEnabled = false;
+    // (retired: preprocess) (void)0;
     g_selectedEngine.store(p.engine);
     // (retired: filter length)
-    g_enablePreprocess.store(false);
+    // (retired: preprocess) (void)0;
     g_profileIndex = idx;
     // Rate is a free knob, but 16-kHz-only engines force it down.
     if (p.engine == ENGINE_NKF || p.engine == ENGINE_DTLN) {
