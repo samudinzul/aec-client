@@ -227,8 +227,8 @@ Clock::time_point g_sessionStart;
 
 std::atomic<int>   g_sampleRate(16000);
 std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
-std::atomic<int>   g_filterLengthMs(50);
-std::atomic<bool>  g_enablePreprocess(false);
+// (retired: g_filterLengthMs — derived from g_filterIndex, never read)
+// (retired: g_enablePreprocess — never read)
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
@@ -274,7 +274,7 @@ bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
 int  g_engineIndex = 4, g_sampleRateIndex = 0, g_filterIndex = 0;  // 4 = ENGINE_DTLN; fresh = profile 0
 int  g_profileIndex = 0;         // active profile (PROFILES[])
-bool g_preprocessEnabled = false;
+// (retired: g_preprocessEnabled — never read)
 bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
 char g_statusText[128] = "Idle";
 
@@ -1095,8 +1095,8 @@ void LoadSettings() {
             g_engineIndex != ENGINE_NKF && g_engineIndex != ENGINE_DTLN)
             g_engineIndex = ENGINE_DTLN;
         g_selectedEngine.store(g_engineIndex);
-        g_preprocessEnabled = false;
-        g_enablePreprocess.store(false);
+        // (retired: preprocess) (void)0;
+        // (retired: preprocess) (void)0;
         int wp = -1;
         if (f >> wp) g_wallpaperIndex = wp;
         // Slot 11: gen<5 = preset index, gen5+ = profile index.
@@ -1223,7 +1223,7 @@ void LoadSettings() {
         }
         if (g_filterIndex < 0 || g_filterIndex > 4) g_filterIndex = 0;
         static const int rates[]   = { 16000, 48000 };
-        static const int filters[] = { 30, 50, 80, 120, 200 };
+        // (retired: filter length array)
         // Engine and filter always follow the profile (slot values above
         // were only positional placeholders).
         const Profile& p = PROFILES[g_profileIndex];
@@ -1273,7 +1273,7 @@ void LoadSettings() {
             g_profileIndex = 0;
             SyncStagePrefsToEngine();  // prefs follow the new (visible) engine
         }
-        g_filterLengthMs.store(filters[g_filterIndex]);
+        (void)g_filterIndex;
         g_selectedEngine.store(g_engineIndex);
     }
 }
@@ -1319,7 +1319,7 @@ void ResetToDefaults() {
     g_advInitDone = true;
     g_sampleRate.store(16000);
     g_selectedEngine.store(ENGINE_DTLN);
-    g_filterLengthMs.store(30);
+    // (retired: filter length)
     g_enablePreprocess.store(false);
     g_wallpaperIndex = 0;
     LoadWallpaperByIndex(0);
@@ -1346,7 +1346,7 @@ void ApplyProfile(int idx) {
     g_filterIndex      = p.filterIdx;
     g_preprocessEnabled = false;
     g_selectedEngine.store(p.engine);
-    g_filterLengthMs.store(filters[p.filterIdx]);
+    // (retired: filter length)
     g_enablePreprocess.store(false);
     g_profileIndex = idx;
     // Rate is a free knob, but 16-kHz-only engines force it down.
