@@ -89,6 +89,8 @@
   <div class="hint">Output routes to a virtual cable — in Discord pick
   <b>CABLE Output</b> as input. Install VB-CABLE if it is missing
   from the list (Windows lists only enabled devices).</div>
+  <div id="cablewarn" class="hint" style="color:#ff6b6b;display:none;">
+    VB-CABLE not found — install VB-CABLE and enable CABLE Input, then hit Refresh.</div>
   <div id="devhint" class="hint" style="color:#ffd75e"></div>
   <div class="hint" style="color:#8b93a1;font-style:italic;margin-bottom:4px;">Loudspeaker: DTLN-AEC 128 · sealed earphone/headset: Off</div>
   <div>Noise suppression:
@@ -219,6 +221,9 @@ async function loadDevices() {
     fill('mic', d.capture, d.defaults && d.defaults.mic, pm);
     fill('ref', d.loopback, d.defaults && d.defaults.ref, pr);
     fill('out', d.playback, d.defaults && d.defaults.out, po);
+    const playNames = (d.playback || []).map((x) => x.name).join('\n');
+    const cw = $('cablewarn');
+    if (cw) cw.style.display = /CABLE/i.test(playNames) ? 'none' : 'block';
     savePrefs();
   } catch (e) {
     $('err').textContent = 'devices: could not reach server (' + e.message + ')';
