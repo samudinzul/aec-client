@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-11-04
+
+### Fixed
+
+- **Residual echo suppressor reverted to time-domain.** The spectral
+  (FFT) version caused frame-boundary crackling when speaking. The
+  time-domain RMS version is smooth and clean. Floor 0.2, tunable
+  echo delay slider removed (no delay alignment needed).
+- **High-band echo gating.** Stricter echo gating (open 40, close 80
+  RMS) with smooth fade-out at speech end to eliminate echo tail.
+- **Monitor device rate in splice mode.** Fixed 16k→48k rate mismatch
+  that broke soundboard output in splice mode.
+- **Monitor "follow your speakers"** now uses the speaker reference
+  device (g_refIndex), not the output/cable device.
+- **Single-instance focus-steal** now matches by title prefix
+  (version-agnostic) instead of exact title.
+- **HbDelay fill cap and HbNs outFifo guard** added to prevent
+  buffer overflows.
+- **Web: device disconnect detection.** Stream callbacks now detect
+  device disconnection/overload and surface a "Device disconnected —
+  click Refresh" message in the UI.
+
+### Changed
+
+- **Hush is now the default NS backend** (desktop). Config gen 11
+  migration fallback updated. UI radio labels: "Hush (default)" /
+  "GTCRN".
+- **Dead code cleanup.** Removed unused globals (g_refRing48,
+  g_down3_ref, g_hbDelayRef, g_residDelay, g_hbRatioDb,
+  g_last_reduction_db, g_enablePreprocess, g_preprocessEnabled,
+  g_filterLengthMs) and unused includes (<mutex>, <thread>).
+  Removed spectral FFT residual suppressor code.
+- **VB-CABLE warning** added to classic web UI (parity with ImGui).
+- **Residual suppressor floor** tuned 0.2→0.1→0.2 (0.1 over-cut
+  voice).
+
+### Removed
+
+- **Echo delay slider** from residual suppressor (time-domain uses
+  instantaneous RMS, no delay alignment needed).
+
+
 ### Removed
 
 - **Experimental fork (`exp/`) and LocalVQE.** Both fully removed:
