@@ -129,6 +129,11 @@ def state():
         st["inRms"] = r.in_rms
         st["outRms"] = r.out_rms
         st["dropped"] = dict(r.dropped)
+        st["deviceLost"] = bool(getattr(r, "device_lost", False))
+        st["deviceLostMsg"] = getattr(r, "device_lost_msg", "") or ""
+    else:
+        st["deviceLost"] = False
+        st["deviceLostMsg"] = ""
     return st
 
 

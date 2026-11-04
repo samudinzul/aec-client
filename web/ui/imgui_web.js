@@ -1158,7 +1158,9 @@ class WebImGuiUI {
                 'Running (16000 Hz, ' + (st.chain || 'DTLN-AEC') + ')' +
                 ((st.ns && st.ns.backend) ? '' : ' · NS off') +
                 (st.ns && st.ns.dropped ? ' · ring drops ' + st.ns.dropped : ''));
-            if (st.error || (st.ns && st.ns.error))
+            if (st.deviceLost && st.deviceLostMsg)
+                this.el.err.textContent = st.deviceLostMsg + ' — click Refresh.';
+            else if (st.error || (st.ns && st.ns.error))
                 this.el.err.textContent = st.error || (st.ns && st.ns.error);
         };
     }

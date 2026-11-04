@@ -425,6 +425,10 @@ class AudioRunner:
         self.in_rms = 0.0
         self.out_rms = 0.0
         self.ref_rms = 0.0
+        # Device disconnect detection: set by callbacks when a stream
+        # fails, cleared on start()/stop(). Surfaced via state().
+        self.device_lost = False
+        self.device_lost_msg = ""
         # Stateful resamplers (one per stream — positions are stream
         # state and must never be shared). Built in start(), when the
         # real device rates are known; each callback/output thread
@@ -481,8 +485,15 @@ class AudioRunner:
             pcm = np.frombuffer(in_data, dtype=np.int16).copy()
             if pcm.size:
                 self._offer(self._in_q, pcm, "in")
-        except Exception:
-            pass
+            # PyAudio status flags: non-zero means the device is
+            # struggling (overflow/underflow). A full disconnect
+            # surfaces as an exception below or as paNotInitialized.
+            if status and status & (pa_patch.paInputOverflow | pa_patch.paInputUnderflow):
+                self.device_lost = True
+                self.device_lost_msg = "microphone device disconnected or overloaded"
+        except Exception as e:
+            self.device_lost = True
+            self.device_lost_msg = f"microphone device error: {e}"
         return (None, pa_patch.paContinue)
 
     def _on_ref(self, in_data, frame_count, time_info, status):
@@ -490,8 +501,12 @@ class AudioRunner:
             pcm = np.frombuffer(in_data, dtype=np.int16).copy()
             if pcm.size:
                 self._offer(self._ref_q, pcm, "ref")
-        except Exception:
-            pass
+            if status and status & (pa_patch.paInputOverflow | pa_patch.paInputUnderflow):
+                self.device_lost = True
+                self.device_lost_msg = "speaker reference device disconnected or overloaded"
+        except Exception as e:
+            self.device_lost = True
+            self.device_lost_msg = f"speaker reference device error: {e}"
         return (None, pa_patch.paContinue)
 
     @staticmethod
@@ -738,6 +753,8 @@ class AudioRunner:
             except Exception:
                 self.monitor_idx = None
 
+        self.device_lost = False
+        self.device_lost_msg = ""
         self._stop.clear()
         self._threads = [threading.Thread(target=self._work, daemon=True)]
         for t in self._threads:
@@ -745,6 +762,8 @@ class AudioRunner:
 
     def stop(self):
         self._stop.set()
+        self.device_lost = False
+        self.device_lost_msg = ""
         for t in self._threads:
             t.join(timeout=1.5)
         self._threads = []

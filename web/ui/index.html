@@ -473,7 +473,8 @@ function connect() {
       `Running (16000 Hz, ${st.chain || 'DTLN-AEC'})` +
       (st.ns.backend ? '' : ' · NS off') +
       (st.ns.dropped ? ` · ring drops ${st.ns.dropped}` : '');
-    if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
+    if (st.deviceLost && st.deviceLostMsg) $('err').textContent = st.deviceLostMsg + ' — click Refresh.';
+    else if (st.error || st.ns.error) $('err').textContent = st.error || st.ns.error;
   };
 }
 document.querySelectorAll('.tab').forEach(b =>
