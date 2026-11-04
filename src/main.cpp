@@ -36,8 +36,6 @@
 #include <cstdlib>
 #include <chrono>
 #include <complex>
-#include <thread>
-#include <mutex>
 #include <vector>
 #include <string>
 #include <atomic>
@@ -227,8 +225,6 @@ Clock::time_point g_sessionStart;
 
 std::atomic<int>   g_sampleRate(16000);
 std::atomic<int>   g_selectedEngine(ENGINE_DTLN);
-// (retired: g_filterLengthMs — derived from g_filterIndex, never read)
-// (retired: g_enablePreprocess — never read)
 // Post-stage tick is a global pref (like the gains): a profile
 // switch never resets it. Defaults ON for every engine.
 std::atomic<bool>  g_nsEnabled{ true };        // DTLN noise reduction (all engines)
@@ -251,13 +247,11 @@ std::atomic<bool>  g_residSuppress{ true };   // residual echo suppressor (post-
 std::atomic<float> g_hbMix{ 1.0f };
 SpscRing<4096>     g_micRing48;
 // Diagnostics: the high-band VAD level (dBFS).
-std::atomic<float> g_hbRatioDb{ 0.0f };
 // High-band delay (48 kHz samples): aligns the spliced high band with
 // the processed low band (AEC + NS latency).
 static std::atomic<int> g_hbDelaySamples{ 0 };
 std::atomic<float> g_micGain(1.0f);
 std::atomic<float> g_outputGain(1.0f);
-std::atomic<float> g_last_reduction_db(0.0f);
 std::atomic<float> g_last_mic_rms(0.0f), g_last_ref_rms(0.0f), g_last_out_rms(0.0f);
 
 std::vector<ma_device_info> g_captureDevices, g_playbackDevices;
@@ -274,7 +268,6 @@ bool g_advancedOpen = false;    // Advanced collapse state (persisted)
 bool g_advInitDone = false;     // first-frame default apply (see DrawAudioTab)
 int  g_engineIndex = 4, g_sampleRateIndex = 0, g_filterIndex = 0;  // 4 = ENGINE_DTLN; fresh = profile 0
 int  g_profileIndex = 0;         // active profile (PROFILES[])
-// (retired: g_preprocessEnabled — never read)
 bool g_minimizeToTray   = true;   // UI state; behavior controlled via checkbox
 char g_statusText[128] = "Idle";
 
@@ -1095,8 +1088,6 @@ void LoadSettings() {
             g_engineIndex != ENGINE_NKF && g_engineIndex != ENGINE_DTLN)
             g_engineIndex = ENGINE_DTLN;
         g_selectedEngine.store(g_engineIndex);
-        // (retired: preprocess) (void)0;
-        // (retired: preprocess) (void)0;
         int wp = -1;
         if (f >> wp) g_wallpaperIndex = wp;
         // Slot 11: gen<5 = preset index, gen5+ = profile index.
@@ -1223,7 +1214,6 @@ void LoadSettings() {
         }
         if (g_filterIndex < 0 || g_filterIndex > 4) g_filterIndex = 0;
         static const int rates[]   = { 16000, 48000 };
-        // (retired: filter length array)
         // Engine and filter always follow the profile (slot values above
         // were only positional placeholders).
         const Profile& p = PROFILES[g_profileIndex];
@@ -1298,7 +1288,6 @@ void ResetToDefaults() {
     BuildDisplayIndices();  // keep selections inside the filtered lists
     g_engineIndex = 4; g_sampleRateIndex = 0; g_filterIndex = 0;  // profile 0 (DTLN @16 kHz)
     g_profileIndex = 0;
-    // (retired: preprocess) (void)0;
     // Post-stage pref: set the engine first, then sync (NS runs
     // on every engine, so this only restores the global default).
     SyncStagePrefsToEngine();
@@ -1319,8 +1308,6 @@ void ResetToDefaults() {
     g_advInitDone = true;
     g_sampleRate.store(16000);
     g_selectedEngine.store(ENGINE_DTLN);
-    // (retired: filter length)
-    // (retired: preprocess) (void)0;
     g_wallpaperIndex = 0;
     LoadWallpaperByIndex(0);
     UpdateTrayIcon();
@@ -1344,10 +1331,7 @@ void ApplyProfile(int idx) {
 
     g_engineIndex      = p.engine;
     g_filterIndex      = p.filterIdx;
-    // (retired: preprocess) (void)0;
     g_selectedEngine.store(p.engine);
-    // (retired: filter length)
-    // (retired: preprocess) (void)0;
     g_profileIndex = idx;
     // Rate is a free knob, but 16-kHz-only engines force it down.
     if (p.engine == ENGINE_NKF || p.engine == ENGINE_DTLN) {
@@ -1786,11 +1770,6 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
     g_last_ref_rms = rms_ref;
     g_last_out_rms = rms_out;
 
-    if (rms_mic > 30.0f && rms_ref > 100.0f) {
-        float ratio = (rms_out + 1.0f) / (rms_mic + 1.0f);
-        if (ratio < 1.0f) g_last_reduction_db = 20.0f * log10f(ratio);
-    }
-
     // Soundboard: pads are mixed into the same stream the voice apps
     // hear, before the shared limiter so mic + sounds can never clip
     // each other into distortion. (The Out meter above stays on the
@@ -1878,7 +1857,6 @@ void output_callback(ma_device*, void* pOutput, const void*, ma_uint32 frameCoun
             }
             g_hbVadGain = vad;
         }
-        g_hbRatioDb.store(lvlDb);
         MixSoundboard(sbBuf, fsOut, outRate);
         FeedMonitor(sbBuf, fsOut);
         const float sbGain = g_soundboardGain.load() * g_outputGain.load();
